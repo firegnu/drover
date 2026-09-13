@@ -334,3 +334,36 @@ for p in ${pids}; do wait "$p" || fail "a concurrent board run failed: $(tail -1
 ls "${OUT}".*tmp >/dev/null 2>&1 && fail 'board left a temp file behind'
 has 'Review board' 'page still written after concurrent runs'
 echo 'PASS concurrent board runs never collide on the temp file'
+
+# 「等你」通知：只有带 --notify（launchd 那次刷新）才发；一个项目新出现的条目合成一条；没变化不重发；
+# 条目消失后再出现会重发；AppleScript 字符串要转义；通知发不出去也不能把看板弄崩。用假的通知命令，不真弹。
+cat > "${TMP}/notifier" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TMP}/notify.log"
+EOF
+chmod +x "${TMP}/notifier"
+board() { HERDR_BIN_PATH="${TMP}/herdr" REVIEW_NOTIFY_BIN="$1" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" "${@:2}" >/dev/null; }
+nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr -d ' '; else echo 0; fi; }
+board "${TMP}/notifier"
+[ "$(nlines)" = 0 ] || fail 'the board must not notify without --notify'
+board "${TMP}/notifier" --notify
+[ "$(nlines)" = 4 ] || fail "first --notify run: one notification per project waiting on you (alpha beta zeta theta), got $(nlines)"
+grep -q 'zeta/repo' "${TMP}/notify.log" || fail 'zeta is notified'
+grep -q '3 条' "${TMP}/notify.log" || fail 'several new items on one project fold into one notification'
+grep -q '做完了' "${TMP}/notify.log" || fail 'waiting for release is notified'
+board "${TMP}/notifier" --notify
+[ "$(nlines)" = 4 ] || fail 'an unchanged board must not notify again'
+mv "${TMP}/zeta/review/.last" "${TMP}/zeta/last.bak"
+board "${TMP}/notifier" --notify
+[ "$(nlines)" = 4 ] || fail 'an item going away sends nothing'
+mv "${TMP}/zeta/last.bak" "${TMP}/zeta/review/.last"
+board "${TMP}/notifier" --notify
+[ "$(nlines)" = 5 ] || fail 'an item that comes back is notified again'
+tail -1 "${TMP}/notify.log" | grep -q 'exit 4' || fail 'the renewed notification carries the item text'
+printf 'ERROR: 路径里有 "引号" 和 \\ 反斜杠\n' > "${TMP}/beta/review/.last.out"
+board "${TMP}/notifier" --notify
+tail -1 "${TMP}/notify.log" | grep -qF '\"引号\"' || fail 'double quotes are escaped for AppleScript'
+rm -f "${TMP}/board-notified.json"
+board "${TMP}/no-such-notifier" --notify || fail 'a missing notifier must not break the board'
+has 'Review board' 'page still written when notifications cannot be sent'
+echo 'PASS 等你 notifications: only with --notify, once per project, again when an item returns, escaped, never fatal'

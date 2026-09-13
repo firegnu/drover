@@ -9,6 +9,7 @@
   <array>
     <string>__HOME__/.local/bin/review-board</string>
     <string>--quiet</string>
+    <string>--notify</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

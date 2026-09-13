@@ -300,7 +300,7 @@ rubric 放仓库外还有个用意：写手读不到（虽然有 shell 就能 ca
   （accept 接受 / defer 暂缓 / reject 拒绝，blocking 阻断 / should 应改 / nit 细节，resolved 已修复 等），
   悬停显示英文原词；文件与协议里仍是英文。
 
-它是**派生视图**：不存自己的状态，不接 agent，写手和评审方不知道它存在。状态判据与 `request-review` 相同
+它是**派生视图**：不存自己的状态（通知记录除外，见下），不接 agent，写手和评审方不知道它存在。状态判据与 `request-review` 相同
 （request 是否指向 HEAD、`.sent` / findings 哨兵 / responses / decision 文件是否存在）。评审中或 triage 中时它还会
 问一下 herdr 评审方 pane 的状态：working 只作备注，blocked / idle 视为评审方停了没交付，进"等你"横幅。
 周期闭合但尚未归档时收成一行摘要（轮数、回应计数、耗时），点开才见 request 与 Round；下个周期派发时它进归档。`request-review`
@@ -308,6 +308,8 @@ rubric 放仓库外还有个用意：写手读不到（虽然有 shell 就能 ca
 （`~/Library/LaunchAgents/dev.herdsman.review-board.plist`）每 30 秒生成一次，覆盖周期最后一轮写手回应后
 没有人再跑脚本的空档；手动 `review-board --open` 也行。它看得到节点，看不到节点之间
 agent 在做什么 —— 那部分只在 herdr 的 pane 里。
+
+**通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
 
 项目发现：`~/Developer/personal_projs/*/.review.conf`，加上 `~/.review/projects` 里登记的路径（`herdsman-init`
 自动登记，所以仓库放在哪都会被扫到；一行一个路径，可手动增删）。
@@ -3333,15 +3335,60 @@ def render_panel(p, archives, self_closed):
     return "".join(parts)
 
 
-def render(projects, archives, self_closed):
-    waits = []
+def wait_items(p):
+    """「等你」里卡住了那一档的条目 → [(key, 文字, 跳转锚点)]。横幅和通知共用，两边说的是同一件事。"""
+    out = []
+    for kind, fid, verb, sev, reason in p["human"]:
+        if kind != "decision":
+            text, anchor = (f"STOP · {reason}" if kind == "stop" else reason), f"w-{p['name']}"
+        else:
+            text = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
+            anchor = f"f-{p['name']}-{fid}"
+        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text, anchor))
+    return out
+
+
+NOTIFY_BIN = os.environ.get("REVIEW_NOTIFY_BIN", "osascript")
+
+
+def applescript_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def notify_new(projects, state_path):
+    """新出现的「等你」条目弹 macOS 通知：一个项目一条，写有几条新的和第一条的内容。
+    已通知过的 key 记在 state_path；条目解决后从记录里消失，再出现会重新通知。这是看板唯一自己存的东西，
+    删掉只会把还开着的条目再通知一次。只由 launchd 那次刷新（--notify）调用 —— request-review 退出时的刷新不发，
+    两边同时刷新也不会重复弹。通知发不出去就跳过，不影响看板。"""
+    try:
+        seen = set(json.loads(read(state_path) or "[]"))
+    except ValueError:
+        seen = set()
+    current = []
     for p in projects:
-        for kind, fid, verb, sev, reason in p["human"]:
-            if kind != "decision":
-                waits.append((p["name"], f"STOP · {reason}" if kind == "stop" else reason, ago(p["since"]), f"w-{p['name']}"))
-                continue
-            what = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
-            waits.append((p["name"], what, ago(p["since"]), f"f-{p['name']}-{fid}"))
+        items = wait_items(p)
+        current += [k for k, _, _ in items]
+        new = [text for k, text, _ in items if k not in seen]
+        if not new:
+            continue
+        body = " ".join((new[0] if len(new) == 1 else f"{len(new)} 条新的：{new[0]}").split())[:220]
+        script = f"display notification {applescript_str(body)} with title {applescript_str('Review board · ' + p['name'] + ' 等你')}"
+        try:
+            subprocess.run([NOTIFY_BIN, "-e", script], capture_output=True, timeout=10)
+        except Exception:
+            pass
+    tmp = f"{state_path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(current), f, ensure_ascii=False)
+        os.replace(tmp, state_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def render(projects, archives, self_closed):
+    waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
     if waits:
         banner = (f'<div class="banner"><div class="t">等你 · {len(waits)}</div><div class="items">' + "".join(
             f'<a href="#{esc(a)}" onclick="return rbGo(\'{esc(n)}\',\'{esc(a)}\')"><b>{esc(n)}</b><span>{esc(w)}</span>'
@@ -3419,6 +3466,8 @@ def main():
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+    if "--notify" in args:
+        notify_new(projects, os.path.join(os.path.dirname(out_path), "board-notified.json"))
     if "--quiet" not in args:
         print(out_path)
     if "--open" in args:

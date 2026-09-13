@@ -1437,15 +1437,60 @@ def render_panel(p, archives, self_closed):
     return "".join(parts)
 
 
-def render(projects, archives, self_closed):
-    waits = []
+def wait_items(p):
+    """「等你」里卡住了那一档的条目 → [(key, 文字, 跳转锚点)]。横幅和通知共用，两边说的是同一件事。"""
+    out = []
+    for kind, fid, verb, sev, reason in p["human"]:
+        if kind != "decision":
+            text, anchor = (f"STOP · {reason}" if kind == "stop" else reason), f"w-{p['name']}"
+        else:
+            text = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
+            anchor = f"f-{p['name']}-{fid}"
+        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text, anchor))
+    return out
+
+
+NOTIFY_BIN = os.environ.get("REVIEW_NOTIFY_BIN", "osascript")
+
+
+def applescript_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def notify_new(projects, state_path):
+    """新出现的「等你」条目弹 macOS 通知：一个项目一条，写有几条新的和第一条的内容。
+    已通知过的 key 记在 state_path；条目解决后从记录里消失，再出现会重新通知。这是看板唯一自己存的东西，
+    删掉只会把还开着的条目再通知一次。只由 launchd 那次刷新（--notify）调用 —— request-review 退出时的刷新不发，
+    两边同时刷新也不会重复弹。通知发不出去就跳过，不影响看板。"""
+    try:
+        seen = set(json.loads(read(state_path) or "[]"))
+    except ValueError:
+        seen = set()
+    current = []
     for p in projects:
-        for kind, fid, verb, sev, reason in p["human"]:
-            if kind != "decision":
-                waits.append((p["name"], f"STOP · {reason}" if kind == "stop" else reason, ago(p["since"]), f"w-{p['name']}"))
-                continue
-            what = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
-            waits.append((p["name"], what, ago(p["since"]), f"f-{p['name']}-{fid}"))
+        items = wait_items(p)
+        current += [k for k, _, _ in items]
+        new = [text for k, text, _ in items if k not in seen]
+        if not new:
+            continue
+        body = " ".join((new[0] if len(new) == 1 else f"{len(new)} 条新的：{new[0]}").split())[:220]
+        script = f"display notification {applescript_str(body)} with title {applescript_str('Review board · ' + p['name'] + ' 等你')}"
+        try:
+            subprocess.run([NOTIFY_BIN, "-e", script], capture_output=True, timeout=10)
+        except Exception:
+            pass
+    tmp = f"{state_path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(current), f, ensure_ascii=False)
+        os.replace(tmp, state_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def render(projects, archives, self_closed):
+    waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
     if waits:
         banner = (f'<div class="banner"><div class="t">等你 · {len(waits)}</div><div class="items">' + "".join(
             f'<a href="#{esc(a)}" onclick="return rbGo(\'{esc(n)}\',\'{esc(a)}\')"><b>{esc(n)}</b><span>{esc(w)}</span>'
@@ -1523,6 +1568,8 @@ def main():
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+    if "--notify" in args:
+        notify_new(projects, os.path.join(os.path.dirname(out_path), "board-notified.json"))
     if "--quiet" not in args:
         print(out_path)
     if "--open" in args:
