@@ -505,3 +505,70 @@ i = q.index("## 修一下登录页的超时（改）"); j = q.find("\n## ", i + 
 assert q[i:j].strip() == "## 修一下登录页的超时（改）\n流程：不评审\n### 范围\n- 只改超时", repr(q[i:j])
 PY2
 echo 'PASS review-board serve: reorder and edit pending tasks via review-task move / edit, guarded by the queue fingerprint'
+
+# ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
+grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
+lacks 'class="hp"' 'the static board has no health pill'
+# 常驻服务要每次都用当前时间算「几分钟前」：模块里的 NOW 若停在启动那刻，页面上的时长会越来越偏
+python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect refreshes NOW for every page'
+import importlib.machinery, importlib.util, os, sys, time
+sys.dont_write_bytecode = True
+os.environ["HERDR_BIN_PATH"] = "/nonexistent"
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+B.NOW = 0
+B.collect(sys.argv[2])
+assert abs(B.NOW - time.time()) < 60, B.NOW
+PY2
+mkdir -p "${TMP}/home/.review" "${TMP}/hbin" "${TMP}/code"
+cp "${BOARD}" "${TMP}/code/review-board"; cp "$(dirname "${BOARD}")/review-task" "${TMP}/code/review-task"
+cat > "${TMP}/hbin/launchctl" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  */dev.herdsman.review-board-serve) [ -f "${TMP}/serve.unloaded" ] && exit 113
+    pid=\$PPID; [ -f "${TMP}/serve.other" ] && pid=1
+    printf '\tstate = running\n\tpid = %s\n\tlast exit code = 0\n' "\$pid";;
+  */dev.herdsman.review-board) printf '\tstate = not running\n\tlast exit code = 0\n';;
+  *) exit 113;;
+esac
+EOF
+cat > "${TMP}/hbin/herdr" <<EOF
+#!/usr/bin/env bash
+[ -f "${TMP}/herdr.down" ] && exit 1
+exec "${TMP}/herdr" "\$@"
+EOF
+chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/herdr"
+printf '[]\n' > "${TMP}/home/.review/board-notified.json"
+HP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" HERDR_BIN_PATH="${TMP}/hbin/herdr" \
+  python3 "${TMP}/code/review-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
+SERVE2=$!
+trap 'kill "${SERVE}" "${SERVE2}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:${HP}/v" && break; sleep 0.1; done
+health() {   # <期望的 level> <检查项名> <true|false> [detail 里应有的字]
+  curl -s "http://127.0.0.1:${HP}/health" > "${TMP}/health.json" || { cat "${TMP}/serve2.err"; fail 'GET /health'; }
+  python3 - "${TMP}/health.json" "$@" <<'PY2' || { cat "${TMP}/health.json"; fail "health: $*"; }
+import json, sys
+h = json.load(open(sys.argv[1], encoding="utf-8")); level, name, ok = sys.argv[2:5]; want = sys.argv[5] if len(sys.argv) > 5 else ""
+names = [i["name"] for i in h["items"]]
+assert names == ["本机服务", "服务守护（launchd）", "看板定时生成", "生成出错记录", "herdr"], names
+it = next(i for i in h["items"] if i["name"] == name)
+assert h["level"] == level and it["ok"] == (ok == "true") and want in it["detail"], (h["level"], it)
+PY2
+}
+health ok 本机服务 true '端口'
+health ok 看板定时生成 true '通知正常'
+printf 'Traceback: boom\n' > "${TMP}/home/.review/board.err"
+health warn 生成出错记录 false 'boom'
+python3 -c 'import os,sys,time; t=time.time()-3600; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.review/board.err"
+health ok 生成出错记录 true '上次出错'
+python3 -c 'import os,sys,time; t=time.time()-900; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.review/board-notified.json"
+health warn 看板定时生成 false '通知可能停了'
+printf '[]\n' > "${TMP}/home/.review/board-notified.json"
+: > "${TMP}/herdr.down"; health warn herdr false '连不上'; rm "${TMP}/herdr.down"
+: > "${TMP}/serve.unloaded"; health warn '服务守护（launchd）' false '不会自动拉起'; rm "${TMP}/serve.unloaded"
+: > "${TMP}/serve.other"; health warn '服务守护（launchd）' false '另一个进程'; rm "${TMP}/serve.other"
+health ok '服务守护（launchd）' true '已由 launchd 托管'
+grep -qF "document.body.classList.contains('offline')" "${TMP}/live.html" || fail 'no full-page refresh while the service is unreachable'
+python3 -c 'import os,sys,time; t=time.time()+5; os.utime(sys.argv[1], (t, t))' "${TMP}/code/review-task"
+health warn 本机服务 false '旧代码'
+echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW refreshed per page'

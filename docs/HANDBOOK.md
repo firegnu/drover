@@ -314,6 +314,8 @@ agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因），任务看板标题栏的「+ 加任务」。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
 
+**服务健康。** 这样打开的页面，顶栏右侧是一个状态圆点（静态文件仍是「生成于 …」）：绿 = 已同步且各项正常，黄 = 有要留意的项，红 = 连不上服务——按钮变灰，页面停在最后一次同步的样子（不再整页刷新，免得换成浏览器的「无法连接」）。点它在右侧抽屉里看每一项（每 15 秒取一次 `/health`，全是只读检查）：本机服务（pid、端口、已运行多久；启动后 `review-board` / `review-task` 被更新过就标出还在跑旧代码）、服务守护（launchd 是否托管、托管的是不是这个进程）、看板定时生成（launchd 任务是否加载、上次退出码、`board-notified.json` 多久没更新——超过 2 分钟说明「等你」通知可能停了）、生成出错记录（`board.err` 最近 10 分钟有没有新错误，有就附最后几行）、herdr 能不能连上。另外，常驻服务每次生成页面都重取当前时间，页面上「几分钟前」「已进行多久」不会随服务运行越久越偏。
+
 项目发现：`~/Developer/personal_projs/*/.review.conf`，加上 `~/.review/projects` 里登记的路径（`herdsman-init`
 自动登记，所以仓库放在哪都会被扫到；一行一个路径，可手动增删）。
 `.review.conf` 里 `REVIEW_BOARD=` 置空可关掉退出时的自动生成。
@@ -2784,6 +2786,13 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .rbd-out{margin:12px 0 0;padding:8px 10px;border-radius:4px;font-size:12px;white-space:pre-wrap;background:#222429;border:1px solid #36383e;color:#c9c7c1}.rbd-out.ok{border-color:#356243}.rbd-out.bad{border-color:#803733;color:#f0a3b3}
 .rbd-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.rbd-b button{font:600 12.5px inherit;padding:6px 14px;border-radius:4px;cursor:pointer;border:1px solid #45474d;background:#2d2f35;color:#d6d3cc}
 .rbd-b .rbd-ok{background:#4a7fc1;border-color:#4a7fc1;color:#fff}.rbd-b .rbd-ok:disabled{opacity:.6;cursor:default}
+.hp{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font:12px inherit;color:#b1afa9;background:#1d1f24;border:1px solid #2c2e34;border-radius:999px;padding:3px 11px 3px 9px;cursor:pointer;font-variant-numeric:tabular-nums}
+.hp:hover{border-color:#45474d;color:#e6e4df}.hp .hdot,.hrow .hdot{width:8px;height:8px;border-radius:50%;background:#6d6f74;flex:none}
+.hp.ok .hdot,.hrow.ok .hdot{background:#5fb36a;box-shadow:0 0 0 3px rgba(95,179,106,.2)}.hp.warn .hdot,.hrow.warn .hdot{background:#e5b866;box-shadow:0 0 0 3px rgba(229,184,102,.2)}
+.hp.warn{color:#e5b866;border-color:#5e4c2c}.hp.bad .hdot{background:#e5533d;box-shadow:0 0 0 3px rgba(229,83,61,.25)}.hp.bad{color:#f0a3b3;border-color:#6e3345}
+.offline .act{opacity:.35;pointer-events:none}
+.hlist{margin-top:14px;border-top:1px solid #33353a}.hrow{display:grid;grid-template-columns:14px 150px minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:10px 0;border-bottom:1px solid #33353a}
+.hrow .hdot{transform:translateY(-1px)}.hrow b{font-weight:600;color:#e6e4df;font-size:13px}.hdet{font-size:12.5px;color:#b1afa9;white-space:pre-wrap;word-break:break-word}.hrow.warn .hdet{color:#e5c98f}
 .tasks .th .act.add{margin-left:10px;background:#4a7fc1;color:#fff;padding:5px 12px}.tasks .th .act.add:hover{background:#5a8fd1}
 dialog.rbe{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(1080px,94vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
 dialog.rbe::backdrop{background:rgba(0,0,0,.5)}
@@ -2992,6 +3001,7 @@ JS = """
   var dr=document.querySelector('.drawer'),sc=document.querySelector('.scrim'),openKey=null;
   function openTd(k){var tp=document.getElementById('td-'+k);if(!tp||!dr)return;
     var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(tp.content.cloneNode(true));box.scrollTop=0;
+    dr.querySelector('.dhd span').textContent='任务描述 · Esc 关闭';
     dr.hidden=false;sc.hidden=false;openKey=k}
   function closeTd(){if(!dr)return;dr.hidden=true;sc.hidden=true;openKey=null}
   document.addEventListener('click',function(e){var el=e.target.closest('[data-td]');if(el)openTd(el.dataset.td)});
@@ -3001,7 +3011,7 @@ JS = """
   (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
   if(st.y)window.scrollTo(0,st.y);
   (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb,.blist')[i];if(b)b.scrollTop=v});
-  if(st.td){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
+  if(st.td&&st.td!=='@health'){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
   function reloadKeep(){
     try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
       open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
@@ -3010,15 +3020,42 @@ JS = """
     location.reload()}
   var dlg=document.querySelector('dialog.rbd');
   function busy(){return !!document.querySelector('dialog[open]')}
-  setInterval(function(){if(document.hidden||busy())return;reloadKeep()},30000);
+  // 服务连不上时不整页刷新：刷新会把页面换成浏览器的「无法连接」，停在最后一次同步的样子更有用
+  setInterval(function(){if(document.hidden||busy()||document.body.classList.contains('offline'))return;reloadKeep()},30000);
   // 本机服务打开时（页面里有令牌）：放行 / 放弃按钮可用；每 4 秒问一次有没有变化，变了就刷新（确认框开着时不刷）
   var tk=document.querySelector('meta[name=rb-token]');
   if(tk&&dlg){
     document.body.classList.add('live');
     var ver=null;
-    setInterval(function(){if(document.hidden||busy())return;
-      fetch('/v',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
-        if(ver&&j.v!==ver)reloadKeep();ver=j.v}).catch(function(){})},4000);
+    // 顶栏的健康圆点：绿 = 已同步且各项正常；黄 = 有要留意的项；红 = 连不上服务（按钮变灰，页面内容可能过时）
+    var hp=document.querySelector('.hp'),hdot=hp&&hp.querySelector('.hdot'),htx=hp&&hp.querySelector('.ht'),
+        lastSync=Date.now(),offline=false,hdata=null;
+    function ago2(ms){var s=Math.max(0,Math.round(ms/1000));return s<60?s+' 秒前':s<3600?Math.floor(s/60)+' 分钟前':Math.floor(s/3600)+' 小时前'}
+    function paint(){if(!hp)return;var lv=offline?'bad':(hdata&&hdata.level==='warn'?'warn':'ok');hp.className='hp '+lv;
+      htx.textContent=offline?'服务已断开 · 最后同步 '+ago2(Date.now()-lastSync):(lv==='warn'?'需要留意 · ':'已同步 · ')+ago2(Date.now()-lastSync);
+      document.body.classList.toggle('offline',offline);if(openKey==='@health')renderHealth()}
+    function sync(){fetch('/v',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+        offline=false;lastSync=Date.now();if(ver&&j.v!==ver&&!busy())reloadKeep();ver=j.v;paint()})
+      .catch(function(){offline=true;paint()})}
+    function checkHealth(){fetch('/health',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){hdata=j;paint()}).catch(function(){})}
+    setInterval(function(){if(!document.hidden)sync()},4000);
+    setInterval(function(){if(!document.hidden)checkHealth()},15000);
+    setInterval(paint,1000);sync();checkHealth();
+    function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
+      var h=document.createElement('div');h.className='dtt';h.textContent='服务健康';box.appendChild(h);
+      var sub=document.createElement('div');sub.className='dsub';
+      sub.textContent=offline?'连不上本机服务：review-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.herdsman.review-board-serve'
+        :(hdata?(hdata.level==='ok'?'各项正常':'有需要留意的项')+' · 检查于 '+ago2(Date.now()-hdata.checked*1000):'正在检查…');
+      box.appendChild(sub);
+      var list=document.createElement('div');list.className='hlist';
+      ((hdata&&hdata.items)||[]).forEach(function(it){var row=document.createElement('div');row.className='hrow '+(it.ok?'ok':'warn');
+        var d=document.createElement('span');d.className='hdot';row.appendChild(d);
+        var n=document.createElement('b');n.textContent=it.name;row.appendChild(n);
+        var t=document.createElement('div');t.className='hdet';t.textContent=it.detail;row.appendChild(t);list.appendChild(row)});
+      box.appendChild(list)}
+    function openHealth(){if(!dr)return;renderHealth();dr.querySelector('.dhd span').textContent='服务健康 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@health';checkHealth()}
+    if(hp)hp.addEventListener('click',openHealth);
+    if(st.td==='@health')openHealth();
     var f=dlg.querySelector('form'),t=dlg.querySelector('.rbd-t'),m=dlg.querySelector('.rbd-m'),
         rs=dlg.querySelector('.rbd-r'),out=dlg.querySelector('.rbd-out'),ok=dlg.querySelector('.rbd-ok'),no=dlg.querySelector('.rbd-no'),cur=null;
     document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
@@ -3678,13 +3715,14 @@ def render(projects, archives, self_closed, live=None):
     agents = agents_line(kinds[0], next((k for k in writer_kinds if k), ""), p0.get("review_args", ""),
                          next((p["plan_kind"] for p in projects if p.get("plan_kind")), ""),
                          next((p["plan_args"] for p in projects if p.get("plan_kind")), ""))
-    mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>'
-            f'<span class="gen">生成于 {gen[11:]}</span></div>')
+    gen_html = ('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
+                if live else f'<span class="gen">生成于 {gen[11:]}</span>')
+    mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
             f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .review.conf 指向的交接目录与 docs/reviews</div></div>'
-            + (DRAWER if 'data-td="' in panels else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
+            + (DRAWER if 'data-td="' in panels or live else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
             f'<script>{JS}</script></body></html>')
 
 
@@ -3704,7 +3742,10 @@ def discover(list_path):
 
 
 def collect(list_path):
-    """各项目的当前状态 → (projects, archives, self_closed)；生成静态页和本机服务共用。"""
+    """各项目的当前状态 → (projects, archives, self_closed)；生成静态页和本机服务共用。
+    NOW 每次重取：本机服务是常驻进程，停在启动那刻的 NOW 会让页面上「几分钟前」「已进行多久」越来越偏。"""
+    global NOW
+    NOW = time.time()
     projects, archives, self_closed = [], {}, {}
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.review.conf")
@@ -3746,6 +3787,79 @@ def live_version(list_path):
             except OSError:
                 pass
     return h.hexdigest()[:16]
+
+
+LAUNCHCTL = os.environ.get("REVIEW_LAUNCHCTL", "launchctl")
+
+
+def span_text(sec):
+    sec = max(0, int(sec))
+    if sec < 60:
+        return f"{sec} 秒"
+    if sec < 3600:
+        return f"{sec // 60} 分钟"
+    if sec < 86400:
+        return f"{sec // 3600} 小时 {(sec % 3600) // 60} 分"
+    return f"{sec // 86400} 天"
+
+
+def launchd_job(label):
+    """launchd 里这个任务的 {state, exit}；没加载（或查不了）返回 None。"""
+    try:
+        r = subprocess.run([LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if r.returncode:
+        return None
+    st = re.search(r'^\s*state = (.+)$', r.stdout, re.M)
+    ex = re.search(r'last exit code = (\S+)', r.stdout)
+    pid = re.search(r'^\s*pid = (\d+)', r.stdout, re.M)
+    return {"state": st.group(1).strip() if st else "", "exit": ex.group(1) if ex else "", "pid": int(pid.group(1)) if pid else None}
+
+
+def health(started, port):
+    """本机服务和看板周边是否在正常工作；只读检查。页面顶栏的圆点每 15 秒取一次，点开看每一项。"""
+    now, items = time.time(), []
+    add = lambda name, ok, detail: items.append({"name": name, "ok": bool(ok), "detail": detail})
+    here = os.path.dirname(os.path.realpath(__file__))
+    stale = [f for f in ("review-board", "review-task")
+             if os.path.exists(os.path.join(here, f)) and os.stat(os.path.join(here, f)).st_mtime > started + 1]
+    add("本机服务", not stale, f"pid {os.getpid()} · 端口 {port} · 已运行 {span_text(now - started)}"
+        + (f"；启动后 {'、'.join(stale)} 被更新过，还在跑旧代码：重新运行 install.sh，"
+           f"或 launchctl kickstart -k gui/{os.getuid()}/dev.herdsman.review-board-serve" if stale else " · 跑的是最新安装的代码"))
+    sj = launchd_job("dev.herdsman.review-board-serve")
+    if not sj:
+        add("服务守护（launchd）", False, "没由 launchd 托管：服务挂了不会自动拉起（手动启动的？运行 install.sh 装上）")
+    elif sj["pid"] not in (None, os.getpid()):
+        add("服务守护（launchd）", False, f"launchd 托管的是另一个进程（pid {sj['pid']}），不是这个页面连着的服务（pid {os.getpid()}）：这个是手动启动的？")
+    else:
+        add("服务守护（launchd）", True, "已由 launchd 托管，挂了会自动拉起")
+    bj = launchd_job("dev.herdsman.review-board")
+    nf = os.path.join(os.path.dirname(DEFAULT_OUT), "board-notified.json")
+    age = now - os.stat(nf).st_mtime if os.path.exists(nf) else None
+    if not bj:
+        add("看板定时生成", False, "定时任务没加载：board.html 不会每 30 秒刷新，「等你」通知也不会发（运行 install.sh）")
+    elif bj["exit"] not in ("", "0"):
+        add("看板定时生成", False, f"上次退出码 {bj['exit']}：看生成出错记录")
+    elif age is None:
+        add("看板定时生成", False, "还没运行过（board-notified.json 不存在）")
+    elif age >= 120:
+        add("看板定时生成", False, f"上次运行是 {span_text(age)}前（应每 30 秒一次）：「等你」通知可能停了")
+    else:
+        add("看板定时生成", True, f"上次运行 {span_text(age)}前 · 退出码 0 · 通知正常")
+    ef = os.path.join(os.path.dirname(DEFAULT_OUT), "board.err")
+    est = os.stat(ef) if os.path.exists(ef) else None
+    if est and est.st_size and est.st_mtime > now - 600:
+        tail = "\n".join((read(ef) or "").strip().splitlines()[-3:])
+        add("生成出错记录", False, f"最近 10 分钟有新错误（{ef}）：\n{tail}")
+    else:
+        add("生成出错记录", True, "最近 10 分钟没有新错误" + (f"；上次出错是 {span_text(now - est.st_mtime)}前" if est and est.st_size else ""))
+    try:
+        hok = subprocess.run([HERDR, "agent", "list"], capture_output=True, timeout=3).returncode == 0
+    except Exception:
+        hok = False
+    add("herdr", hok, "能连上" if hok else "连不上：写手、规划者、评审方的状态显示不出来（herdr 没在运行？）")
+    return {"level": "ok" if all(i["ok"] for i in items) else "warn", "items": items, "checked": int(now)}
 
 
 def live_action(list_path, act, body):
@@ -3799,6 +3913,7 @@ def serve(args):
     port = int(args[args.index("--port") + 1]) if "--port" in args else int(os.environ.get("REVIEW_BOARD_PORT", "10086"))
     list_path = args[args.index("--projects") + 1] if "--projects" in args else None
     token = secrets.token_urlsafe(24)
+    started = time.time()
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -3822,6 +3937,8 @@ def serve(args):
                 return self.reply(200, render(*collect(list_path), live={"token": token}), "text/html; charset=utf-8")
             if path == "/v":
                 return self.reply(200, {"v": live_version(list_path)})
+            if path == "/health":
+                return self.reply(200, health(started, port))
             return self.reply(404, {"ok": False, "out": "没有这个地址"})
 
         def do_POST(self):
