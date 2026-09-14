@@ -585,7 +585,7 @@ QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").r
 [ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":true,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'hold from the page'; }
 tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the page hold goes through review-task hold'
 curl -s "${U}/" > "${TMP}/live.html"
-grep -qF '<span class="hold">做完停</span>' "${TMP}/live.html" || fail 'a held task is marked on the board'
+grep -qF '<span class="hold-tag">做完停</span>' "${TMP}/live.html" || fail 'a held task is marked on the board'
 grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="1"' "${TMP}/live.html" || fail 'the toggle shows it is on'
 [ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":false,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'unhold from the page'
 [ "$(post /api/loop '{"project":"eta/repo","on":false}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'loop off for eta'
@@ -697,6 +697,28 @@ rm -f "${TMP}/prompts.log"; : > "${TMP}/theta/review/paused"; mark; sleep 2.5
 [ ! -s "${TMP}/prompts.log" ] || fail 'no wake while paused'
 rm "${TMP}/theta/review/paused"
 waitfor '[ -s "${TMP}/prompts.log" ]' || fail 'resuming lets the wake through'
+waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared after the wake'
+# 叫醒期间写手又停下、写了新标记：服务不能把新标记当旧的删掉（否则写手停着再没人叫）
+HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" "${TMP}/projects" "${TMP}" <<'PY2' || fail 'a marker rewritten during the wake survives'
+import importlib.machinery, importlib.util, json, os, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+mf = os.path.join(sys.argv[3], "theta", "review", ".loop-wait")
+open(os.path.join(sys.argv[3], "theta", "review", "loop"), "w").close()
+json.dump({"reason": "empty", "pane": "theta-writer", "t": 1}, open(mf, "w"))
+real_run = B.subprocess.run
+def run(cmd, *a, **k):
+    r = real_run(cmd, *a, **k)
+    if cmd[1:3] == ["agent", "prompt"]:               # 注入的同时，写手又停下写了新标记
+        json.dump({"reason": "empty", "pane": "theta-writer", "t": 2}, open(mf, "w"))
+    return r
+B.subprocess.run = run
+B.HERDR = os.environ["HERDR_BIN_PATH"]
+B.loop_tick(sys.argv[2])
+assert os.path.exists(os.path.join(sys.argv[3], "prompts.log")), "the wake did not happen"
+assert os.path.exists(mf) and json.load(open(mf))["t"] == 2, "new marker was deleted"
+os.remove(mf)
+PY2
 # 写手在忙时先记下 pane 身份；身份变了（换了 terminal）就不叫，标成失败留给人
 rm -f "${TMP}/prompts.log"; echo working > "${TMP}/theta.status"; mark
 waitfor 'grep -q terminal "${TMP}/theta/review/.loop-wait"' || fail 'the service records the writer pane identity'
@@ -714,11 +736,16 @@ echo 'PASS review-board serve: loop switch; wakes the idle writer when work is p
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
 # 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。
 if command -v node >/dev/null; then
+  # 给冒烟测试准备一个「做完等放行」的任务：theta 领 T4、做完（没有提交，放行模式）
+  rm -f "${TMP}/theta/review/loop" "${TMP}/theta/review/.loop-wait" "${TMP}/theta/review/paused"
+  ( cd "${TMP}/theta/repo" && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" next >/dev/null && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
+  grep -q '"ev": "done", "id": "T4".*"gate": true' "${TMP}/theta/review/tasks.state" || fail 'smoke setup: theta T4 waits for release'
   set +e; node "${ROOT}/tests/browser-smoke.mjs" "${U}/" "${SERVE}"; SMOKE=$?; set -e
   if [ "${SMOKE}" = 77 ]; then :
   elif [ "${SMOKE}" != 0 ]; then fail 'browser smoke test'
   else
-    [ "$(epending)" = "导出支持按月分文件|普通任务" ] || fail "the page's move reached queue.md: $(epending)"
+    [ "$(epending)" = "普通任务|导出支持按月分文件" ] || fail "the page's actions reached queue.md: $(epending)"
+    tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go"' || fail "the page's release reached tasks.state"
   fi
 else
   echo 'SKIP browser smoke: no node'

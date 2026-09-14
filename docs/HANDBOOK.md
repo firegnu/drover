@@ -2860,8 +2860,8 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .hbar{display:flex;gap:6px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}.hbar .filter{margin:0;flex:1;min-width:180px;width:auto}
 .hf{font:12px inherit;padding:4px 10px;border-radius:4px;border:1px solid #42444a;background:#222429;color:#b1afa9;cursor:pointer}.hf.on{background:#4a7fc1;border-color:#4a7fc1;color:#fff}
 .hlist2 .drow{cursor:pointer}.hlist2 .drow:hover{background:#35383e;border-color:#50535a}
-.hold{font-size:11px;font-weight:600;color:#f0a3b3;border:1px solid #6e3345;background:#33242c;border-radius:3px;padding:0 7px;line-height:16px}
-.live ol.q li .qa .act.hd:hover{border-color:#f0a3b3;color:#f0a3b3}.live ol.q li .qa .act.hd.on{color:#f0a3b3;border-color:#6e3345}
+.hold-tag{font-size:11px;font-weight:600;color:#f0a3b3;border:1px solid #6e3345;background:#33242c;border-radius:3px;padding:0 7px;line-height:16px}
+.live ol.q li .qa .act.hold-btn:hover{border-color:#f0a3b3;color:#f0a3b3}.live ol.q li .qa .act.hold-btn.on{color:#f0a3b3;border-color:#6e3345}
 .mode.loop{border-color:#356243;color:#7fd48a;background:#26362f}.loopw{margin-top:8px;font-size:12px;color:#7fd48a;border:1px dashed #356243;border-radius:4px;padding:6px 10px}.loopw.bad{color:#f0a3b3;border-color:#6e3345}
 .tasks .th .act.lp{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.lp:hover{border-color:#7fd48a;color:#7fd48a}.tasks .th .act.lp.on{border-color:#356243;color:#7fd48a}
 .tasks .th .act.pz{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.pz:hover{border-color:#e5b866;color:#e5b866}
@@ -3554,7 +3554,7 @@ def render_tasks(p, live=None):
         looping = tv["loop"] or not tv["gate"]          # 放行模式下每个任务做完本来就停，「做完停」没有意义，不显示
         held = task_held(b, tv["holds"])
         if looping and held:
-            chips.append('<span class="hold">做完停</span>')
+            chips.append('<span class="hold-tag">做完停</span>')
         note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_flow(l) and not TASK_HOLD_LINE.match(l)), "")
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
@@ -3569,7 +3569,7 @@ def render_tasks(p, live=None):
             acts = ('<span class="qa">'
                     + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
                     + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
-                    + (f'<button class="act hd{" on" if held else ""}" type="button" data-act="hold" data-p="{pn}" data-pos="{pos}" data-on="{1 if held else 0}" '
+                    + (f'<button class="act hold-btn{" on" if held else ""}" type="button" data-act="hold" data-p="{pn}" data-pos="{pos}" data-on="{1 if held else 0}" '
                        f'title="{"取消：做完后不停" if held else "这个任务做完后停下等你放行"}">{"取消做完停" if held else "做完停"}</button>' if looping else "")
                     + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
                     + f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-pos="{pos}" data-title="{esc(b["title"])}">放弃</button>'
@@ -3592,7 +3592,7 @@ def render_tasks(p, live=None):
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
-        flow = (flow_chip(c["flow"]) if c["flow"] else "") + ('<span class="hold">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else "")
+        flow = (flow_chip(c["flow"]) if c["flow"] else "") + ('<span class="hold-tag">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else "")
         key = f'{p["name"]}:{c["id"]}'
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
@@ -4136,11 +4136,12 @@ def loop_tick(list_path):
             continue
         if a.get("agent_status") not in ("idle", "done"):
             continue                                   # 写手在忙（可能人已经叫过它）：它运行 next 时会自己清掉标记
+        before = read(mf)                              # 叫醒期间写手可能又停下、写了新标记：删之前核对还是这一份
         r = subprocess.run([HERDR, "agent", "prompt", m["pane"], LOOP_PROMPT, "--wait", "--until", "working", "--until", "blocked",
                             "--timeout", "20000"], capture_output=True, text=True, timeout=40)
         after = (herdr_agent(m["pane"]) or {}).get("agent_status")
         if r.returncode == 0 or after in ("working", "blocked"):
-            if os.path.exists(mf):
+            if read(mf) == before:
                 os.remove(mf)
             with open(f"{d}/.loop.log", "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {m['pane']} 已叫醒\n")
