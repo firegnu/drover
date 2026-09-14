@@ -657,3 +657,16 @@ curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
 python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows herdr without a page reload'; }
 rm "${TMP}/herdr.down"
 echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW and agents refreshed; crew polled'
+
+# ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
+# 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。
+if command -v node >/dev/null; then
+  set +e; node "${ROOT}/tests/browser-smoke.mjs" "${U}/" "${SERVE}"; SMOKE=$?; set -e
+  if [ "${SMOKE}" = 77 ]; then :
+  elif [ "${SMOKE}" != 0 ]; then fail 'browser smoke test'
+  else
+    [ "$(epending)" = "导出支持按月分文件|普通任务" ] || fail "the page's move reached queue.md: $(epending)"
+  fi
+else
+  echo 'SKIP browser smoke: no node'
+fi
