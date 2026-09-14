@@ -574,6 +574,23 @@ assert sm["done"] == 2 and sm["dropped"] == len(items) - 2 and sm["noreview"] ==
 PY2
 echo 'PASS review-board serve: view all finished tasks via GET /history (newest first, summary, queue text for never-started drops)'
 
+# ---- 做完停：只在循环开着（或自动模式）时出现；按钮经 review-task hold 记进 tasks.state；任务上标「做完停」；关了循环就不显示
+curl -s "${U}/" > "${TMP}/live.html"
+grep -qF 'data-act="hold" data-p="eta/repo"' "${TMP}/live.html" && fail 'no hold toggle while every task already waits for release'
+[ "$(post /api/loop '{"project":"eta/repo","on":true}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'loop on for eta'; }
+curl -s "${U}/" > "${TMP}/live.html"
+grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="0"' "${TMP}/live.html" || fail 'hold toggle on pending tasks while looping'
+QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").read()).hexdigest()[:12])' "${TMP}/eta/review/queue.md")
+[ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":true,"expect":"000000000000"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'a stale fingerprint refuses the hold'
+[ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":true,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'hold from the page'; }
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the page hold goes through review-task hold'
+curl -s "${U}/" > "${TMP}/live.html"
+grep -qF '<span class="hold">做完停</span>' "${TMP}/live.html" || fail 'a held task is marked on the board'
+grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="1"' "${TMP}/live.html" || fail 'the toggle shows it is on'
+[ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":false,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'unhold from the page'
+[ "$(post /api/loop '{"project":"eta/repo","on":false}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'loop off for eta'
+echo 'PASS review-board serve: hold toggle only while looping, via review-task hold, marked on the board, guarded by the fingerprint'
+
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'

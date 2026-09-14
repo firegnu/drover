@@ -2323,6 +2323,24 @@ def task_flow(body):
     return m.group(1) if m else ""
 
 
+TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
+
+
+def task_holds(evs):
+    """tasks.state 里的 hold 事件 → 打着「做完停」的任务 key 集合（有编号按编号，没编号按标题；后来的事件覆盖前面的）。"""
+    on = {}
+    for e in evs:
+        if e.get("ev") == "hold" and e.get("key"):
+            on[e["key"]] = bool(e.get("on"))
+    return {k for k, v in on.items() if v}
+
+
+def task_held(t, holds):
+    """这个任务做完要不要停下等放行：看板上点了「做完停」，或正文里写了「做完：等我放行」。t 可以是队列块或 tasks.state 里的任务。"""
+    keys = {t.get("id"), t.get("key") or t.get("title")} - {None, ""}
+    return bool(keys & holds) or bool(TASK_HOLD_LINE.search(t.get("body") or ""))
+
+
 def queue_version(text):
     """queue.md 内容的短指纹：页面记下它，改顺序 / 改任务时带回来，对不上说明这期间队列被别人改过。"""
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
@@ -2436,6 +2454,7 @@ def task_view(repo, conf, p):
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
         card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "flow": flow, "body": t.get("body", ""),
+                "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
@@ -2452,6 +2471,7 @@ def task_view(repo, conf, p):
         loop_wait = None
     return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished, "qv": queue_version(qtext),
             "loop": os.path.exists(f"{d}/loop"), "loop_wait": loop_wait if isinstance(loop_wait, dict) else None,
+            "holds": task_holds(task_events(read(f"{d}/tasks.state"))),
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
             "done": sum(x["status"] == "done" for x in tasks.values()),
             "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
@@ -2813,7 +2833,8 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 :focus-visible{outline:2px solid #4a7fc1;outline-offset:2px}
 .act{display:none}.live .act{display:inline-block;font:600 11.5px/1 inherit;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid transparent}
 .live .act.go{background:#c8375a;color:#fff;margin-top:6px}.live .act.go:hover{background:#d8456a}
-ol.q li{position:relative}.qa{position:absolute;top:6px;right:6px;display:flex;gap:3px;padding-left:24px;background:linear-gradient(90deg,rgba(53,56,62,0),#35383e 22px);border-radius:0 3px 3px 0;opacity:0;pointer-events:none;transition:opacity .12s}
+ol.q li{position:relative}.live ol.q li{padding-bottom:32px}
+.qa{position:absolute;left:34px;right:8px;bottom:6px;display:flex;justify-content:flex-end;gap:4px;border-top:1px dashed #3c3e44;padding-top:5px;opacity:0;pointer-events:none;transition:opacity .12s}
 .live ol.q li:hover .qa,.live ol.q li:focus-within .qa{opacity:1;pointer-events:auto}
 .live ol.q li .qa .act{font:600 11px/16px inherit;padding:1px 7px;border-radius:3px;background:#2a2c31;color:#c9c7c1;border-color:#4a4c52}.live ol.q li .qa .act:hover{border-color:#8fb8ee;color:#8fb8ee}
 .live ol.q li .qa .act.drop:hover{border-color:#e5b866;color:#e5b866}.live ol.q li .qa .act.mv{padding:1px 6px}
@@ -2839,6 +2860,8 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .hbar{display:flex;gap:6px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}.hbar .filter{margin:0;flex:1;min-width:180px;width:auto}
 .hf{font:12px inherit;padding:4px 10px;border-radius:4px;border:1px solid #42444a;background:#222429;color:#b1afa9;cursor:pointer}.hf.on{background:#4a7fc1;border-color:#4a7fc1;color:#fff}
 .hlist2 .drow{cursor:pointer}.hlist2 .drow:hover{background:#35383e;border-color:#50535a}
+.hold{font-size:11px;font-weight:600;color:#f0a3b3;border:1px solid #6e3345;background:#33242c;border-radius:3px;padding:0 7px;line-height:16px}
+.live ol.q li .qa .act.hd:hover{border-color:#f0a3b3;color:#f0a3b3}.live ol.q li .qa .act.hd.on{color:#f0a3b3;border-color:#6e3345}
 .mode.loop{border-color:#356243;color:#7fd48a;background:#26362f}.loopw{margin-top:8px;font-size:12px;color:#7fd48a;border:1px dashed #356243;border-radius:4px;padding:6px 10px}.loopw.bad{color:#f0a3b3;border-color:#6e3345}
 .tasks .th .act.lp{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.lp:hover{border-color:#7fd48a;color:#7fd48a}.tasks .th .act.lp.on{border-color:#356243;color:#7fd48a}
 .tasks .th .act.pz{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.pz:hover{border-color:#e5b866;color:#e5b866}
@@ -3118,6 +3141,8 @@ JS = """
       if(b.dataset.act==='history'){openHistory(b.dataset.p);return}
       if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
       if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
+      if(b.dataset.act==='hold'){api('/api/hold',{project:b.dataset.p,pos:+b.dataset.pos,on:b.dataset.on!=='1',expect:qvOf(b.dataset.p)})
+        .then(function(j){if(j.ok)reloadKeep();else showFail('没标成',j.out||'')});return}
       cur=b.dataset;
       var go=cur.act==='go',drop=cur.act==='drop',pz=cur.act==='pause',lp=cur.act==='loop';
       t.textContent=drop||go?(go?'放行 ':'放弃 ')+(cur.id?cur.id+' · ':'（未编号）')+cur.title:(lp?(cur.on==='1'?'关闭循环':'开启循环'):pz?'暂停发新任务':'恢复发新任务')+' · '+cur.p;
@@ -3526,7 +3551,11 @@ def render_tasks(p, live=None):
             chips.append('<span class="hand">手写 · 发出时编号</span>')
         if task_flow(b["body"]):
             chips.append(flow_chip(task_flow(b["body"])))
-        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_flow(l)), "")
+        looping = tv["loop"] or not tv["gate"]          # 放行模式下每个任务做完本来就停，「做完停」没有意义，不显示
+        held = task_held(b, tv["holds"])
+        if looping and held:
+            chips.append('<span class="hold">做完停</span>')
+        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_flow(l) and not TASK_HOLD_LINE.match(l)), "")
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
@@ -3540,6 +3569,8 @@ def render_tasks(p, live=None):
             acts = ('<span class="qa">'
                     + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
                     + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
+                    + (f'<button class="act hd{" on" if held else ""}" type="button" data-act="hold" data-p="{pn}" data-pos="{pos}" data-on="{1 if held else 0}" '
+                       f'title="{"取消：做完后不停" if held else "这个任务做完后停下等你放行"}">{"取消做完停" if held else "做完停"}</button>' if looping else "")
                     + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
                     + f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-pos="{pos}" data-title="{esc(b["title"])}">放弃</button>'
                     + '</span>')
@@ -3561,7 +3592,7 @@ def render_tasks(p, live=None):
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
-        flow = flow_chip(c["flow"]) if c["flow"] else ""
+        flow = (flow_chip(c["flow"]) if c["flow"] else "") + ('<span class="hold">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else "")
         key = f'{p["name"]}:{c["id"]}'
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
@@ -4018,6 +4049,8 @@ def live_action(list_path, act, body):
             lines = [l for l in lines if not TASK_FLOW.match(l)]
         text = [title, *([f"流程：{flow}"] if flow else []), *lines]
         cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
+    elif act == "hold":
+        cmd = [task_bin, "hold", str(body.get("pos") or ""), "on" if body.get("on") else "off", *expect]
     elif act == "loop":
         on = bool(body.get("on"))
         if tv["loop"] == on:
@@ -4044,7 +4077,7 @@ def live_action(list_path, act, body):
             cmd = [task_bin, "drop", tid, reason]
     r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
     out = (r.stdout + r.stderr).strip()
-    if r.returncode == 2 and (act in ("move", "edit") or body.get("pos")):
+    if r.returncode == 2 and (act in ("move", "edit", "hold") or body.get("pos")):
         return 400, {"ok": False, "code": 2, "out": out.split("\n\n")[0]}
     return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": out}
 
@@ -4167,7 +4200,7 @@ def serve(args):
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 return self.reply(415, {"ok": False, "out": "只接受 JSON"})
             act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit",
-                   "/api/pause": "pause", "/api/resume": "resume", "/api/loop": "loop"}.get(self.path)
+                   "/api/pause": "pause", "/api/resume": "resume", "/api/loop": "loop", "/api/hold": "hold"}.get(self.path)
             if not act:
                 return self.reply(404, {"ok": False, "out": "没有这个操作"})
             try:
@@ -4257,6 +4290,8 @@ if __name__ == "__main__":
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
   review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接领下一个；
                                       写手停在队列那一步（队列空 / 暂停）时留下 .loop-wait，条件满足后由看板服务叫醒它
+  review-task hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
+                                      （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
   review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
@@ -4358,6 +4393,8 @@ def issue(t, again=False):
     if t.get("body"):
         out += ["", t["body"]]
     out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
+    if B.task_held(t, B.task_holds(B.task_events(B.read(S)))):
+        out += ["人标了「做完停」：这个任务做完后会停下等人放行（review-task done 核对通过之后），那时照输出停下即可，不是出了问题。"]
     flow = B.task_flow(t.get("body"))
     if flow == "不评审":
         out += ["人已指定本任务不评审：不找规划者，提交后不运行 request-review，AGENTS.md 里这两条对本任务不适用；",
@@ -4624,8 +4661,11 @@ def cmd_done(tid):
             for c in reversed(waive):
                 f.write(f"{time.strftime('%Y-%m-%d')} | {git('rev-parse', '--short', c).strip()} | 任务 {tid} 人指定不评审\n")
         print(f"人指定 {tid} 不评审：{len(waive)} 个提交已登记进 docs/reviews/skipped.md（和评审记录一起提交即可）。")
-    gate = GATE and not loop_on()                 # 循环开着：做完直接领下一个
+    held = B.task_held(current, B.task_holds(B.task_events(B.read(S))))
+    gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
+    if gate and loop_on():
+        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：停下等人放行；放行后运行 review-task next。")
     if gate:
         return stop(f"DONE {tid}：核对通过。放行模式：停下，把这句报告给人，等人放行；放行后运行 review-task next。")
     print(f"DONE {tid}：核对通过。")
@@ -4667,6 +4707,15 @@ def cmd_drop_pos(pos, reason, expect):
     append({"ev": "drop", "id": tid, "title": b["title"], "key": b["title"], "reason": reason})
     print(f"已放弃 {tid}：{b['title']}" + (f"（{reason}）" if reason else "")
           + "。queue.md 里这块没编号，按标题认：之后再手写同名的没编号任务也会被当成已放弃，换个标题或加上编号。")
+    return 0
+
+
+def cmd_hold(pos, on, expect):
+    _, raw, slots = pending_slots(expect)
+    b = B.task_blocks(raw[slots[slot(pos, slots)]])[0]
+    append({"ev": "hold", "key": b["id"] or b["title"], "title": b["title"], "on": on})
+    print(f"{'已标' if on else '已取消'}「做完停」：{b['id'] or '（未编号）'} {b['title']}"
+          + ("。它做完后会停下等放行，不管是不是开着循环。" if on else "。"))
     return 0
 
 
@@ -4738,8 +4787,8 @@ def main(argv):
         if k + 1 >= len(rest):
             die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
         expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
-        if cmd not in ("move", "edit", "drop"):
-            die(2, "ERROR: --expect 只用于 move / edit / drop --pos")
+        if cmd not in ("move", "edit", "drop", "hold"):
+            die(2, "ERROR: --expect 只用于 move / edit / drop --pos / hold")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and not rest:
@@ -4758,6 +4807,8 @@ def main(argv):
         return cmd_move(rest[0], rest[1], expect)
     if cmd == "edit" and len(rest) >= 2:
         return cmd_edit(rest[0], rest[1], rest[2:], expect)
+    if cmd == "hold" and len(rest) == 2 and rest[1] in ("on", "off"):
+        return cmd_hold(rest[0], rest[1] == "on", expect)
     if cmd == "loop" and rest in (["on"], ["off"]):
         return cmd_loop(rest[0] == "on")
     if cmd in ("pause", "resume") and not rest:
@@ -4968,7 +5019,7 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 核对通过后，放行模式（`TASK_GATE=1`，默认）让写手停下，看板「等你」栏显示「T5 做完了」；你运行 `review-task go`，再对写手说「继续」（它上一条输出里写着放行后运行 `review-task next`）；或者换一个新写手，同样对它说「运行 review-task next，按它的输出办」。循环的状态全在文件里，换写手不丢任何东西，这也是控制写手上下文长度的时机。`TASK_GATE=0` 是自动模式，做完直接发下一个。
 
-**外层循环。** 想让写手一个接一个地转、停下了也不用你去叫，就开循环：看板任务看板上的「开启循环」，或 `review-task loop on`。开关是交接目录里的 `loop` 文件（和 `paused` 一样，存在 = 开，默认没有 = 关），不写进 `.review.conf`。开着时：做完直接领下一个（不管 `TASK_GATE`）；写手停在队列那一步——队列空了、暂停中——时，`review-task` 在交接目录留下 `.loop-wait`（停下的原因和写手的 herdr pane，本工具仍不碰 herdr），看板的本机服务每 5 秒看一次：条件满足（队列里有待办、没暂停、不等放行）且写手空闲时，往它的 pane 输入「运行 review-task next，按它的输出办」。第一次看到标记先向 herdr 核对 pane 确实是这个仓库的写手、记下 terminal 和 session，之后身份变了就不叫；叫不醒重试 3 次，失败的在任务看板上标出来，由你去说那句话。叫醒记录在 `.loop.log`。所以循环要本机服务开着；写手要在 herdr 里运行。关掉循环（「关闭循环」或 `review-task loop off`）就回到原来的样子，唤醒标记一并作废。刹车照旧用暂停。`next` 会重发进行中的任务，所以写手中途换人也能接着做。
+**外层循环。** 想让写手一个接一个地转、停下了也不用你去叫，就开循环：看板任务看板上的「开启循环」，或 `review-task loop on`。开关是交接目录里的 `loop` 文件（和 `paused` 一样，存在 = 开，默认没有 = 关），不写进 `.review.conf`。开着时：做完直接领下一个（不管 `TASK_GATE`）；写手停在队列那一步——队列空了、暂停中——时，`review-task` 在交接目录留下 `.loop-wait`（停下的原因和写手的 herdr pane，本工具仍不碰 herdr），看板的本机服务每 5 秒看一次：条件满足（队列里有待办、没暂停、不等放行）且写手空闲时，往它的 pane 输入「运行 review-task next，按它的输出办」。第一次看到标记先向 herdr 核对 pane 确实是这个仓库的写手、记下 terminal 和 session，之后身份变了就不叫；叫不醒重试 3 次，失败的在任务看板上标出来，由你去说那句话。叫醒记录在 `.loop.log`。所以循环要本机服务开着；写手要在 herdr 里运行。关掉循环（「关闭循环」或 `review-task loop off`）就回到原来的样子，唤醒标记一并作废。想让循环在某处停一下：正在做的这个做完就停，点「暂停发任务」（恢复后自动叫醒接着转）；队列里还没开始的某个任务做完后停，点它的「做完停」（`review-task hold <位置> on|off`，记进 `tasks.state`、不改 `queue.md`；只在循环开着或自动模式时显示，关了循环标记保留但不显示）。打了「做完停」的任务做完后不管什么模式都停下等放行，你放行后循环自动接着转；正文里写一行 `做完：等我放行` 效果一样（给 agent 建任务用）。`next` 会重发进行中的任务，所以写手中途换人也能接着做。
 
 **按任务控制流程。** 正文里写的话和你当面交代的一样，所以「不走规划，直接做，做完照常送审」直接写进正文就行，不需要工具参与。只有「不评审」要工具帮忙：光靠一句话，写手当时会照做，但那些提交没登记豁免，会被算进下一次评审的范围，`done` 也会因为没过路由而卡住。所以在正文里单独写一行 `流程：不评审`（冒号中英文都行）：`next` 会明确告诉写手不找规划者、不运行 `request-review`；`done` 在其余几条核对都通过后，把任务起点以来该审的提交按 `SKIP_REVIEW` 的格式登记进 `docs/reviews/skipped.md`（原因写「任务 T5 人指定不评审」），再放行。这一档跳过的是整个任务，碰了计划或规则文件也一样，只用在你心里有数的低风险活上。
 

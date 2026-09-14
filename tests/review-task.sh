@@ -250,6 +250,32 @@ rt_pane next; code 8 'waiting for release'
 [ ! -f "${D}/.loop-wait" ] || fail 'no wake marker when the loop is off'
 rt go
 
+# ---- 做完停：给队列里还没开始的任务打标记（记进 tasks.state，不改 queue.md），循环里做完它就停下等放行，放行后接着转；
+# 正文里手写一行「做完：等我放行」效果一样（给 agent 建任务用）
+rt loop on
+rt add "做完要看一眼的甲"; rt add "甲之后的乙"
+QB=$(cat "${D}/queue.md")
+rt hold 1 on --expect 000000000000; code 10 'a stale --expect refuses the hold'
+rt hold 1 on --expect "$(qv)"; code 0 'hold the first pending task'
+[ "$(cat "${D}/queue.md")" = "${QB}" ] || fail 'hold does not touch queue.md'
+tail -1 "${D}/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the hold is recorded in tasks.state'
+rt hold 9 on; code 2 'hold a position past the queue'
+rt_pane next; code 0 'next issues the held task'; has '做完要看一眼的甲' 'the held task'; has '做完后会停下' 'the writer is told it will stop after this one'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+rt_pane done "${TID}"; code 8 'a held task stops after done even while looping'; has '等人放行' 'waits for release'
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="release", m' "${D}/.loop-wait" || fail 'the wake marker says release'
+rt go; rt_pane next; code 0 'released: the loop goes on'; has '甲之后的乙' 'the next task'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+rt_pane done "${TID}"; code 8 'an unheld task continues'; has '队列空了' 'straight to the next (empty) step'
+rt add "正文里写了的丙" "做完：等我放行"; rt_pane next; TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+has '做完后会停下' 'the written line is recognised too'
+rt_pane done "${TID}"; code 8 'a task with the written line stops'; has '等人放行' 'waits for release'
+rt go
+rt add "打了又撤的丁"; rt hold 1 on; rt hold 1 off; code 0 'unhold'
+rt_pane next; TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out"); grep -q '做完后会停下' "${TMP}/out" && fail 'an unheld task has no stop note'
+rt_pane done "${TID}"; code 8 'unheld task continues to the empty queue'; has '队列空了' 'continues'
+rt loop off
+
 # ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
 import importlib.machinery, importlib.util, sys

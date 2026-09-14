@@ -23,6 +23,8 @@
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
   review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接领下一个；
                                       写手停在队列那一步（队列空 / 暂停）时留下 .loop-wait，条件满足后由看板服务叫醒它
+  review-task hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
+                                      （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
   review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
@@ -124,6 +126,8 @@ def issue(t, again=False):
     if t.get("body"):
         out += ["", t["body"]]
     out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
+    if B.task_held(t, B.task_holds(B.task_events(B.read(S)))):
+        out += ["人标了「做完停」：这个任务做完后会停下等人放行（review-task done 核对通过之后），那时照输出停下即可，不是出了问题。"]
     flow = B.task_flow(t.get("body"))
     if flow == "不评审":
         out += ["人已指定本任务不评审：不找规划者，提交后不运行 request-review，AGENTS.md 里这两条对本任务不适用；",
@@ -390,8 +394,11 @@ def cmd_done(tid):
             for c in reversed(waive):
                 f.write(f"{time.strftime('%Y-%m-%d')} | {git('rev-parse', '--short', c).strip()} | 任务 {tid} 人指定不评审\n")
         print(f"人指定 {tid} 不评审：{len(waive)} 个提交已登记进 docs/reviews/skipped.md（和评审记录一起提交即可）。")
-    gate = GATE and not loop_on()                 # 循环开着：做完直接领下一个
+    held = B.task_held(current, B.task_holds(B.task_events(B.read(S))))
+    gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
+    if gate and loop_on():
+        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：停下等人放行；放行后运行 review-task next。")
     if gate:
         return stop(f"DONE {tid}：核对通过。放行模式：停下，把这句报告给人，等人放行；放行后运行 review-task next。")
     print(f"DONE {tid}：核对通过。")
@@ -433,6 +440,15 @@ def cmd_drop_pos(pos, reason, expect):
     append({"ev": "drop", "id": tid, "title": b["title"], "key": b["title"], "reason": reason})
     print(f"已放弃 {tid}：{b['title']}" + (f"（{reason}）" if reason else "")
           + "。queue.md 里这块没编号，按标题认：之后再手写同名的没编号任务也会被当成已放弃，换个标题或加上编号。")
+    return 0
+
+
+def cmd_hold(pos, on, expect):
+    _, raw, slots = pending_slots(expect)
+    b = B.task_blocks(raw[slots[slot(pos, slots)]])[0]
+    append({"ev": "hold", "key": b["id"] or b["title"], "title": b["title"], "on": on})
+    print(f"{'已标' if on else '已取消'}「做完停」：{b['id'] or '（未编号）'} {b['title']}"
+          + ("。它做完后会停下等放行，不管是不是开着循环。" if on else "。"))
     return 0
 
 
@@ -504,8 +520,8 @@ def main(argv):
         if k + 1 >= len(rest):
             die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
         expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
-        if cmd not in ("move", "edit", "drop"):
-            die(2, "ERROR: --expect 只用于 move / edit / drop --pos")
+        if cmd not in ("move", "edit", "drop", "hold"):
+            die(2, "ERROR: --expect 只用于 move / edit / drop --pos / hold")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and not rest:
@@ -524,6 +540,8 @@ def main(argv):
         return cmd_move(rest[0], rest[1], expect)
     if cmd == "edit" and len(rest) >= 2:
         return cmd_edit(rest[0], rest[1], rest[2:], expect)
+    if cmd == "hold" and len(rest) == 2 and rest[1] in ("on", "off"):
+        return cmd_hold(rest[0], rest[1] == "on", expect)
     if cmd == "loop" and rest in (["on"], ["off"]):
         return cmd_loop(rest[0] == "on")
     if cmd in ("pause", "resume") and not rest:
