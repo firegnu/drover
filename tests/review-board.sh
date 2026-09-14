@@ -161,7 +161,7 @@ printf 'STOP: 无法确认 pane zeta-rv 的评审方身份\n' > "$D/.last.out"
 # 任务区 —— eta：T8 进行中（规划过、计划评审两轮、1 个提交，正在代码评审第 1 轮）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
 E="${TMP}/eta"; EB=$(git -C "$E/repo" rev-parse HEAD~1); EH=$(git -C "$E/repo" rev-parse HEAD); ES=$(git -C "$E/repo" rev-parse --short HEAD)
-printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n' > "$E/review/queue.md"
+printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n流程：修好再审\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n' > "$E/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T5", "title": "给导出加进度条", "body": "", "key": "给导出加进度条", "sha": "%s"}\n' "$((now - 9000))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": false}\n' "$((now - 7800))" "$EB"
   printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "流程: 不评审", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
@@ -320,6 +320,7 @@ has '<li>规划<span class="x">跳过</span></li>' 'no-review card skips plannin
 has '<li>计划评审<span class="x">跳过</span></li>' 'no-review card skips plan review'
 has '<li>代码评审<span class="x">不评审</span></li>' 'no-review card says code review is waived'
 has '<span class="kind noreview">未评审</span>' 'finished no-review task marked unreviewed'
+has '<span class="hand">手写 · 发出时编号</span><span class="flow later">修好再审</span></span>' 'pending review-last task marked, flow line not used as the note'
 
 # 不接触真实项目
 lacks 'jb-finetune' 'real project leaked into fixture board'

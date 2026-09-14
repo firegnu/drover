@@ -132,6 +132,18 @@ rt add "正常流程的任务"; rt next; has 'TASK T9' 'T9 issued'
 grep -qF '不找规划者' "${TMP}/out" && fail 'a normal task carries no no-review instruction'
 edit exp.py 'normal change'
 rt done T9; code 9 'a normal task still needs routing'
+printf '%s\nSKIP\n-\ncode\n\nreview\n' "$(hsha)" > "${D}/.triage"
+rt done T9; code 8 'T9 done'
+
+# ---- 流程：修好再审 → 发任务时交代中间提交不送审、修好后送审一次；done 照常要求过路由，不登记豁免 ----
+rt add "修复导出偶发崩溃" "流程: 修好再审"; rt next; has 'TASK T10' 'T10 issued'
+has '修好之前' 'a review-last task tells the writer not to request review while iterating'; has '修好后运行一次 request-review' 'and to request review once when fixed'
+grep -qF '不找规划者' "${TMP}/out" && fail 'a review-last task does not skip the planner'
+edit exp.py 'try 1'; edit exp.py 'try 2'; edit exp.py 'fixed'
+rt done T10; code 9 'a review-last task still needs its final review'; has 'request-review' 'says to run request-review'
+grep -qF '任务 T10' "${REPO}/docs/reviews/skipped.md" && fail 'a review-last task waives nothing'
+printf '%s\nSKIP\n-\ncode\n\nreview\n' "$(hsha)" > "${D}/.triage"
+rt done T10; code 8 'a review-last task passes once routed at HEAD'
 
 [ ! -s "${TMP}/herdr.log" ] || { cat "${TMP}/herdr.log"; fail 'review-task must never call herdr'; }
 echo 'PASS review-task queue, release gate, read-only done check, pause and drop'

@@ -7,8 +7,10 @@
   tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
 「做完了」由本工具只读核对 git 和交接目录，不听写手一句话。交接文件的解析复用看板（review-board）里的
 函数，和看板、request-review 用同一套判据。
-正文里有一行「流程：不评审」的任务不找规划者、不送审；done 时把它起点以来该审的提交登记进
-docs/reviews/skipped.md（和人设 SKIP_REVIEW 效果相同）——这是本工具唯一写仓库的地方。
+正文里的「流程：…」一行按任务改流程（没有就是正常流程）：
+  流程：不评审    不找规划者、不送审；done 时把起点以来该审的提交登记进 docs/reviews/skipped.md
+                  （和人设 SKIP_REVIEW 效果相同）——这是本工具唯一写仓库的地方。
+  流程：修好再审  中间提交不送审，修好后运行一次 request-review 整体送审；done 照常核对。
 
 在仓库目录里运行：
   review-task add "标题" [说明行 …]   人：加到队列末尾，自动编号
@@ -115,10 +117,16 @@ def issue(t, again=False):
     if t.get("body"):
         out += ["", t["body"]]
     out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
-    if B.task_noreview(t.get("body")):
+    flow = B.task_flow(t.get("body"))
+    if flow == "不评审":
         out += ["人已指定本任务不评审：不找规划者，提交后不运行 request-review，AGENTS.md 里这两条对本任务不适用；",
                 "其余照 AGENTS.md 做（该跑的检查照跑，改动照常提交）。",
                 f"做完后运行：review-task done {t['id']}  —— 它会核对是否收尾，把本任务的提交登记为豁免，并告诉你下一步。"]
+    elif flow == "修好再审":
+        out += ["人已指定本任务修好再审：修好之前，每次提交后都不运行 request-review（AGENTS.md「每次提交后运行」这条对本任务暂不适用），",
+                "该跑的检查照跑，改动照常提交。确认修好后运行一次 request-review，它会把开始以来的全部改动当作一个整体，",
+                "按它的输出走完评审（和平时一样）。其余照 AGENTS.md 做。",
+                f"评审走完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
     else:
         out += ["按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
                 f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
@@ -202,7 +210,7 @@ def check_done(task):
         probs.append("规划者还没交付计划：plan.md 还没写完")
     cp, cycle_end = cycle_state(h)
     probs += cp
-    if not cp and B.task_noreview(task.get("body")):
+    if not cp and B.task_flow(task.get("body")) == "不评审":
         waive = unreviewed(task["start"], h, skipped_shas())
         if waive is None:
             probs.append(f"任务起点 {task['start'][:7]} 不在 HEAD 的历史里，没法确定要豁免哪些提交：把输出报告给人")
