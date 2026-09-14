@@ -424,6 +424,11 @@ grep -qF 'data-act="go" data-p="theta/repo" data-id="T3"' "${TMP}/live.html" || 
 grep -qF 'data-act="drop" data-p="eta/repo" data-id="T9"' "${TMP}/live.html" || fail 'drop button on a numbered pending task'
 grep -qF 'data-act="drop" data-p="eta/repo" data-id="T8"' "${TMP}/live.html" && fail 'no drop button on the task in progress'
 grep -q '"v"' <(curl -s "${U}/v") || fail 'GET /v returns a version'
+# 页面脚本嵌在 Python 字符串里，转义写错会让整页脚本失效（刷新、抽屉、按钮全停）；有 node 就查一遍语法
+if command -v node >/dev/null; then
+  python3 -c 'import re,sys; print(re.search(r"<script>(.*)</script>", open(sys.argv[1], encoding="utf-8").read(), re.S).group(1))' "${TMP}/live.html" > "${TMP}/page.js"
+  node --check "${TMP}/page.js" 2> "${TMP}/js.err" || { cat "${TMP}/js.err"; fail 'the page script parses'; }
+fi
 post() {   # <path> <json> [extra curl args…] → HTTP 状态码；响应体在 ${TMP}/resp
   curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: application/json' "${@:3}" --data "$2" "${U}$1"
 }
@@ -445,3 +450,25 @@ tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go", "id": "T3"' || 
 grep -q '继续' "${TMP}/resp" || fail 'go passes on what to tell the writer'
 [ "$(curl -s "${U}/v")" != "${V1}" ] || fail 'the version changes after the queue state changes'
 echo 'PASS review-board serve: token, local Host/Origin only, release and drop via review-task, in-progress task not droppable'
+
+# ---- 页面上加任务：标题 + 流程 + 正文，经 review-task add 追加到队列末尾；顶格 ## 会被当成新任务，拒绝
+grep -qF 'data-act="add" data-p="eta/repo"' "${TMP}/live.html" || fail 'add-task button on a board with a queue'
+lacks 'data-act="add"' 'the static board has no add button'
+EQ=$(cat "${TMP}/eta/review/queue.md")
+[ "$(post /api/add '{"project":"eta/repo","title":"","flow":"","body":"x"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'an empty title is refused'
+[ "$(post /api/add '{"project":"eta/repo","title":"两行\n标题","flow":"","body":""}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a multi-line title is refused'
+[ "$(post /api/add '{"project":"eta/repo","title":"坏正文","flow":"","body":"第一行\n## 这会变成新任务"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a body line starting with ## is refused'
+grep -q '###' "${TMP}/resp" || fail 'the refusal says to use ### instead'
+[ "$(post /api/add '{"project":"eta/repo","title":"x","flow":"随便","body":""}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'an unknown flow is refused'
+[ "$(cat "${TMP}/eta/review/queue.md")" = "${EQ}" ] || fail 'refused adds leave queue.md untouched'
+[ "$(post /api/add '{"project":"eta/repo","title":"导出支持按月分文件","flow":"修好再审","body":"### 范围\n- 只动导出\n\n怎么算做完：测试通过"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'add a task from the page'; }
+grep -q '"ok": true' "${TMP}/resp" && grep -q 'T10' "${TMP}/resp" || fail 'add reports the new ID'
+python3 - "${TMP}/eta/review/queue.md" <<'PY2' || fail 'the new block is appended with its flow line and body'
+import sys; q = open(sys.argv[1], encoding="utf-8").read()
+tail = q[q.index("## T10 导出支持按月分文件"):]
+assert tail == "## T10 导出支持按月分文件\n流程：修好再审\n### 范围\n- 只动导出\n\n怎么算做完：测试通过\n", repr(tail)
+PY2
+case "$(cat "${TMP}/eta/review/queue.md")" in "${EQ}"*) ;; *) fail 'existing queue text is kept as is';; esac
+[ "$(post /api/add '{"project":"eta/repo","title":"普通任务","flow":"","body":""}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'a normal task with no body'
+tail -1 "${TMP}/eta/review/queue.md" | grep -qx '## T11 普通任务' || fail 'a normal task gets no flow line'
+echo 'PASS review-board serve: add a task from the page via review-task add; bad titles, ## body lines, unknown flows refused'

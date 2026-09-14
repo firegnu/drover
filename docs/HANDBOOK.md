@@ -312,7 +312,7 @@ agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
 
-**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出两个按钮：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因）；都先弹确认框，结果原样显示 `review-task` 的输出。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `review-task drop`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
+**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因），任务看板标题栏的「+ 加任务」。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
 
 项目发现：`~/Developer/personal_projs/*/.review.conf`，加上 `~/.review/projects` 里登记的路径（`herdsman-init`
 自动登记，所以仓库放在哪都会被扫到；一行一个路径，可手动增删）。
@@ -2775,6 +2775,17 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .rbd-out{margin:12px 0 0;padding:8px 10px;border-radius:4px;font-size:12px;white-space:pre-wrap;background:#222429;border:1px solid #36383e;color:#c9c7c1}.rbd-out.ok{border-color:#356243}.rbd-out.bad{border-color:#803733;color:#f0a3b3}
 .rbd-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.rbd-b button{font:600 12.5px inherit;padding:6px 14px;border-radius:4px;cursor:pointer;border:1px solid #45474d;background:#2d2f35;color:#d6d3cc}
 .rbd-b .rbd-ok{background:#4a7fc1;border-color:#4a7fc1;color:#fff}.rbd-b .rbd-ok:disabled{opacity:.6;cursor:default}
+.tasks .th .act.add{margin-left:10px;background:#4a7fc1;color:#fff;padding:5px 12px}.tasks .th .act.add:hover{background:#5a8fd1}
+dialog.rbe{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(1080px,94vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
+dialog.rbe::backdrop{background:rgba(0,0,0,.5)}
+.rbe-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.rbe-t{font-size:16px;font-weight:700;color:#f2f0eb}.rbe-p{font-size:12.5px;color:#b1afa9}.rbe-hint{margin-left:auto;font-size:11.5px;color:#8f8d88}
+.rbe-g{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:14px}
+.rbe-l{display:flex;flex-direction:column;gap:8px}
+.rbe-title,.rbe-flow,.rbe-body{font:13px inherit;padding:7px 10px;border:1px solid #42444a;border-radius:4px;background:#222429;color:#e6e4df;outline:none}
+.rbe-title:focus,.rbe-flow:focus,.rbe-body:focus{border-color:#4a7fc1}.rbe-title{font-size:14px;font-weight:600}.rbe-flow{width:max-content}
+.rbe-body{height:52vh;min-height:260px;resize:vertical;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;line-height:1.6}
+.rbe-r{border:1px solid #36383e;border-radius:4px;background:#222429;padding:12px 16px;height:calc(52vh + 90px);min-height:350px;overflow-y:auto}
+.rbe-cap{font-size:11px;color:#8f8d88;letter-spacing:.04em;margin-bottom:8px}.rbe-pv .dp.bad{color:#f0a3b3}
 .side,pre.block,.drawer .dct{scrollbar-width:thin;scrollbar-color:#414348 transparent}
 .lanes .lb{max-height:min(46vh,440px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#414348 transparent}
 .blist{max-height:min(60vh,560px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#46484d transparent}
@@ -2927,6 +2938,15 @@ LIVE_DIALOG = ('<dialog class="rbd"><form method="dialog"><div class="rbd-t"></d
                '<input class="rbd-r" type="text" maxlength="300" placeholder="原因（可留空）"><pre class="rbd-out" hidden></pre>'
                '<div class="rbd-b"><button value="cancel" class="rbd-no">取消</button><button value="ok" class="rbd-ok">确认</button></div></form></dialog>')
 
+# 本机服务打开时的加任务编辑框：左边写，右边按抽屉的排版实时预览；草稿存在浏览器里，关掉再开还在
+LIVE_EDITOR = ('<dialog class="rbe"><form method="dialog"><div class="rbe-h"><span class="rbe-t">加任务</span><span class="rbe-p"></span>'
+               '<span class="rbe-hint">加到队列末尾，自动编号 · 小标题用 ###，别用 ##</span></div>'
+               '<div class="rbe-g"><div class="rbe-l"><input class="rbe-title" type="text" maxlength="200" placeholder="标题（一行）">'
+               '<select class="rbe-flow"><option value="">流程：正常</option><option value="修好再审">流程：修好再审</option><option value="不评审">流程：不评审</option></select>'
+               '<textarea class="rbe-body" spellcheck="false" placeholder="目标 / 范围（尤其不做什么）/ 怎么算做完\n### 小标题\n- 列表"></textarea></div>'
+               '<div class="rbe-r"><div class="rbe-cap">预览 · 写手收到的样子</div><div class="rbe-pv"></div></div></div>'
+               '<pre class="rbe-out" hidden></pre><div class="rbd-b"><button value="cancel" class="rbe-no">关闭</button><button value="ok" class="rbe-ok">加入队列</button></div></form></dialog>')
+
 JS = """
 (function(){
   var KEY='rb.selected';
@@ -2980,19 +3000,22 @@ JS = """
       td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0})}catch(e){}
     location.reload()}
   var dlg=document.querySelector('dialog.rbd');
-  setInterval(function(){if(document.hidden||(dlg&&dlg.open))return;reloadKeep()},30000);
+  function busy(){return !!document.querySelector('dialog[open]')}
+  setInterval(function(){if(document.hidden||busy())return;reloadKeep()},30000);
   // 本机服务打开时（页面里有令牌）：放行 / 放弃按钮可用；每 4 秒问一次有没有变化，变了就刷新（确认框开着时不刷）
   var tk=document.querySelector('meta[name=rb-token]');
   if(tk&&dlg){
     document.body.classList.add('live');
     var ver=null;
-    setInterval(function(){if(document.hidden||dlg.open)return;
+    setInterval(function(){if(document.hidden||busy())return;
       fetch('/v',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
         if(ver&&j.v!==ver)reloadKeep();ver=j.v}).catch(function(){})},4000);
     var f=dlg.querySelector('form'),t=dlg.querySelector('.rbd-t'),m=dlg.querySelector('.rbd-m'),
         rs=dlg.querySelector('.rbd-r'),out=dlg.querySelector('.rbd-out'),ok=dlg.querySelector('.rbd-ok'),no=dlg.querySelector('.rbd-no'),cur=null;
     document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
-      e.preventDefault();e.stopPropagation();cur=b.dataset;
+      e.preventDefault();e.stopPropagation();
+      if(b.dataset.act==='add'){openEditor(b.dataset.p);return}
+      cur=b.dataset;
       var go=cur.act==='go';
       t.textContent=(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title;
       m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。':'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。';
@@ -3007,6 +3030,38 @@ JS = """
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
         .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：review-board serve 还在运行吗？';ok.disabled=false})});
     dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
+    // 加任务：标题 + 流程 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
+    var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),eF=ed.querySelector('.rbe-flow'),
+        eB=ed.querySelector('.rbe-body'),ePv=ed.querySelector('.rbe-pv'),eOut=ed.querySelector('.rbe-out'),
+        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null;
+    function dkey(){return 'rb.draft.'+eProj}
+    function el(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;return d}
+    function preview(){ePv.innerHTML='';
+      var head=document.createElement('div');head.className='dtt';head.textContent=eT.value.trim()||'（标题）';ePv.appendChild(head);
+      if(eF.value){var c=document.createElement('span');c.className='flow'+(eF.value==='不评审'?'':' later');c.textContent=eF.value;
+        var sub=document.createElement('div');sub.className='dsub';sub.appendChild(c);ePv.appendChild(sub)}
+      var body=document.createElement('div');body.className='dbody';var last='';
+      eB.value.split('\\n').forEach(function(line){var s=line.trim(),m;
+        if(!s){if(last&&last!=='gap'){body.appendChild(el('dgap',''));last='gap'}return}
+        if(/^##\\s/.test(line)){body.appendChild(el('dp bad','⚠ 顶格 ## 会变成另一个任务，改用 ###：'+s));last='p';return}
+        if((m=s.match(/^#{1,6}\\s+(.*)$/))){body.appendChild(el('dh4',m[1]));last='h';return}
+        if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
+        body.appendChild(el('dp',s));last='p'});
+      if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));ePv.appendChild(body);
+      try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
+    function openEditor(proj){eProj=proj;var d={};try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}
+      eT.value=d.t||'';eF.value=d.f||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
+      ed.querySelector('.rbe-p').textContent=proj;preview();ed.showModal();eT.focus()}
+    [eT,eF,eB].forEach(function(x){x.addEventListener('input',preview)});
+    ed.querySelector('form').addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
+      eOk.disabled=true;
+      fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
+        body:JSON.stringify({project:eProj,title:eT.value,flow:eF.value,body:eB.value})})
+        .then(function(r){return r.json()}).then(function(j){
+          eOut.hidden=false;eOut.textContent=j.out||'';eOut.className='rbe-out rbd-out'+(j.ok?' ok':' bad');
+          if(j.ok){try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
+        .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：review-board serve 还在运行吗？';eOk.disabled=false})});
+    ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
   }
 })();
 """
@@ -3341,8 +3396,9 @@ def render_tasks(p, live=None):
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
         descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
+    add = f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>' if live else ""
     return (f'<section class="tasks"><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
-            f'<span class="src">点任务看全文 · queue.md · tasks.state</span></div><div class="lanes">'
+            f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
             f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
             f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div></div>'
@@ -3580,7 +3636,7 @@ def render(projects, archives, self_closed, live=None):
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
             f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .review.conf 指向的交接目录与 docs/reviews</div></div>'
-            + (DRAWER if 'data-td="' in panels else "") + (LIVE_DIALOG if live else "") +
+            + (DRAWER if 'data-td="' in panels else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
             f'<script>{JS}</script></body></html>')
 
 
@@ -3654,7 +3710,23 @@ def live_action(list_path, act, body):
     if not tv:
         return 409, {"ok": False, "out": "这个项目没有接任务队列"}
     task_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
-    if act == "go":
+    if act == "add":
+        title = str(body.get("title") or "").strip()
+        flow = str(body.get("flow") or "").strip()
+        lines = str(body.get("body") or "").replace("\r\n", "\n").rstrip().split("\n") if str(body.get("body") or "").strip() else []
+        if not title or "\n" in title or len(title) > 200:
+            return 400, {"ok": False, "out": "标题要是一行非空的文字（200 字以内）"}
+        if flow not in ("", "修好再审", "不评审"):
+            return 400, {"ok": False, "out": f"流程只能是 正常 / 修好再审 / 不评审，现在是 {flow}"}
+        bad = [l for l in lines if TASK_HDR.match(l)]
+        if bad:
+            return 400, {"ok": False, "out": f"正文里顶格的「## 」会被当成另一个任务：{bad[0][:40]}…；小标题请用 ###"}
+        if len("\n".join(lines)) > 20000:
+            return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
+        if flow:                                                      # 选了流程就以下拉框为准，正文里手写的那行不重复
+            lines = [l for l in lines if not TASK_FLOW.match(l)]
+        cmd = [task_bin, "add", title, *([f"流程：{flow}"] if flow else []), *lines]
+    elif act == "go":
         if not tv["awaiting"]:
             return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
         cmd = [task_bin, "go"]
@@ -3705,7 +3777,7 @@ def serve(args):
                 return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 return self.reply(415, {"ok": False, "out": "只接受 JSON"})
-            act = {"/api/go": "go", "/api/drop": "drop"}.get(self.path)
+            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add"}.get(self.path)
             if not act:
                 return self.reply(404, {"ok": False, "out": "没有这个操作"})
             try:
@@ -4343,7 +4415,7 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 **命令**（在仓库目录里运行）：`add "标题" [说明行 …]` 加到队列末尾并自动编号；`list` 看全貌；`go` 放行；`drop T5 "原因"` 放弃；`pause` / `resume` 暂停或恢复发新任务，正在做的照常做完。退出码：0 发出任务或操作成功；8 停下把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法错误。
 
-**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。静态文件只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令；用本机服务打开时（见前面「带按钮的看板」一段），放行和放弃队列里还没开始的任务可以直接在页面上点。
+**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。静态文件只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令；用本机服务打开时（见前面「带按钮的看板」一段），放行、放弃队列里还没开始的任务、加任务都可以直接在页面上做。
 
 ---
 
