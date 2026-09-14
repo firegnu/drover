@@ -530,6 +530,30 @@ QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").r
 tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"key": "修一下登录页的超时（改）".*不做了' || fail 'the page drop goes through review-task drop --pos'
 echo 'PASS review-board serve: drop unnumbered pending tasks from the page by position, guarded by the queue fingerprint'
 
+# ---- 已完成列表「查看全部」：栏底入口（只在本机服务），点开时 GET /history 取全部做完 / 放弃的任务，最新的在前
+curl -s "${U}/" > "${TMP}/live.html"
+grep -qF 'data-act="history" data-p="eta/repo"' "${TMP}/live.html" || fail 'view-all entry under the finished lane'
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${U}/history?project=nope/repo")" = 404 ] || fail 'history of an unknown project'
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example:${PORT}" "${U}/history?project=eta/repo")" = 403 ] || fail 'history refuses a foreign Host'
+curl -s "${U}/history?project=eta%2Frepo" > "${TMP}/history.json"
+python3 - "${TMP}/history.json" <<'PY2' || { cat "${TMP}/history.json"; fail 'history lists every finished and dropped task, newest first, with a summary'; }
+import json, sys
+h = json.load(open(sys.argv[1], encoding="utf-8"))
+items = h["items"]; ids = [i["id"] for i in items]
+assert "T8" not in ids, ids                                     # 进行中的不算
+assert {"T5", "T6", "T7", "T9"} <= set(ids), ids
+assert [i["t1"] for i in items] == sorted((i["t1"] for i in items), reverse=True)
+by = {i["id"]: i for i in items}
+assert by["T5"]["status"] == "done" and by["T5"]["span"] == "20m", by["T5"]
+assert by["T6"]["status"] == "dropped" and by["T6"]["reason"] == "和 T2 冲突"
+assert by["T7"]["noreview"] and by["T7"]["flow"] == "不评审" and by["T7"]["range"], by["T7"]
+assert by["T9"]["status"] == "dropped" and "只动分页参数" in by["T9"]["body"], by["T9"]   # 没发出过：正文取 queue.md 里的原文
+assert by["T9"]["source"].startswith("queue.md")
+sm = h["summary"]
+assert sm["done"] == 2 and sm["dropped"] == len(items) - 2 and sm["noreview"] == 1 and sm["avg"], sm
+PY2
+echo 'PASS review-board serve: view all finished tasks via GET /history (newest first, summary, queue text for never-started drops)'
+
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'

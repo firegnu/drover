@@ -312,7 +312,7 @@ agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
 
-**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始的任务悬停时出现的「放弃」（可填原因；没编号的也有，按位置 + 指纹），任务看板标题栏的「+ 加任务」和「暂停发任务 / 恢复发任务」（经 `review-task pause` / `resume`；恢复不会叫醒写手，它停着就对它说「继续」）。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
+**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始的任务悬停时出现的「放弃」（可填原因；没编号的也有，按位置 + 指纹），任务看板标题栏的「+ 加任务」和「暂停发任务 / 恢复发任务」（经 `review-task pause` / `resume`；恢复不会叫醒写手，它停着就对它说「继续」）。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。已完成栏只列最近 5 个，栏底「查看全部 N 个」在右侧抽屉里列出全部做完和放弃的任务（点开时才向服务取 `GET /history`，不把历史嵌进页面）：顶上是完成 / 放弃数、平均用时、未评审数，可按编号或标题搜、按全部 / 完成 / 放弃筛；每行有用时、流程档位、评审轮数、结束时间、sha 区间或放弃原因，点一行看它发出时的正文（没发出过就被放弃的，看 `queue.md` 里还在的原文），「← 返回列表」保留搜索和筛选。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
 
 **服务健康。** 这样打开的页面，顶栏右侧是一个状态圆点（静态文件仍是「生成于 …」）：绿 = 已同步且各项正常，黄 = 有要留意的项，红 = 连不上服务——按钮变灰，页面停在最后一次同步的样子（不再整页刷新，免得换成浏览器的「无法连接」）。点它在右侧抽屉里看每一项（每 15 秒取一次 `/health`，全是只读检查）：本机服务（pid、端口、已运行多久；启动后 `review-board` / `review-task` 被更新过就标出还在跑旧代码）、服务守护（launchd 是否托管、托管的是不是这个进程）、看板定时生成（launchd 任务是否加载、上次退出码、`board-notified.json` 多久没更新——超过 2 分钟说明「等你」通知可能停了）、生成出错记录（`board.err` 最近 10 分钟有没有新错误，有就附最后几行）、herdr 能不能连上。另外，常驻服务每次生成页面都重取当前时间，页面上「几分钟前」「已进行多久」不会随服务运行越久越偏。
 
@@ -2452,6 +2452,41 @@ def task_view(repo, conf, p):
             "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
 
 
+def task_history(repo, conf):
+    """全部做完 / 放弃的任务，最新的在前，外加汇总；看板「查看全部」点开时才算（评审轮数要逐个查 git）。
+    正在做的不算。没发出过就被放弃的，tasks.state 里没有正文，取 queue.md 里还在的原文。"""
+    d = conf["REVIEW_DIR"]
+    tasks, _, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
+    blocks = task_blocks(read(f"{d}/queue.md"))
+    timing = timing_rounds(repo)
+    items = []
+    for t in tasks.values():
+        if t["status"] == "doing":
+            continue
+        body, source = t.get("body", ""), "发出时的快照（写手收到的版本）"
+        if t.get("t0") and not body:
+            source = "发出时的快照（这个任务没写正文）"
+        elif not body:
+            b = next((b for b in blocks if (b["id"] == t["id"]) or (not b["id"] and b["title"] == t.get("key"))), None)
+            body, source = (b["body"], "queue.md 里的原文（没发出过）") if b else ("", "没有正文：没发出过，queue.md 里也已经删掉")
+        plan_n = code_n = 0
+        if t["status"] == "done":
+            plan_n, code_n = task_rounds(task_commits(repo, t["start"], t.get("end")), timing)
+        flow = task_flow(body)
+        items.append({"id": t["id"], "title": t["title"], "status": t["status"], "reason": t.get("reason", ""),
+                      "flow": flow, "noreview": flow == "不评审" and t["status"] == "done", "body": body, "source": source,
+                      "t0": t.get("t0"), "t1": t.get("t1") or 0, "span": task_span(t.get("t0"), t.get("t1")),
+                      "date": datetime.fromtimestamp(t["t1"]).strftime("%Y-%m-%d %H:%M") if t.get("t1") else "",
+                      "range": f"{t['start'][:7]}..{t['end'][:7]}" if t.get("end") and t["end"] != t.get("start") else "",
+                      "plan_n": plan_n, "code_n": code_n, "awaiting": t["id"] == awaiting})
+    items.sort(key=lambda i: i["t1"], reverse=True)
+    done = [i for i in items if i["status"] == "done"]
+    spans = [i["t1"] - i["t0"] for i in done if i["t0"] and i["t1"]]
+    return {"items": items, "summary": {"done": len(done), "dropped": len(items) - len(done),
+            "noreview": sum(i["noreview"] for i in items),
+            "avg": task_span(1, 1 + sum(spans) / len(spans)) if spans else ""}}
+
+
 def project_state(repo, conf):
     d = conf["REVIEW_DIR"]
     head = git(repo, "rev-parse", "HEAD").strip()
@@ -2793,6 +2828,12 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .offline .act{opacity:.35;pointer-events:none}
 .hlist{margin-top:14px;border-top:1px solid #33353a}.hrow{display:grid;grid-template-columns:14px 150px minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:10px 0;border-bottom:1px solid #33353a}
 .hrow .hdot{transform:translateY(-1px)}.hrow b{font-weight:600;color:#e6e4df;font-size:13px}.hdet{font-size:12.5px;color:#b1afa9;white-space:pre-wrap;word-break:break-word}.hrow.warn .hdet{color:#e5c98f}
+.live .act.hist{display:block;width:100%;margin-top:4px;padding:7px 10px;background:transparent;color:#b1afa9;border:1px dashed #45474d;border-radius:4px;text-align:center;font-weight:500}
+.live .act.hist:hover{color:#8fb8ee;border-color:#4a7fc1}
+.hback{background:none;border:0;color:#8fb8ee;font:12.5px inherit;cursor:pointer;padding:0;margin-bottom:10px}.hback:hover{text-decoration:underline}
+.hbar{display:flex;gap:6px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}.hbar .filter{margin:0;flex:1;min-width:180px;width:auto}
+.hf{font:12px inherit;padding:4px 10px;border-radius:4px;border:1px solid #42444a;background:#222429;color:#b1afa9;cursor:pointer}.hf.on{background:#4a7fc1;border-color:#4a7fc1;color:#fff}
+.hlist2 .drow{cursor:pointer}.hlist2 .drow:hover{background:#35383e;border-color:#50535a}
 .tasks .th .act.pz{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.pz:hover{border-color:#e5b866;color:#e5b866}
 .tasks .th .act.add{margin-left:10px;background:#4a7fc1;color:#fff;padding:5px 12px}.tasks .th .act.add:hover{background:#5a8fd1}
 dialog.rbe{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(1080px,94vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
@@ -3012,12 +3053,12 @@ JS = """
   (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
   if(st.y)window.scrollTo(0,st.y);
   (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb,.blist')[i];if(b)b.scrollTop=v});
-  if(st.td&&st.td!=='@health'){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
+  if(st.td&&st.td!=='@health'&&st.td!=='@history'){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
   function reloadKeep(){
     try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
       open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
       ls:[].map.call(document.querySelectorAll('.lb,.blist'),function(b){return b.scrollTop}),
-      td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0})}catch(e){}
+      td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0,hs:openKey==='@history'&&window.rbHist?window.rbHist():null})}catch(e){}
     location.reload()}
   var dlg=document.querySelector('dialog.rbd');
   function busy(){return !!document.querySelector('dialog[open]')}
@@ -3062,6 +3103,7 @@ JS = """
     document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
       e.preventDefault();e.stopPropagation();
       if(b.dataset.act==='add'){openEditor(b.dataset.p);return}
+      if(b.dataset.act==='history'){openHistory(b.dataset.p);return}
       if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
       if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
       cur=b.dataset;
@@ -3106,18 +3148,20 @@ JS = """
         eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null,eEdit=null;
     function dkey(){return 'rb.draft.'+eProj}
     function el(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;return d}
+    // 正文 → 抽屉同一套排版（### 小标题、- 列表、空行分段），全部当文本；warnHdr 时把顶格 ## 标红
+    function bodyNode(text,warnHdr){var body=document.createElement('div');body.className='dbody';var last='';
+      (text||'').split('\\n').forEach(function(line){var s=line.trim(),m;
+        if(!s){if(last&&last!=='gap'){body.appendChild(el('dgap',''));last='gap'}return}
+        if(warnHdr&&/^##\\s/.test(line)){body.appendChild(el('dp bad','⚠ 顶格 ## 会变成另一个任务，改用 ###：'+s));last='p';return}
+        if((m=s.match(/^#{1,6}\\s+(.*)$/))){body.appendChild(el('dh4',m[1]));last='h';return}
+        if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
+        body.appendChild(el('dp',s));last='p'});
+      if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));return body}
     function preview(){ePv.innerHTML='';
       var head=document.createElement('div');head.className='dtt';head.textContent=eT.value.trim()||'（标题）';ePv.appendChild(head);
       if(eF.value){var c=document.createElement('span');c.className='flow'+(eF.value==='不评审'?'':' later');c.textContent=eF.value;
         var sub=document.createElement('div');sub.className='dsub';sub.appendChild(c);ePv.appendChild(sub)}
-      var body=document.createElement('div');body.className='dbody';var last='';
-      eB.value.split('\\n').forEach(function(line){var s=line.trim(),m;
-        if(!s){if(last&&last!=='gap'){body.appendChild(el('dgap',''));last='gap'}return}
-        if(/^##\\s/.test(line)){body.appendChild(el('dp bad','⚠ 顶格 ## 会变成另一个任务，改用 ###：'+s));last='p';return}
-        if((m=s.match(/^#{1,6}\\s+(.*)$/))){body.appendChild(el('dh4',m[1]));last='h';return}
-        if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
-        body.appendChild(el('dp',s));last='p'});
-      if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));ePv.appendChild(body);
+      ePv.appendChild(bodyNode(eB.value,true));
       if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
     function openEditor(proj,raw,pos){eProj=proj;var d={};
       if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,f:raw.flow,b:raw.body}}
@@ -3139,6 +3183,52 @@ JS = """
           if(j.ok){if(!eEdit)try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
         .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：review-board serve 还在运行吗？';eOk.disabled=false})});
     ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
+    // 已完成「查看全部」：点开时向服务取全部历史；列表可搜可筛，点一行看它的正文，「← 返回列表」保留搜索和筛选
+    var hist={p:null,data:null,q:'',f:'all',d:null};
+    function chip(cls,txt){var c=document.createElement('span');c.className=cls;c.textContent=txt;return c}
+    function rounds(it){return ((it.plan_n?'计划评审 '+it.plan_n+' 轮 ':'')+(it.code_n?'代码评审 '+it.code_n+' 轮':'')).trim()||'无评审'}
+    function histRender(){var box=dr.querySelector('.dct'),h=hist.data;box.innerHTML='';
+      if(!h){box.appendChild(el('empty','正在读取…'));return}
+      if(hist.d){var it=h.items.filter(function(x){return x.id===hist.d})[0];
+        var back=document.createElement('button');back.type='button';back.className='hback';back.textContent='← 返回列表';
+        back.addEventListener('click',function(){hist.d=null;histRender()});box.appendChild(back);
+        if(!it){box.appendChild(el('empty','这个任务不在历史里了'));return}
+        var tt=document.createElement('div');tt.className='dtt';tt.appendChild(chip('tid',it.id));tt.appendChild(document.createTextNode(it.title));box.appendChild(tt);
+        var sub=document.createElement('div');sub.className='dsub';
+        sub.appendChild(chip('dst',it.status==='done'?'已完成':'放弃'));
+        if(it.flow)sub.appendChild(chip('flow'+(it.flow==='不评审'?'':' later'),it.flow));
+        [it.date,it.span&&'用时 '+it.span,it.range,it.status==='done'?rounds(it):'',it.reason&&'原因：'+it.reason].forEach(function(x){if(x)sub.appendChild(chip('',x))});
+        box.appendChild(sub);box.appendChild(el('dsrc',it.source));box.appendChild(bodyNode(it.body,false));return}
+      var head=document.createElement('div');head.className='dtt';head.textContent='已完成的任务 · '+hist.p;box.appendChild(head);
+      var sm=h.summary,sub2=document.createElement('div');sub2.className='dsub';
+      ['完成 '+sm.done,'放弃 '+sm.dropped,sm.avg&&'平均用时 '+sm.avg,'未评审 '+sm.noreview].forEach(function(x){if(x)sub2.appendChild(chip('',x))});
+      box.appendChild(sub2);
+      var bar=document.createElement('div');bar.className='hbar';
+      var q=document.createElement('input');q.type='search';q.className='filter';q.placeholder='按编号或标题过滤…';q.value=hist.q;bar.appendChild(q);
+      [['all','全部'],['done','完成'],['dropped','放弃']].forEach(function(o){var b=document.createElement('button');b.type='button';
+        b.className='hf'+(hist.f===o[0]?' on':'');b.textContent=o[1];b.addEventListener('click',function(){hist.f=o[0];histRender()});bar.appendChild(b)});
+      box.appendChild(bar);
+      var list=document.createElement('div');list.className='hlist2';box.appendChild(list);
+      function fill(){list.innerHTML='';var kw=hist.q.trim().toLowerCase(),n=0;
+        h.items.forEach(function(it){if(hist.f!=='all'&&it.status!==hist.f)return;
+          if(kw&&(it.id+' '+it.title).toLowerCase().indexOf(kw)<0)return;n++;
+          var row=document.createElement('div');row.className='drow'+(it.status==='dropped'?' dropped':'');
+          row.appendChild(chip('tid',it.id));row.appendChild(chip('t',it.title));row.appendChild(chip('r',it.status==='done'?(it.span||''):'放弃'));
+          var s2=document.createElement('span');s2.className='s';
+          if(it.status==='done'){if(it.noreview)s2.appendChild(chip('kind noreview','未评审'));else if(it.flow)s2.appendChild(chip('flow later',it.flow));s2.appendChild(chip('',rounds(it)))}
+          else if(it.reason)s2.appendChild(chip('',it.reason));
+          if(it.date)s2.appendChild(chip('',it.date));if(it.range)s2.appendChild(chip('code',it.range));
+          row.appendChild(s2);row.addEventListener('click',function(){hist.d=it.id;histRender();dr.querySelector('.dct').scrollTop=0});list.appendChild(row)});
+        if(!n)list.appendChild(el('empty','没有符合条件的任务'))}
+      q.addEventListener('input',function(){hist.q=q.value;fill()});fill()}
+    function openHistory(proj,keep){if(!dr)return;
+      if(!keep||hist.p!==proj){hist={p:proj,data:null,q:'',f:'all',d:null}}
+      dr.querySelector('.dhd span').textContent='已完成的任务 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@history';histRender();
+      fetch('/history?project='+encodeURIComponent(proj),{cache:'no-store'}).then(function(r){return r.json()})
+        .then(function(j){hist.data=j.items?j:{items:[],summary:{done:0,dropped:0,noreview:0,avg:''}};histRender()})
+        .catch(function(){var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(el('empty','读取失败：review-board serve 还在运行吗？'))})}
+    window.rbHist=function(){return {p:hist.p,q:hist.q,f:hist.f,d:hist.d}};
+    if(st.td==='@history'&&st.hs){hist={p:st.hs.p,data:null,q:st.hs.q||'',f:st.hs.f||'all',d:st.hs.d||null};openHistory(hist.p,true)}
   }
 })();
 """
@@ -3488,11 +3578,14 @@ def render_tasks(p, live=None):
            f'{"恢复发任务" if tv["paused"] else "暂停发任务"}</button>'
            f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>') if live else ""
     qattr = f' data-p="{esc(p["name"])}" data-qv="{esc(tv["qv"])}"' if live else ""
+    fin_total = tv["done"] + tv["dropped"]
+    hist = (f'<button class="act hist" type="button" data-act="history" data-p="{esc(p["name"])}">查看全部 {fin_total} 个'
+            f'（完成 {tv["done"]} · 放弃 {tv["dropped"]}）</button>') if live and fin_total else ""
     return (f'<section class="tasks"{qattr}><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
             f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
             f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
-            f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div></div>'
+            f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div>{hist}</div>'
             f'</div><div class="foot-note">只读。加任务：编辑 <code>{esc(tilde(tv["dir"]))}/queue.md</code>，或 <code>review-task add "…"</code>；'
             f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
@@ -3952,6 +4045,13 @@ def serve(args):
                 return self.reply(200, {"v": live_version(list_path)})
             if path == "/health":
                 return self.reply(200, health(started, port))
+            if path == "/history":
+                from urllib.parse import parse_qs, urlsplit
+                name = (parse_qs(urlsplit(self.path).query).get("project") or [""])[0]
+                p = next((x for x in collect(list_path)[0] if x["name"] == name), None)
+                if not p or not p.get("tasks"):
+                    return self.reply(404, {"ok": False, "out": "找不到这个项目，或它没有接任务队列"})
+                return self.reply(200, task_history(p["repo"], parse_conf(f"{p['repo']}/.review.conf")))
             return self.reply(404, {"ok": False, "out": "没有这个地址"})
 
         def do_POST(self):
