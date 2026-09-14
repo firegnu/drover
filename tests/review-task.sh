@@ -145,5 +145,17 @@ grep -qF '任务 T10' "${REPO}/docs/reviews/skipped.md" && fail 'a review-last t
 printf '%s\nSKIP\n-\ncode\n\nreview\n' "$(hsha)" > "${D}/.triage"
 rt done T10; code 8 'a review-last task passes once routed at HEAD'
 
+# ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----
+python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", loader)); loader.exec_module(B)
+blocks = B.task_blocks(open(sys.argv[2], encoding="utf-8").read())
+assert [b["id"] for b in blocks] == ["T21", "T22", "T23", "T24"], [b["id"] for b in blocks]
+assert [B.task_flow(b["body"]) for b in blocks] == ["", "", "修好再审", "不评审"]
+assert "不走规划" in blocks[1]["body"] and "不走规划" in blocks[2]["body"]
+PY
+
 [ ! -s "${TMP}/herdr.log" ] || { cat "${TMP}/herdr.log"; fail 'review-task must never call herdr'; }
 echo 'PASS review-task queue, release gate, read-only done check, pause and drop'
