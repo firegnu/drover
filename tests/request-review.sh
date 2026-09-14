@@ -735,31 +735,33 @@ run_review new
 assert_eq "${RUN_STATUS}" 0 'carry-over status'
 grep -q '^SKIP: .*沿用' "${TMP}/stdout" || fail 'carry-over stdout'
 assert_eq "$(call_count '^agent ')" 0 'carry-over agent calls'
-# A commit the human skipped with SKIP_REVIEW stays out of the range: the next text-only commit is still a carry-over.
+# A commit the human skipped with SKIP_REVIEW counts as reviewed: the range restarts after the latest waiver,
+# so the earlier triage-SKIPped b.py is passed along with it and the next text-only commit is plain text.
 commit_file src/other/h.py 'human-skipped'
 ( cd "${REPO}" && PATH="${MOCK_BIN}:${PATH}" MOCK_LOG="${MOCK_LOG}" MOCK_SCENARIO=new MOCK_REVIEW_WT="${REVIEW_WT}" SKIP_REVIEW=1 "${REQUEST_REVIEW}" "deploy" >/dev/null )
 commit_file src/other/h2.py 'human-skipped again'
 ( cd "${REPO}" && PATH="${MOCK_BIN}:${PATH}" MOCK_LOG="${MOCK_LOG}" MOCK_SCENARIO=new MOCK_REVIEW_WT="${REVIEW_WT}" SKIP_REVIEW=1 "${REQUEST_REVIEW}" "deploy2" >/dev/null )
+H2=$(git -C "${REPO}" rev-parse --short HEAD); H2F=$(git -C "${REPO}" rev-parse HEAD)
 commit_file docs/note2.md 'note2'
 run_review new
 assert_eq "${RUN_STATUS}" 0 'skipped commit excluded status'
-grep -q '^SKIP: .*沿用' "${TMP}/stdout" || fail 'skipped commit not excluded from range'
-# The next code commit is triaged over the accumulated range: 3 unskipped commits since A.
+grep -q "^SKIP: 自 ${H2} 起只改了" "${TMP}/stdout" || fail 'range should restart after the latest waived commit'
+# The next code commit is triaged over the range since the latest waiver: note2 and d.
 commit_file src/new/d.py 'd'
 run_review new
 assert_eq "${RUN_STATUS}" 3 'range triage status'
-grep -q "^Range: ${A}\.\..* (6 commits" "${MOCK_LOG}" || fail 'range prompt lacks the accumulated range'
-assert_eq "$(grep -c '^  [0-9a-f]\{7\} ' "${MOCK_LOG}")" 6 'range prompt commit list'
+grep -q "^Range: ${H2F}\.\..* (2 commits" "${MOCK_LOG}" || fail 'range prompt lacks the accumulated range'
+assert_eq "$(grep -c '^  [0-9a-f]\{7\} ' "${MOCK_LOG}")" 2 'range prompt commit list'
 grep -q '^Unmapped paths.*src/new/d.py' "${MOCK_LOG}" || fail 'unmapped list lacks d.py'
 grep -q '^Unmapped paths.*src/other/h' "${MOCK_LOG}" && fail 'human-skipped file leaked into the unmapped list'
 # Past the accumulation cap the script reviews without asking.
-printf 'REVIEW_ACCUM_COMMITS=2\n' >> "${REPO}/.review.conf"
+printf 'REVIEW_ACCUM_COMMITS=1\n' >> "${REPO}/.review.conf"
 rm -f "${REVIEW_DIR}"/.triage* "${REVIEW_DIR}/triage.md"
 run_review new
 assert_eq "${RUN_STATUS}" 6 'accumulation cap status'
-grep -q '^REVIEW: .*累积 6 个提交.*超过上限' "${TMP}/stdout" || fail 'accumulation cap stdout'
+grep -q '^REVIEW: .*累积 2 个提交.*超过上限' "${TMP}/stdout" || fail 'accumulation cap stdout'
 assert_eq "$(call_count '^agent ')" 0 'accumulation cap agent calls'
-grep -q "^base sha: ${A}" "${TMP}/stdout" || fail 'accumulation cap base is the last code review'
+grep -q "^base sha: ${H2F}" "${TMP}/stdout" || fail 'accumulation cap counts from the latest waiver, not the last code review'
 grep -v '^REVIEW_ACCUM_COMMITS=' "${REPO}/.review.conf" > "${TMP}/conf" && mv "${TMP}/conf" "${REPO}/.review.conf"
 echo 'PASS routing accumulates commits since the last code review'
 
@@ -999,15 +1001,14 @@ assert_eq "${RUN_STATUS}" 0 'waived range routing status'
 assert_eq "$(call_count '^agent ')" 0 'waived range must not wake the reviewer'
 echo 'PASS SKIP_REVIEW registers a whole commit range in one call'
 
-# ---- A fully waived prefix is named when the base is printed, so the human can advance it. ----
+# ---- A human waiver counts as reviewed: the next code review starts after the latest waived commit. ----
 rm -f "${REVIEW_DIR}"/.triage* "${TRIAGE_OUT}"
 commit_file src/core/y.py 'new work after the waived range'
 run_review new
 assert_eq "${RUN_STATUS}" 6 'post-waiver review status'
-grep -q "^base sha: ${B}" "${TMP}/stdout" || fail 'routed base should stay at the last real review'
-grep -q "NOTE: base 之后.*豁免.*$(git -C "${REPO}" rev-parse --short "${W}")" "${TMP}/stderr" \
-  || fail 'no NOTE naming the waived prefix and the base it suggests'
-echo 'PASS a fully waived prefix is flagged when the base is printed'
+grep -q "^base sha: ${W}" "${TMP}/stdout" || fail 'routed base should move to the latest waived commit'
+grep -q 'NOTE: base 之后' "${TMP}/stderr" && fail 'no advance-the-base NOTE once the base already moved'
+echo 'PASS the next review starts after the latest waived commit'
 
 # ---- 唤醒模式：派发完就把回合交回给人，由一个只盯这次的进程叫醒写手。----
 printf 'REVIEW_WAKE=1\nREVIEW_WAKE_FORK=0\n' >> "${REPO}/.review.conf"

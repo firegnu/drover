@@ -334,8 +334,9 @@ review（常规）、light（一轮、只找阻断、不跑测试）、plan（�
   放过的提交不进任何累积范围 —— 人的跳过是终审，不是推后。`SKIP_REVIEW=1` 免当前 HEAD 一笔，
   `SKIP_REVIEW=<base>..<tip>` 一次免掉整段（补登记历史上已经口头免掉的范围就用这个；git 规矩，不含 base）。
   两种写法都只往 `skipped.md` 追加，不派发也不过任何门，工作区脏时也能用；改完记得把 `skipped.md` 提交掉。
-  注意它只让这些提交不再**触发**评审，不会把它们从后续某次评审读的 diff 里摘掉 —— 那由 `base sha` 决定，
-  路由印 base 时若发现紧随其后的一段整段已豁免，会打一行 NOTE 告诉你该改成哪个 sha。
+  免审即视为审过：上次代码评审之后若有登记在 `skipped.md` 的提交，最近那笔接替上次评审的 target 做下一次
+  代码评审的起点（路由印的 `base sha`、累积计数都从它算），免审提交既不触发评审，也不进之后评审读的 diff。
+  代价是那笔之前还没审的改动（比如 triage 判 SKIP、本该留到下次的）也随之放过 —— 免审就是「到这里为止都放过」。
   `.review.conf` 里 `REVIEW_MAP=` 置空可关掉，关掉后所有代码路径都交评审方 triage。
 
 ---
@@ -1065,38 +1066,30 @@ triage_conclude() {      # $1=sha  $2=REVIEW|SKIP  $3=谁判的  $4=理由  $5=k
   fi
   triage_print_review "$4" "${5:-code}" "${6:-}" "${7:-review}"
 }
-# base 之后紧跟的、连续整段已豁免的提交里的最后一笔；没有则输出空。
-# 豁免只让这些提交不再把范围推去评审，它们的改动仍在 base..target 的 diff 里 —— 脚本据此提示，
-# 但不替人前移 base：往严自动、往松要人点头。
-waived_prefix() {        # $1=base → 短 sha 或空
-  local c last="" skipped
-  [ -n "$1" ] || return 0
+# 人免审就当作审过：base..HEAD 里最近一笔登记在 skipped.md 的提交（完整 sha），没有则输出空。
+# 它接替上次评审的 target 做下一次代码评审的起点，这样免审提交既不触发评审，也不进之后评审读的 diff。
+last_waived() {          # $1=base(可空)
+  local full short skipped
   skipped=$(awk -F' [|] ' '{print $2}' "${ARCHIVE_DIR}/skipped.md" 2>/dev/null | tr -d ' ' | tr '\n' ' ')
-  [ -n "${skipped}" ] || return 0
-  for c in $(git rev-list --reverse "$1..HEAD" 2>/dev/null); do
-    case " ${skipped} " in
-      *" $(git rev-parse --short "${c}") "*) last="${c}";;
-      *) break;;
-    esac
-  done
-  [ -n "${last}" ] && git rev-parse --short "${last}"
+  [ -n "${skipped// /}" ] || return 0
+  while read -r full short; do
+    case " ${skipped} " in *" ${short} "*) echo "${full}"; return 0;; esac
+  done < <(git log --format='%H %h' ${1:+"$1.."}HEAD 2>/dev/null)
 }
 
 triage_print_review() {  # $1=理由 $2=kind $3=base $4=level
-  local base adv
+  local base
   base="${3:-$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)}"
   echo "REVIEW: $1"
   echo "kind: $2"
   echo "level: $4"
   echo "base sha: ${base}   ← request.md 的 base sha 用这个"
-  adv=$(waived_prefix "${base}")
-  [ -z "${adv}" ] || echo "NOTE: base 之后紧跟的 $(git rev-list --count "${base}..${adv}") 笔已在 skipped.md 中豁免；要把它们排除在 diff 之外，base sha 改用 ${adv}" >&2
   exit 6
 }
 
 triage_head() {
   local head files f plan_hits verdict reason pane saved level
-  local code_base plan_base ncommits nlines prev_sha prev_verdict prev_base new_text
+  local code_base plan_base ncommits nlines prev_sha prev_verdict prev_base new_text waived
   head=$(git rev-parse HEAD)
   tree_clean || { echo "ERROR: 工作区未提交。先提交，再运行 request-review 判定要不要评审"; exit 2; }
   brief_gate
@@ -1113,7 +1106,9 @@ triage_head() {
   fi
 
   # 累积起点按种类各算：上次 code 评审的 target、上次 plan 评审的 target。没有就只看本提交。
+  # 代码起点之后若有人免审的提交，最近那笔接替它（免审即视为审过，之前的也一并放过）。
   code_base=$(last_target code); plan_base=$(last_target plan)
+  waived=$(last_waived "${code_base}"); [ -z "${waived}" ] || code_base="${waived}"
   [ -n "${code_base}" ] || { code_base=$(git rev-parse -q --verify HEAD~1 2>/dev/null || true); echo "NOTE: 尚无可追溯的代码评审，只看本提交。" >&2; }
   [ -n "${plan_base}" ] || plan_base=$(git rev-parse -q --verify HEAD~1 2>/dev/null || true)
 
