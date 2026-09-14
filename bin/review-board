@@ -891,7 +891,7 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .wrap{min-height:100vh;display:flex;flex-direction:column;min-width:1200px}
 .mast{display:flex;align-items:center;gap:24px;padding:9px 24px;background:#16181d;color:#e8e6e1;border-bottom:2px solid #c8375a;box-shadow:0 1px 0 #000;position:sticky;top:0;z-index:5}
 .mast .brand{font-weight:700;font-size:14px;letter-spacing:.02em;color:#fff}
-.mast .agents{display:flex;gap:8px;font-size:12.5px;flex-wrap:wrap}.mast .ag{padding:2px 10px;border:1px solid #3a3c43;border-radius:999px;background:#21232a}.mast .ag b{font-weight:600;margin-right:6px}
+.mast .agents{display:flex;align-items:center;gap:8px;font-size:12.5px;flex-wrap:wrap}.mast .ag{padding:2px 10px;border:1px solid #3a3c43;border-radius:999px;background:#21232a}.mast .ag b{font-weight:600;margin-right:6px}
 .mast .ag.wr{color:#e5b866}.mast .ag.rv{color:#8fb8ee}.mast .ag.pl{color:#c4a6f0}.mast .ag .off{color:#787674}
 .mast .agents .mute{color:#999793}
 .mast .gen{margin-left:auto;font-size:12px;color:#999793;font-variant-numeric:tabular-nums}.mast .golive{color:#8fb8ee}
