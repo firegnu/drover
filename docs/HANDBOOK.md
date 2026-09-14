@@ -2309,6 +2309,14 @@ def task_blocks(text):
     return blocks
 
 
+TASK_NOREVIEW = re.compile(r'^\s*流程\s*[:：]\s*不评审\s*$', re.M)
+
+
+def task_noreview(body):
+    """正文里有一行「流程：不评审」：人指定这个任务不找规划者、不送审，done 时把它的提交登记为豁免。"""
+    return bool(TASK_NOREVIEW.search(body or ""))
+
+
 def task_events(text):
     out = []
     for line in (text or "").splitlines():
@@ -2404,17 +2412,18 @@ def task_view(repo, conf, p):
         else:
             now = "实施"
         n = len(commits)
+        nr = task_noreview(t.get("body"))
         steps = [
             ("规划", "now" if now == "规划" else ("ok" if decision or plan_n else ""),
-             "规划中" if now == "规划" else (decision or ("PLAN" if plan_n else "—"))),
+             "规划中" if now == "规划" else (decision or ("PLAN" if plan_n else ("跳过" if nr else "—")))),
             ("计划评审", "now" if now == "计划评审" else ("ok" if plan_n else ""),
-             f"第 {cur} 轮" if now == "计划评审" else (f"{plan_n} 轮" if plan_n else ("跳过" if decision == "DIRECT" else "—"))),
+             f"第 {cur} 轮" if now == "计划评审" else (f"{plan_n} 轮" if plan_n else ("跳过" if decision == "DIRECT" or nr else "—"))),
             ("实施", "now" if now == "实施" else ("ok" if n else ""), f"{n} 个提交" if n else "—"),
             ("代码评审", "now" if now == "代码评审" else ("ok" if code_n else ""),
-             f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else "—")),
+             f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else ("不评审" if nr else "—"))),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps,
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "noreview": nr,
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
@@ -2423,7 +2432,7 @@ def task_view(repo, conf, p):
             continue
         plan_n, code_n = task_rounds(task_commits(repo, f["start"], f.get("end")), timing)
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
-                         "plan_n": plan_n, "code_n": code_n,
+                         "plan_n": plan_n, "code_n": code_n, "noreview": task_noreview(f.get("body")),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished,
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
@@ -2740,7 +2749,8 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 .drow .t{color:#d6d3cc;font-size:12.5px}.drow .r{font-size:11.5px;color:#8b8985;font-variant-numeric:tabular-nums;white-space:nowrap}
 .drow .s{grid-column:2 / 4;font-size:11px;color:#7c7a76;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}.drow .s code{font-size:10.5px;color:#7c7a76}
 .drow.dropped .t{color:#8b8985;text-decoration:line-through;text-decoration-color:#5a5955}.drow.dropped .r{color:#e5b866}
-.kind{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:2px;line-height:16px;background:#2a2140;color:#c4a6f0}.kind.direct{background:#262626;color:#a3a19b}
+.kind{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:2px;line-height:16px;background:#2a2140;color:#c4a6f0}.kind.direct{background:#262626;color:#a3a19b}.kind.noreview{background:#3a2a12;color:#e5b866}
+.flow{font-size:10.5px;font-weight:600;color:#e5b866;border:1px solid #6b5325;border-radius:2px;padding:0 5px;line-height:15px}
 .tasks .foot-note{margin-top:10px;font-size:11.5px;color:#7c7a76}.tasks .foot-note code{color:#a3a19b}
 .grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start}
 .side{border-right:1px solid #2e2e2e;position:sticky;top:44px;align-self:start;padding:14px 0;max-height:calc(100vh - 44px);overflow:auto}
@@ -3147,7 +3157,9 @@ def render_tasks(p):
                          '<span class="next hold">下一个 · 暂停中</span>' if tv["paused"] else '<span class="next">下一个</span>')
         if not b["id"]:
             chips.append('<span class="hand">手写 · 发出时编号</span>')
-        note = next((l.strip() for l in b["body"].splitlines() if l.strip()), "")
+        if task_noreview(b["body"]):
+            chips.append('<span class="flow">不评审</span>')
+        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_noreview(l)), "")
         if note:
             chips.append(f'<span>{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
@@ -3164,8 +3176,9 @@ def render_tasks(p):
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
+        flow = '<span class="flow">不评审</span>' if c["noreview"] else ""
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
-                 f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span></div>'
+                 f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
     else:
         doing = f'<div class="empty">{"队列空了，写手会停下" if not tv["todo"] else "没有进行中的任务"}</div>'
@@ -3176,7 +3189,8 @@ def render_tasks(p):
                        f'<span class="r">放弃</span><span class="s"><span>{esc(f["reason"] or "没写原因")}</span></span></div>')
             continue
         rounds = " · ".join(x for x in (f'计划评审 {f["plan_n"]}' if f["plan_n"] else "", f'代码评审 {f["code_n"]}' if f["code_n"] else "") if x) or "无评审"
-        kind = '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>'
+        kind = ('<span class="kind noreview">未评审</span>' if f["noreview"] else
+                '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>')
         rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
         fin.append(f'<div class="drow"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
@@ -3492,6 +3506,8 @@ if __name__ == "__main__":
   tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
 「做完了」由本工具只读核对 git 和交接目录，不听写手一句话。交接文件的解析复用看板（review-board）里的
 函数，和看板、request-review 用同一套判据。
+正文里有一行「流程：不评审」的任务不找规划者、不送审；done 时把它起点以来该审的提交登记进
+docs/reviews/skipped.md（和人设 SKIP_REVIEW 效果相同）——这是本工具唯一写仓库的地方。
 
 在仓库目录里运行：
   review-task add "标题" [说明行 …]   人：加到队列末尾，自动编号
@@ -3597,9 +3613,14 @@ def issue(t, again=False):
     out = [f"TASK {t['id']}: {t['title']}"]
     if t.get("body"):
         out += ["", t["body"]]
-    out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。",
-            "按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
-            f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
+    out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
+    if B.task_noreview(t.get("body")):
+        out += ["人已指定本任务不评审：不找规划者，提交后不运行 request-review，AGENTS.md 里这两条对本任务不适用；",
+                "其余照 AGENTS.md 做（该跑的检查照跑，改动照常提交）。",
+                f"做完后运行：review-task done {t['id']}  —— 它会核对是否收尾，把本任务的提交登记为豁免，并告诉你下一步。"]
+    else:
+        out += ["按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
+                f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
     print("\n".join(out))
     return 0
 
@@ -3669,8 +3690,9 @@ def cycle_state(h):
 
 
 def check_done(task):
+    """→ (问题列表, 要登记为豁免的提交)。人指定不评审的任务不看路由，改为把起点以来该审的提交交给 cmd_done 登记。"""
     h = head()
-    probs = []
+    probs, waive = [], []
     dirty = tree_dirty()
     if dirty:
         probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
@@ -3679,14 +3701,19 @@ def check_done(task):
         probs.append("规划者还没交付计划：plan.md 还没写完")
     cp, cycle_end = cycle_state(h)
     probs += cp
-    if not cp:
+    if not cp and B.task_noreview(task.get("body")):
+        waive = unreviewed(task["start"], h, skipped_shas())
+        if waive is None:
+            probs.append(f"任务起点 {task['start'][:7]} 不在 HEAD 的历史里，没法确定要豁免哪些提交：把输出报告给人")
+            waive = []
+    elif not cp:
         # 起点之一到 HEAD 之间没有该审而没审的提交，就算过了路由：这个任务的起点、triage 判 SKIP 的那个 HEAD、刚闭合的那一轮
         tri = (B.read(f"{D}/.triage") or "").splitlines()
         bases = [task["start"], tri[0].strip() if len(tri) > 1 and tri[1].strip() == "SKIP" else "", cycle_end or ""]
         skipped = skipped_shas()
         if not any(b and unreviewed(b, h, skipped) == [] for b in bases):
             probs.append("开始以来的改动还没过路由：运行 request-review，让它评审完或判 SKIP")
-    return probs
+    return probs, waive
 
 
 # ============================================================ 命令
@@ -3724,13 +3751,20 @@ def cmd_done(tid):
     tasks, current, awaiting = fold()
     if not current or current["id"] != tid:
         die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
-    probs = check_done(current)
+    probs, waive = check_done(current)
     if probs:
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
             print(f"  - {p}")
         print(f"处理完再运行 review-task done {tid}。")
         return 9
+    if waive:
+        # 和 SKIP_REVIEW 写同一个文件、同一种行：request-review 算范围时跳过这些提交
+        os.makedirs(f"{REPO}/docs/reviews", exist_ok=True)
+        with open(f"{REPO}/docs/reviews/skipped.md", "a", encoding="utf-8") as f:
+            for c in reversed(waive):
+                f.write(f"{time.strftime('%Y-%m-%d')} | {git('rev-parse', '--short', c).strip()} | 任务 {tid} 人指定不评审\n")
+        print(f"人指定 {tid} 不评审：{len(waive)} 个提交已登记进 docs/reviews/skipped.md（和评审记录一起提交即可）。")
     append({"ev": "done", "id": tid, "sha": head(), "gate": GATE})
     if GATE:
         return stop(f"DONE {tid}：核对通过。放行模式：停下，把这句报告给人，等人放行；放行后运行 review-task next。")
@@ -4030,9 +4064,11 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 核对通过后，放行模式（`TASK_GATE=1`，默认）让写手停下，看板「等你」栏显示「T5 做完了」；你运行 `review-task go`，再对写手说「继续」（它上一条输出里写着放行后运行 `review-task next`）；或者换一个新写手，同样对它说「运行 review-task next，按它的输出办」。循环的状态全在文件里，换写手不丢任何东西，这也是控制写手上下文长度的时机。`TASK_GATE=0` 是自动模式，做完直接发下一个。`next` 会重发进行中的任务，所以写手中途换人也能接着做。
 
+**按任务控制流程。** 正文里写的话和你当面交代的一样，所以「不走规划，直接做，做完照常送审」直接写进正文就行，不需要工具参与。只有「不评审」要工具帮忙：光靠一句话，写手当时会照做，但那些提交没登记豁免，会被算进下一次评审的范围，`done` 也会因为没过路由而卡住。所以在正文里单独写一行 `流程：不评审`（冒号中英文都行）：`next` 会明确告诉写手不找规划者、不运行 `request-review`；`done` 在其余几条核对都通过后，把任务起点以来该审的提交按 `SKIP_REVIEW` 的格式登记进 `docs/reviews/skipped.md`（原因写「任务 T5 人指定不评审」），再放行。档位以发出时的正文快照为准，开始后改 `queue.md` 不生效；要改就 `drop` 掉重发。这一档跳过的是整个任务，碰了计划或规则文件也一样，只用在你心里有数的低风险活上。
+
 **命令**（在仓库目录里运行）：`add "标题" [说明行 …]` 加到队列末尾并自动编号；`list` 看全貌；`go` 放行；`drop T5 "原因"` 放弃；`pause` / `resume` 暂停或恢复发新任务，正在做的照常做完。退出码：0 发出任务或操作成功；8 停下把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法错误。
 
-**看板上。** 接了队列的项目多一个「任务」区：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。它只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令。
+**看板上。** 接了队列的项目多一个「任务」区：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：不评审` 的任务在队列和进行中卡片上标「不评审」，做完后在已完成里标「未评审」，方便事后查哪些代码没审过。它只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令。
 
 ---
 

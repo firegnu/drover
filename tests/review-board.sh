@@ -161,9 +161,11 @@ printf 'STOP: 无法确认 pane zeta-rv 的评审方身份\n' > "$D/.last.out"
 # 任务区 —— eta：T8 进行中（规划过、计划评审两轮、1 个提交，正在代码评审第 1 轮）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
 E="${TMP}/eta"; EB=$(git -C "$E/repo" rev-parse HEAD~1); EH=$(git -C "$E/repo" rev-parse HEAD); ES=$(git -C "$E/repo" rev-parse --short HEAD)
-printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n\n## T9 订单列表分页\n' > "$E/review/queue.md"
+printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n' > "$E/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T5", "title": "给导出加进度条", "body": "", "key": "给导出加进度条", "sha": "%s"}\n' "$((now - 9000))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": false}\n' "$((now - 7800))" "$EB"
+  printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "流程: 不评审", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
+  printf '{"t": %s, "ev": "done", "id": "T7", "sha": "%s", "gate": false}\n' "$((now - 7750))" "$EH"
   printf '{"t": %s, "ev": "drop", "id": "T6", "title": "迁移到新日志库", "key": "迁移到新日志库", "reason": "和 T2 冲突"}\n' "$((now - 7700))"
   printf '{"t": %s, "ev": "start", "id": "T8", "title": "把 CSV 导入改成流式", "body": "约束：内存不超过 200MB", "key": "把 CSV 导入改成流式", "sha": "%s"}\n' "$((now - 3600))" "$EB"
 } > "$E/review/tasks.state"
@@ -176,7 +178,7 @@ cp "$E/review/request.md" "$E/review/.cycle-request.md"
 printf '%s\n%s\neta-rv\n' "$((now - 300))" "$EH" > "$E/review/.r1.sent"
 TH="${TMP}/theta"; THB=$(git -C "$TH/repo" rev-parse HEAD~1)
 printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\n' > "$TH/review/queue.md"
-{ printf '{"t": %s, "ev": "start", "id": "T3", "title": "补登录接口的回归测试", "body": "", "key": "补登录接口的回归测试", "sha": "%s"}\n' "$((now - 2000))" "$THB"
+{ printf '{"t": %s, "ev": "start", "id": "T3", "title": "补登录接口的回归测试", "body": "流程：不评审", "key": "补登录接口的回归测试", "sha": "%s"}\n' "$((now - 2000))" "$THB"
   printf '{"t": %s, "ev": "done", "id": "T3", "sha": "%s", "gate": true}\n' "$((now - 100))" "$THB"
 } > "$TH/review/tasks.state"
 : > "$TH/review/paused"
@@ -310,6 +312,14 @@ has '运行 review-task next，按它的输出办' 'the waiting item says the se
 has '<span class="badge me">等你放行</span>' 'awaiting release badge'
 has 'class="card s-me"' 'finished card turns crimson while it waits'
 has '<li class="now release">收尾<span class="x">核对通过 · 等你放行</span></li>' 'last step waits for release'
+
+# 流程：不评审 —— 队列里标出来（那一行不再当备注）；卡片上规划和计划评审「跳过」、代码评审「不评审」；已完成标「未评审」
+has '<span class="tid">T9</span>订单列表分页</span><span class="sub"><span class="flow">不评审</span><span>只动分页参数</span>' 'pending no-review task marked, flow line not used as the note'
+has '<span class="flow">不评审</span></div>' 'no-review card carries the flow chip'
+has '<li>规划<span class="x">跳过</span></li>' 'no-review card skips planning'
+has '<li>计划评审<span class="x">跳过</span></li>' 'no-review card skips plan review'
+has '<li>代码评审<span class="x">不评审</span></li>' 'no-review card says code review is waived'
+has '<span class="kind noreview">未评审</span>' 'finished no-review task marked unreviewed'
 
 # 不接触真实项目
 lacks 'jb-finetune' 'real project leaked into fixture board'

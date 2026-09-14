@@ -411,6 +411,14 @@ def task_blocks(text):
     return blocks
 
 
+TASK_NOREVIEW = re.compile(r'^\s*流程\s*[:：]\s*不评审\s*$', re.M)
+
+
+def task_noreview(body):
+    """正文里有一行「流程：不评审」：人指定这个任务不找规划者、不送审，done 时把它的提交登记为豁免。"""
+    return bool(TASK_NOREVIEW.search(body or ""))
+
+
 def task_events(text):
     out = []
     for line in (text or "").splitlines():
@@ -506,17 +514,18 @@ def task_view(repo, conf, p):
         else:
             now = "实施"
         n = len(commits)
+        nr = task_noreview(t.get("body"))
         steps = [
             ("规划", "now" if now == "规划" else ("ok" if decision or plan_n else ""),
-             "规划中" if now == "规划" else (decision or ("PLAN" if plan_n else "—"))),
+             "规划中" if now == "规划" else (decision or ("PLAN" if plan_n else ("跳过" if nr else "—")))),
             ("计划评审", "now" if now == "计划评审" else ("ok" if plan_n else ""),
-             f"第 {cur} 轮" if now == "计划评审" else (f"{plan_n} 轮" if plan_n else ("跳过" if decision == "DIRECT" else "—"))),
+             f"第 {cur} 轮" if now == "计划评审" else (f"{plan_n} 轮" if plan_n else ("跳过" if decision == "DIRECT" or nr else "—"))),
             ("实施", "now" if now == "实施" else ("ok" if n else ""), f"{n} 个提交" if n else "—"),
             ("代码评审", "now" if now == "代码评审" else ("ok" if code_n else ""),
-             f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else "—")),
+             f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else ("不评审" if nr else "—"))),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps,
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "noreview": nr,
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
@@ -525,7 +534,7 @@ def task_view(repo, conf, p):
             continue
         plan_n, code_n = task_rounds(task_commits(repo, f["start"], f.get("end")), timing)
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
-                         "plan_n": plan_n, "code_n": code_n,
+                         "plan_n": plan_n, "code_n": code_n, "noreview": task_noreview(f.get("body")),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished,
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
@@ -842,7 +851,8 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 .drow .t{color:#d6d3cc;font-size:12.5px}.drow .r{font-size:11.5px;color:#8b8985;font-variant-numeric:tabular-nums;white-space:nowrap}
 .drow .s{grid-column:2 / 4;font-size:11px;color:#7c7a76;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}.drow .s code{font-size:10.5px;color:#7c7a76}
 .drow.dropped .t{color:#8b8985;text-decoration:line-through;text-decoration-color:#5a5955}.drow.dropped .r{color:#e5b866}
-.kind{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:2px;line-height:16px;background:#2a2140;color:#c4a6f0}.kind.direct{background:#262626;color:#a3a19b}
+.kind{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:2px;line-height:16px;background:#2a2140;color:#c4a6f0}.kind.direct{background:#262626;color:#a3a19b}.kind.noreview{background:#3a2a12;color:#e5b866}
+.flow{font-size:10.5px;font-weight:600;color:#e5b866;border:1px solid #6b5325;border-radius:2px;padding:0 5px;line-height:15px}
 .tasks .foot-note{margin-top:10px;font-size:11.5px;color:#7c7a76}.tasks .foot-note code{color:#a3a19b}
 .grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start}
 .side{border-right:1px solid #2e2e2e;position:sticky;top:44px;align-self:start;padding:14px 0;max-height:calc(100vh - 44px);overflow:auto}
@@ -1249,7 +1259,9 @@ def render_tasks(p):
                          '<span class="next hold">下一个 · 暂停中</span>' if tv["paused"] else '<span class="next">下一个</span>')
         if not b["id"]:
             chips.append('<span class="hand">手写 · 发出时编号</span>')
-        note = next((l.strip() for l in b["body"].splitlines() if l.strip()), "")
+        if task_noreview(b["body"]):
+            chips.append('<span class="flow">不评审</span>')
+        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_noreview(l)), "")
         if note:
             chips.append(f'<span>{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
@@ -1266,8 +1278,9 @@ def render_tasks(p):
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
+        flow = '<span class="flow">不评审</span>' if c["noreview"] else ""
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
-                 f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span></div>'
+                 f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
     else:
         doing = f'<div class="empty">{"队列空了，写手会停下" if not tv["todo"] else "没有进行中的任务"}</div>'
@@ -1278,7 +1291,8 @@ def render_tasks(p):
                        f'<span class="r">放弃</span><span class="s"><span>{esc(f["reason"] or "没写原因")}</span></span></div>')
             continue
         rounds = " · ".join(x for x in (f'计划评审 {f["plan_n"]}' if f["plan_n"] else "", f'代码评审 {f["code_n"]}' if f["code_n"] else "") if x) or "无评审"
-        kind = '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>'
+        kind = ('<span class="kind noreview">未评审</span>' if f["noreview"] else
+                '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>')
         rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
         fin.append(f'<div class="drow"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')

@@ -112,5 +112,26 @@ rt next; code 8 'dropped task does not come back'; has '队列空了' 'queue emp
 rt list; code 0 'list'
 has '放弃' 'list shows dropped'; has '和 T2 冲突' 'list shows the drop reason'; has 'T5' 'list shows finished tasks'
 
+# ---- 流程：不评审 → 发任务时交代写手不找规划者、不送审；done 把起点以来该审的提交登记进 skipped.md 后通过 ----
+rt add "实验脚本换一组参数" "流程：不评审" "只改 exp.py"; rt next; code 0 'next T8'; has 'TASK T8' 'T8 issued'
+has '不找规划者' 'a no-review task tells the writer to skip the planner'; has '不运行 request-review' 'and to skip request-review'
+edit exp.py 'lr 1e-4'; S1=$(short)
+edit docs/reviews/timing.md '2026-09-12 | abc1234 | round 1/3 | 60s | code'
+edit exp.py 'lr 3e-4'; S2=$(short)
+printf 'x\n' >> "${REPO}/exp.py"
+rt done T8; code 9 'a no-review task still needs a clean tree'
+grep -qF "| ${S1} |" "${REPO}/docs/reviews/skipped.md" && fail 'nothing is waived before the other checks pass'
+git -C "${REPO}" checkout -q exp.py
+rt done T8; code 8 'a no-review task passes without routing'; has '登记' 'done says the commits were waived'
+grep -qF "| ${S1} | 任务 T8 人指定不评审" "${REPO}/docs/reviews/skipped.md" || fail 'first commit waived with the task as reason'
+grep -qF "| ${S2} | 任务 T8 人指定不评审" "${REPO}/docs/reviews/skipped.md" || fail 'second commit waived'
+[ "$(grep -c '任务 T8' "${REPO}/docs/reviews/skipped.md")" = 2 ] || fail 'records-only commits are not waived'
+# request-review 的 range_files 用这条 awk 读 skipped.md：读得出来，之后的评审范围就不再含这两个提交
+awk -F' [|] ' '{print $2}' "${REPO}/docs/reviews/skipped.md" | tr -d ' ' | grep -qx "${S2}" || fail 'waived lines parse the way request-review reads them'
+rt add "正常流程的任务"; rt next; has 'TASK T9' 'T9 issued'
+grep -qF '不找规划者' "${TMP}/out" && fail 'a normal task carries no no-review instruction'
+edit exp.py 'normal change'
+rt done T9; code 9 'a normal task still needs routing'
+
 [ ! -s "${TMP}/herdr.log" ] || { cat "${TMP}/herdr.log"; fail 'review-task must never call herdr'; }
 echo 'PASS review-task queue, release gate, read-only done check, pause and drop'
