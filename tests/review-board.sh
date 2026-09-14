@@ -214,8 +214,8 @@ has '<span class="badge none">已闭合</span>' 'delta closed grey'
 has 'STOP · 评审方停在审批或提问对话框，去看 pane beta-pane' 'banner stop item'
 has 'href="#w-beta/repo"' 'stop item jumps to the project 等你 section'
 # 活动条：写手/评审方在干什么，来自 herdr agent list 的状态与标题，working 时再读 pane 最后那句
-has '<span class="dot st-working"></span><b>写手</b><span class="st st-working">working</span><span class="act">Working (12m 03s)</span>' 'alpha writer chip with activity'
-has '<b>评审方</b><span class="st st-working">working</span><span class="ttl">Triage request</span><span class="act">Reviewing diff… (3m 10s)</span>' 'gamma reviewer chip with title and activity'
+has '<span class="dot st-working"></span><b>写手</b><span class="st st-working">working</span><span class="activity">Working (12m 03s)</span>' 'alpha writer chip with activity'
+has '<b>评审方</b><span class="st st-working">working</span><span class="ttl">Triage request</span><span class="activity">Reviewing diff… (3m 10s)</span>' 'gamma reviewer chip with title and activity'
 # 写手上次停下的运行：退出码、多久前、ERROR 那行；exit 0/3 不显示
 has '<b>上次运行 request-review：exit 2</b>' 'last run shown'
 has 'ERROR: request 的 kind 是 plan' 'last run headline'
@@ -225,7 +225,9 @@ has 'href="zed://file' 'evidence zed link'
 has '<span class="badge pl">规划中</span>' 'epsilon planning badge'
 has '<b>规划中</b>' 'planning line'
 has '做 M5，把矢量整饰产品化' 'planning task shown'
-has '<b>规划者</b><span class="st st-working">working</span><span class="ttl">Plan request</span><span class="act">Drafting… (2m 01s)</span>' 'planner chip'
+has '<b>规划者</b><span class="st st-working">working</span><span class="ttl">Plan request</span><span class="activity">Drafting… (2m 01s)</span>' 'planner chip'
+# 按钮的样式名是 act、默认隐藏；agent 正在做什么的那段文字不能用同一个名字，否则被一起藏掉
+lacks '<span class="act">' 'crew activity text is not styled as a hidden button'
 # 「过程」一节折叠显示
 has '评审方怎么看的' 'process fold present'
 has '跑了 pytest -q，12 passed' 'process text shown'
@@ -583,6 +585,15 @@ B.NOW = 0
 B.collect(sys.argv[2])
 assert abs(B.NOW - time.time()) < 60, B.NOW
 PY2
+# 同理，herdr 的 agent 列表每页重查：常驻服务里缓存一次，写手 / 评审方的状态就永远停在服务启动那刻
+HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect re-reads herdr agents for every page'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+B._AGENTS = []                                                  # 假装上一页时 herdr 什么都没有
+alpha = next(p for p in B.collect(sys.argv[2])[0] if p["name"] == "alpha/repo")
+assert (alpha["agents"].get("writer") or {}).get("status") == "working", alpha["agents"]
+PY2
 mkdir -p "${TMP}/home/.review" "${TMP}/hbin" "${TMP}/code"
 cp "${BOARD}" "${TMP}/code/review-board"; cp "$(dirname "${BOARD}")/review-task" "${TMP}/code/review-task"
 cat > "${TMP}/hbin/launchctl" <<EOF
@@ -637,4 +648,12 @@ health ok '服务守护（launchd）' true '已由 launchd 托管'
 grep -qF "document.body.classList.contains('offline')" "${TMP}/live.html" || fail 'no full-page refresh while the service is unreachable'
 python3 -c 'import os,sys,time; t=time.time()+5; os.utime(sys.argv[1], (t, t))' "${TMP}/code/review-task"
 health warn 本机服务 false '旧代码'
-echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW refreshed per page'
+# ---- agent 状态随轮询更新：GET /crew 返回各项目的 agent 状态块，页面每 8 秒换上，不用等整页刷新
+grep -qF 'data-crew="alpha/repo"' "${TMP}/live.html" || fail 'the live page has a crew slot per project'
+curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" in c["alpha/repo"] and "Working (12m 03s)" in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew shows the working writer'; }
+: > "${TMP}/herdr.down"; sleep 3
+curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows herdr without a page reload'; }
+rm "${TMP}/herdr.down"
+echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW and agents refreshed; crew polled'

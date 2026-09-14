@@ -995,8 +995,8 @@ ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit
 .crew .agent b{font-weight:600}
 .crew .st{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:#a3a19b}
 .crew .st.st-working{color:#7fd48a}.crew .st.st-blocked{color:#f0776a}
-.crew .ttl{color:#d6d3cc}.crew .act{color:#a3a19b}
-.crew .ttl::before,.crew .act::before{content:"·";color:#686763;margin-right:10px}
+.crew .ttl{color:#d6d3cc}.crew .activity{color:#a3a19b}.crew:empty{display:none}
+.crew .ttl::before,.crew .activity::before{content:"·";color:#686763;margin-right:10px}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#686763;flex:none}
 .planning{margin:12px 0 0;border:1px solid #4a3a72;background:#2d2844;border-radius:6px;padding:8px 12px;font-size:13.5px;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
 .planning b{color:#c4a6f0}.planning .age{color:#a3a19b;font-size:12px}.planning .task{color:#e6e4df}.planning .dim{color:#999793;font-size:12px}
@@ -1183,6 +1183,11 @@ JS = """
       .catch(function(){offline=true;paint()})}
     function checkHealth(){fetch('/health',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){hdata=j;paint()}).catch(function(){})}
     setInterval(function(){if(!document.hidden)sync()},4000);
+    // agent 状态（working / idle / blocked、正在做什么）不改文件，/v 看不到：单独每 8 秒取一次，只换状态块
+    setInterval(function(){if(document.hidden||offline)return;
+      fetch('/crew',{cache:'no-store'}).then(function(r){return r.json()}).then(function(c){
+        document.querySelectorAll('[data-crew]').forEach(function(x){var h=c[x.dataset.crew];if(h!==undefined&&x.innerHTML!==h)x.innerHTML=h})})
+      .catch(function(){})},8000);
     setInterval(function(){if(!document.hidden)checkHealth()},15000);
     setInterval(paint,1000);sync();checkHealth();
     function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
@@ -1692,26 +1697,33 @@ def render_tasks(p, live=None):
             f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
 
+def crew_chips(p):
+    """写手 / 规划者 / 评审方的状态块（herdr 里的状态、标题、正在做什么）；静态页、本机服务页和 /crew 共用。"""
+    ag = p.get("agents") or {}
+    chips = []
+    for role, label in (("writer", "写手"), ("planner", "规划者"), ("reviewer", "评审方")):
+        a = ag.get(role)
+        if not a:
+            continue
+        st = esc(a["status"])
+        bits = [f'<span class="dot st-{st}"></span><b>{label}</b><span class="st st-{st}">{st}</span>']
+        if a["title"]:
+            bits.append(f'<span class="ttl">{esc(a["title"])}</span>')
+        if a["activity"]:
+            bits.append(f'<span class="activity">{esc(a["activity"])}</span>')
+        chips.append(f'<span class="agent st-{st}" title="pane {esc(a["pane"])}">{"".join(bits)}</span>')
+    return "".join(chips)
+
+
 def render_panel(p, archives, self_closed, live=None):
     parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
     badge = state_badge(p)
     parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
                  f'<span class="hd">HEAD <code>{esc(p["head"][:7])}</code></span></div>')
-    ag = p.get("agents") or {}
-    if ag:
-        chips = []
-        for role, label in (("writer", "写手"), ("planner", "规划者"), ("reviewer", "评审方")):
-            a = ag.get(role)
-            if not a:
-                continue
-            st = esc(a["status"])
-            bits = [f'<span class="dot st-{st}"></span><b>{label}</b><span class="st st-{st}">{st}</span>']
-            if a["title"]:
-                bits.append(f'<span class="ttl">{esc(a["title"])}</span>')
-            if a["activity"]:
-                bits.append(f'<span class="act">{esc(a["activity"])}</span>')
-            chips.append(f'<span class="agent st-{st}" title="pane {esc(a["pane"])}">{"".join(bits)}</span>')
-        parts.append(f'<div class="crew">{"".join(chips)}</div>')
+    chips = crew_chips(p)
+    if chips or live:          # 本机服务页总留一个位置，agent 状态随轮询换上（空的时候不占地方）
+        slot = f' data-crew="{esc(p["name"])}"' if live else ""
+        parts.append(f'<div class="crew"{slot}>{chips}</div>')
     # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。风险图建议放「不急」档。
     sug = p.get("map")
     if p["human"] or sug:
@@ -1947,8 +1959,8 @@ def discover(list_path):
 def collect(list_path):
     """各项目的当前状态 → (projects, archives, self_closed)；生成静态页和本机服务共用。
     NOW 每次重取：本机服务是常驻进程，停在启动那刻的 NOW 会让页面上「几分钟前」「已进行多久」越来越偏。"""
-    global NOW
-    NOW = time.time()
+    global NOW, _AGENTS
+    NOW, _AGENTS = time.time(), None                 # herdr 的 agent 列表同理：每页重查
     projects, archives, self_closed = [], {}, {}
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.review.conf")
@@ -2149,6 +2161,8 @@ def serve(args):
                 return self.reply(200, {"v": live_version(list_path)})
             if path == "/health":
                 return self.reply(200, health(started, port))
+            if path == "/crew":
+                return self.reply(200, {x["name"]: crew_chips(x) for x in collect(list_path)[0]})
             if path == "/history":
                 from urllib.parse import parse_qs, urlsplit
                 name = (parse_qs(urlsplit(self.path).query).get("project") or [""])[0]
