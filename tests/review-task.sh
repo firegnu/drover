@@ -145,6 +145,16 @@ grep -qF '任务 T10' "${REPO}/docs/reviews/skipped.md" && fail 'a review-last t
 printf '%s\nSKIP\n-\ncode\n\nreview\n' "$(hsha)" > "${D}/.triage"
 rt done T10; code 8 'a review-last task passes once routed at HEAD'
 
+# ---- 第 2 轮起：接受「未修复」的 finding 还要再走一轮；接受的全是评审方判 resolved 的，不用改东西，周期已结束（手册第 ⑨ 步）----
+rt add "验证轮之后的任务"; rt next; has 'TASK T11' 'T11 issued'
+printf '%s\n%s\nrv-pane\n' "$(date +%s)" "$(hsha)" > "${D}/.r2.sent"
+printf 'F1 | not-resolved\nclaim: 还差边界\n\nREVIEW-COMPLETE\n' > "${D}/r2-findings.md"
+printf 'F1 accept — 补上边界\n' > "${D}/r2-responses.md"
+rt done T11; code 9 'accepting a not-resolved finding still needs another round'
+printf 'F1 | resolved\nclaim: 已修\n\nF2 | resolved\nclaim: 已修\n\nREVIEW-COMPLETE\n' > "${D}/r2-findings.md"
+printf 'F1 accept — 接受 resolved 结论，无须修改\nF2 accept — 同上\nF3 defer — backlog 里的 nit\n' > "${D}/r2-responses.md"
+rt done T11; code 8 'accepts that only acknowledge resolved findings close the cycle'
+
 # ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
 import importlib.machinery, importlib.util, sys

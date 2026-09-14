@@ -3699,7 +3699,8 @@ def cycle_state(h):
     if any(v == "reject" or (v == "defer" and sev(f) == "blocking") for f, (v, _) in resp):
         probs.append(f"第 {n} 轮有被拒绝、或暂缓的阻断 finding："
                      + ("要等人裁决，再走一轮" if B.pending_decisions(last) else "人已裁决，还要再走一轮"))
-    elif any(v == "accept" for _, (v, _) in resp):
+    # 接受评审方已判 resolved 的条目只是确认、不用改东西；手册第 ⑨ 步是「有 accept 且改了 artifact」才再走一轮
+    elif any(v == "accept" and last["findings"].get(f, {}).get("status") != "resolved" for f, (v, _) in resp):
         probs.append(f"第 {n} 轮有接受的 finding，改完要再开一轮验证")
     return probs, (None if probs else last["sent"]["target"])
 
@@ -4074,7 +4075,7 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 - 已跟踪文件的工作区干净（评审记录除外）
 - 规划者没有没交付的请求
-- 评审周期已经结束：最近一轮的回应里没有接受、拒绝或暂缓的阻断——这些都还要再走一轮（第 ⑨ 步）
+- 评审周期已经结束：最近一轮的回应里没有拒绝、暂缓的阻断，也没有要改东西的接受——这些都还要再走一轮（第 ⑨ 步）；接受评审方已判 resolved 的条目只是确认，不算
 - 过了路由：从任务起点、triage 判 SKIP 的那个 HEAD、或刚闭合那一轮的终点，到 HEAD 之间没有该审而没审的提交；人用 `SKIP_REVIEW` 放过的、只动评审记录的不算
 
 核对通过后，放行模式（`TASK_GATE=1`，默认）让写手停下，看板「等你」栏显示「T5 做完了」；你运行 `review-task go`，再对写手说「继续」（它上一条输出里写着放行后运行 `review-task next`）；或者换一个新写手，同样对它说「运行 review-task next，按它的输出办」。循环的状态全在文件里，换写手不丢任何东西，这也是控制写手上下文长度的时机。`TASK_GATE=0` 是自动模式，做完直接发下一个。`next` 会重发进行中的任务，所以写手中途换人也能接着做。

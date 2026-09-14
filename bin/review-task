@@ -193,7 +193,8 @@ def cycle_state(h):
     if any(v == "reject" or (v == "defer" and sev(f) == "blocking") for f, (v, _) in resp):
         probs.append(f"第 {n} 轮有被拒绝、或暂缓的阻断 finding："
                      + ("要等人裁决，再走一轮" if B.pending_decisions(last) else "人已裁决，还要再走一轮"))
-    elif any(v == "accept" for _, (v, _) in resp):
+    # 接受评审方已判 resolved 的条目只是确认、不用改东西；手册第 ⑨ 步是「有 accept 且改了 artifact」才再走一轮
+    elif any(v == "accept" and last["findings"].get(f, {}).get("status") != "resolved" for f, (v, _) in resp):
         probs.append(f"第 {n} 轮有接受的 finding，改完要再开一轮验证")
     return probs, (None if probs else last["sent"]["target"])
 
