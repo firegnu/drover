@@ -155,6 +155,56 @@ printf 'F1 | resolved\nclaim: 已修\n\nF2 | resolved\nclaim: 已修\n\nREVIEW-C
 printf 'F1 accept — 接受 resolved 结论，无须修改\nF2 accept — 同上\nF3 defer — backlog 里的 nit\n' > "${D}/r2-responses.md"
 rt done T11; code 8 'accepts that only acknowledge resolved findings close the cycle'
 
+# ---- 调整顺序、修改还没开始的任务：按队列里的位置认（没编号的也行）；--expect 对不上说明队列刚被改过，拒绝（退出码 10）
+rt add "排序甲"; rt add "排序乙" "乙的说明"; rt add "排序丙"
+printf '\n## 手写丁\n丁的说明\n' >> "${D}/queue.md"
+qv() { python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").read()).hexdigest()[:12])' "${D}/queue.md"; }
+pending() { python3 - "${RT}" <<'PY2'
+import importlib.machinery, importlib.util, os, sys
+sys.dont_write_bytecode = True
+p = os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "review-board")
+l = importlib.machinery.SourceFileLoader("rb", p); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+q = open(os.environ["Q"], encoding="utf-8").read(); st = open(os.environ["S"], encoding="utf-8").read()
+print("|".join(b["title"] for b in B.task_pending(B.task_blocks(q), B.task_fold(B.task_events(st))[0])))
+PY2
+}
+export Q="${D}/queue.md" S="${D}/tasks.state"
+[ "$(pending)" = "排序甲|排序乙|排序丙|手写丁" ] || fail "pending order before moving: $(pending)"
+cp "${D}/queue.md" "${TMP}/q.before"
+rt move 4 1 --expect 000000000000; code 10 'a stale --expect refuses the move'; has 'CONFLICT' 'says the queue changed'
+cmp -s "${D}/queue.md" "${TMP}/q.before" || fail 'a refused move writes nothing'
+rt move 4 1 --expect "$(qv)"; code 0 'move with a matching --expect'
+[ "$(pending)" = "手写丁|排序甲|排序乙|排序丙" ] || fail "unnumbered task moved to the front: $(pending)"
+grep -qx '## T1 给导出加进度条' "${D}/queue.md" || fail 'finished blocks stay in the file'
+python3 - "${TMP}/q.before" "${D}/queue.md" <<'PY2' || fail 'moving changes only where the moved block sits'
+import re, sys
+a, b = (open(x, encoding="utf-8").read() for x in sys.argv[1:])
+blk = "## 手写丁\n丁的说明\n"
+assert blk in a and blk in b
+norm = lambda x: re.sub(r"\n{2,}", "\n\n", x.replace(blk, "")).strip()   # 块之间的空行多少不算改动
+assert norm(a) == norm(b), (norm(a), norm(b))
+assert b.index(blk) < b.index("## T12 排序甲")
+PY2
+rt move 2 4; code 0 'move without --expect'
+[ "$(pending)" = "手写丁|排序乙|排序丙|排序甲" ] || fail "move down: $(pending)"
+rt move 9 1; code 2 'a position past the queue'
+rt edit 2 "排序乙（改）" "流程：不评审" "新说明" --expect "$(qv)"; code 0 'edit a pending task'
+grep -q '^## T13 排序乙（改）$' "${D}/queue.md" || fail 'edit keeps the ID and changes the title'
+python3 - "${D}/queue.md" <<'PY2' || fail 'edit replaces the whole block'
+import sys; q = open(sys.argv[1], encoding="utf-8").read()
+i = q.index("## T13 排序乙（改）"); j = q.find("\n## ", i + 1)
+assert q[i:j if j > 0 else None].strip() == "## T13 排序乙（改）\n流程：不评审\n新说明", repr(q[i:j])
+assert "乙的说明" not in q
+PY2
+QB=$(cat "${D}/queue.md")
+rt edit 1 "手写丁" "## 坏行"; code 2 'edit refuses a body line starting with ##'
+rt edit 1 "" "x"; code 2 'edit refuses an empty title'
+rt edit 1 "丁" --expect 000000000000; code 10 'a stale --expect refuses the edit'
+[ "$(cat "${D}/queue.md")" = "${QB}" ] || fail 'refused edits write nothing'
+rt edit 1 "手写丁（改）" "丁的新说明"; code 0 'edit an unnumbered task by position'
+grep -qx '## 手写丁（改）' "${D}/queue.md" || fail 'an unnumbered task stays unnumbered'
+rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues the task now at the front'
+
 # ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
 import importlib.machinery, importlib.util, sys

@@ -425,6 +425,11 @@ def task_flow(body):
     return m.group(1) if m else ""
 
 
+def queue_version(text):
+    """queue.md 内容的短指纹：页面记下它，改顺序 / 改任务时带回来，对不上说明这期间队列被别人改过。"""
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
+
+
 def task_events(text):
     out = []
     for line in (text or "").splitlines():
@@ -543,7 +548,7 @@ def task_view(repo, conf, p):
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
                          "plan_n": plan_n, "code_n": code_n, "noreview": task_flow(f.get("body")) == "不评审", "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
-    return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished,
+    return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished, "qv": queue_version(qtext),
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
             "done": sum(x["status"] == "done" for x in tasks.values()),
             "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
@@ -870,8 +875,12 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 :focus-visible{outline:2px solid #4a7fc1;outline-offset:2px}
 .act{display:none}.live .act{display:inline-block;font:600 11.5px/1 inherit;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid transparent}
 .live .act.go{background:#c8375a;color:#fff;margin-top:6px}.live .act.go:hover{background:#d8456a}
-ol.q li{position:relative}.live ol.q li .act.drop{position:absolute;top:8px;right:8px;padding:3px 9px;background:#2d2f35;color:#c9c7c1;border-color:#4a4c52;opacity:0;transition:opacity .12s}
-.live ol.q li:hover .act.drop,.live ol.q li .act.drop:focus-visible{opacity:1}.live ol.q li .act.drop:hover{border-color:#e5b866;color:#e5b866}
+ol.q li{position:relative}.qa{position:absolute;top:6px;right:6px;display:flex;gap:3px;padding-left:24px;background:linear-gradient(90deg,rgba(53,56,62,0),#35383e 22px);border-radius:0 3px 3px 0;opacity:0;pointer-events:none;transition:opacity .12s}
+.live ol.q li:hover .qa,.live ol.q li:focus-within .qa{opacity:1;pointer-events:auto}
+.live ol.q li .qa .act{font:600 11px/16px inherit;padding:1px 7px;border-radius:3px;background:#2a2c31;color:#c9c7c1;border-color:#4a4c52}.live ol.q li .qa .act:hover{border-color:#8fb8ee;color:#8fb8ee}
+.live ol.q li .qa .act.drop:hover{border-color:#e5b866;color:#e5b866}.live ol.q li .qa .act.mv{padding:1px 6px}
+.live ol.q li[draggable]{cursor:grab}.live ol.q li.dragging{opacity:.45}
+.live ol.q li.drop-before{box-shadow:0 -3px 0 #8fb8ee}.live ol.q li.drop-after{box-shadow:0 3px 0 #8fb8ee}
 dialog.rbd{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(460px,90vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
 dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .rbd-t{font-size:15px;font-weight:700;color:#f2f0eb}.rbd-m{margin-top:8px;font-size:12.5px;color:#b1afa9;line-height:1.6}
@@ -1119,6 +1128,8 @@ JS = """
     document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
       e.preventDefault();e.stopPropagation();
       if(b.dataset.act==='add'){openEditor(b.dataset.p);return}
+      if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
+      if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
       cur=b.dataset;
       var go=cur.act==='go';
       t.textContent=(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title;
@@ -1134,10 +1145,28 @@ JS = """
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
         .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：review-board serve 还在运行吗？';ok.disabled=false})});
     dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
+    function qvOf(proj){var sec=[].filter.call(document.querySelectorAll('section.tasks[data-qv]'),function(x){return x.dataset.p===proj})[0];return sec?sec.dataset.qv:''}
+    function api(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},body:JSON.stringify(payload)})
+      .then(function(r){return r.json()}).catch(function(){return {ok:false,out:'服务没有响应：review-board serve 还在运行吗？'}})}
+    function showFail(title,text){t.textContent=title;m.textContent='';rs.hidden=true;out.hidden=false;out.className='rbd-out bad';out.textContent=text;
+      ok.hidden=true;no.textContent='关闭';dlg.showModal()}
+    // 调整顺序：↑ ↓ 或拖动；带着页面生成时 queue.md 的指纹，队列被别人改过就不动并提示刷新
+    function moveTask(proj,from,to){if(from===to)return;
+      api('/api/move',{project:proj,from:from,to:to,expect:qvOf(proj)}).then(function(j){if(j.ok)reloadKeep();else showFail('没挪成',j.out||'')})}
+    var dragFrom=null,dragProj=null;
+    document.addEventListener('dragstart',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li)return;
+      dragFrom=+li.dataset.pos;dragProj=li.closest('section.tasks').dataset.p;li.classList.add('dragging');e.dataTransfer.effectAllowed='move';
+      try{e.dataTransfer.setData('text/plain',String(dragFrom))}catch(x){}});
+    document.addEventListener('dragend',function(){document.querySelectorAll('ol.q li.dragging,ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('dragging','drop-before','drop-after')});dragFrom=null});
+    document.addEventListener('dragover',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
+      e.preventDefault();var to=+li.dataset.pos;document.querySelectorAll('ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('drop-before','drop-after')});
+      if(to!==dragFrom)li.classList.add(to<dragFrom?'drop-before':'drop-after')});
+    document.addEventListener('drop',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
+      e.preventDefault();var from=dragFrom,to=+li.dataset.pos;dragFrom=null;moveTask(dragProj,from,to)});
     // 加任务：标题 + 流程 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
     var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),eF=ed.querySelector('.rbe-flow'),
         eB=ed.querySelector('.rbe-body'),ePv=ed.querySelector('.rbe-pv'),eOut=ed.querySelector('.rbe-out'),
-        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null;
+        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null,eEdit=null;
     function dkey(){return 'rb.draft.'+eProj}
     function el(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;return d}
     function preview(){ePv.innerHTML='';
@@ -1152,18 +1181,25 @@ JS = """
         if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
         body.appendChild(el('dp',s));last='p'});
       if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));ePv.appendChild(body);
-      try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
-    function openEditor(proj){eProj=proj;var d={};try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}
+      if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
+    function openEditor(proj,raw,pos){eProj=proj;var d={};
+      if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,f:raw.flow,b:raw.body}}
+      else{eEdit=null;try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}}
       eT.value=d.t||'';eF.value=d.f||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
+      ed.querySelector('.rbe-t').textContent=raw?'改任务 '+(raw.id||'（未编号）'):'加任务';
+      ed.querySelector('.rbe-hint').textContent=raw?'整块改写队列第 '+pos+' 个，编号不变 · 小标题用 ###，别用 ##':'加到队列末尾，自动编号 · 小标题用 ###，别用 ##';
+      eOk.textContent=raw?'保存修改':'加入队列';
       ed.querySelector('.rbe-p').textContent=proj;preview();ed.showModal();eT.focus()}
     [eT,eF,eB].forEach(function(x){x.addEventListener('input',preview)});
     ed.querySelector('form').addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       eOk.disabled=true;
-      fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify({project:eProj,title:eT.value,flow:eF.value,body:eB.value})})
+      var payload={project:eProj,title:eT.value,flow:eF.value,body:eB.value};
+      if(eEdit){payload.pos=eEdit.pos;payload.expect=eEdit.qv}
+      fetch(eEdit?'/api/edit':'/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
+        body:JSON.stringify(payload)})
         .then(function(r){return r.json()}).then(function(j){
           eOut.hidden=false;eOut.textContent=j.out||'';eOut.className='rbe-out rbd-out'+(j.ok?' ok':' bad');
-          if(j.ok){try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
+          if(j.ok){if(!eEdit)try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
         .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：review-board serve 还在运行吗？';eOk.disabled=false})});
     ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
   }
@@ -1454,10 +1490,21 @@ def render_tasks(p, live=None):
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
-        # 页面上只能放弃还没开始、有编号的任务（review-task drop 按编号认）；正在做的在终端里停
-        drop = (f'<button class="act drop" type="button" data-act="drop" data-p="{esc(p["name"])}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>'
-                if live and b["id"] else "")
-        q.append(f'<li data-td="{esc(key)}"><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{drop}</li>')
+        acts, drag = "", ""
+        if live:
+            # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（review-task drop），正在做的在终端里停
+            pn, pos = esc(p["name"]), i + 1
+            flow_b = task_flow(b["body"])
+            raw = json.dumps({"id": b["id"] or "", "title": b["title"], "flow": flow_b,
+                              "body": "\n".join(l for l in b["body"].splitlines() if not TASK_FLOW.match(l)) if flow_b else b["body"]}, ensure_ascii=False)
+            acts = ('<span class="qa">'
+                    + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
+                    + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
+                    + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
+                    + (f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>' if b["id"] else "")
+                    + '</span>')
+            drag = f' draggable="true" data-pos="{pos}"'
+        q.append(f'<li data-td="{esc(key)}"{drag}><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{acts}</li>')
         descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], src_queue))
     queue = f'<ol class="q">{"".join(q)}</ol>' if q else '<div class="empty">空</div>'
     if c:
@@ -1501,7 +1548,8 @@ def render_tasks(p, live=None):
         descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
     add = f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>' if live else ""
-    return (f'<section class="tasks"><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
+    qattr = f' data-p="{esc(p["name"])}" data-qv="{esc(tv["qv"])}"' if live else ""
+    return (f'<section class="tasks"{qattr}><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
             f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
             f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
@@ -1814,7 +1862,8 @@ def live_action(list_path, act, body):
     if not tv:
         return 409, {"ok": False, "out": "这个项目没有接任务队列"}
     task_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
-    if act == "add":
+    expect = ["--expect", str(body.get("expect") or "")]
+    if act in ("add", "edit"):
         title = str(body.get("title") or "").strip()
         flow = str(body.get("flow") or "").strip()
         lines = str(body.get("body") or "").replace("\r\n", "\n").rstrip().split("\n") if str(body.get("body") or "").strip() else []
@@ -1829,7 +1878,10 @@ def live_action(list_path, act, body):
             return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
         if flow:                                                      # 选了流程就以下拉框为准，正文里手写的那行不重复
             lines = [l for l in lines if not TASK_FLOW.match(l)]
-        cmd = [task_bin, "add", title, *([f"流程：{flow}"] if flow else []), *lines]
+        text = [title, *([f"流程：{flow}"] if flow else []), *lines]
+        cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
+    elif act == "move":
+        cmd = [task_bin, "move", str(body.get("from") or ""), str(body.get("to") or ""), *expect]
     elif act == "go":
         if not tv["awaiting"]:
             return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
@@ -1841,7 +1893,10 @@ def live_action(list_path, act, body):
         reason = " ".join(str(body.get("reason") or "").split())[:300]
         cmd = [task_bin, "drop", tid, reason]
     r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
-    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": (r.stdout + r.stderr).strip()}
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 2 and act in ("move", "edit"):
+        return 400, {"ok": False, "code": 2, "out": out.split("\n\n")[0]}
+    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": out}
 
 
 def serve(args):
@@ -1881,7 +1936,7 @@ def serve(args):
                 return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 return self.reply(415, {"ok": False, "out": "只接受 JSON"})
-            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add"}.get(self.path)
+            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit"}.get(self.path)
             if not act:
                 return self.reply(404, {"ok": False, "out": "没有这个操作"})
             try:

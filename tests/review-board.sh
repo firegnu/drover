@@ -472,3 +472,36 @@ case "$(cat "${TMP}/eta/review/queue.md")" in "${EQ}"*) ;; *) fail 'existing que
 [ "$(post /api/add '{"project":"eta/repo","title":"普通任务","flow":"","body":""}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'a normal task with no body'
 tail -1 "${TMP}/eta/review/queue.md" | grep -qx '## T11 普通任务' || fail 'a normal task gets no flow line'
 echo 'PASS review-board serve: add a task from the page via review-task add; bad titles, ## body lines, unknown flows refused'
+
+# ---- 页面上调整顺序、修改还没开始的任务：带着页面生成时 queue.md 的指纹，对不上（队列被别人改过）就拒绝
+curl -s "${U}/" > "${TMP}/live.html"
+QV=$({ grep -o 'data-p="eta/repo" data-qv="[0-9a-f]*"' "${TMP}/live.html" || true; } | sed 's/.*data-qv="\([0-9a-f]*\)"/\1/')
+[ -n "${QV}" ] || fail 'the live task board carries the queue fingerprint'
+grep -qF 'data-act="edit" data-p="eta/repo" data-pos="1"' "${TMP}/live.html" || fail 'edit button on pending tasks, unnumbered ones too'
+grep -qF 'data-act="down" data-p="eta/repo" data-pos="1"' "${TMP}/live.html" || fail 'move-down button on the first pending task'
+grep -qF 'data-act="up" data-p="eta/repo" data-pos="1"' "${TMP}/live.html" && fail 'no move-up button on the first pending task'
+grep -qF 'draggable="true" data-pos="3"' "${TMP}/live.html" || fail 'pending tasks can be dragged'
+epending() { python3 - "${BOARD}" "${TMP}/eta/review" <<'PY2'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+d = sys.argv[2]
+print("|".join(b["title"] for b in B.task_pending(B.task_blocks(B.read(d + "/queue.md")), B.task_fold(B.task_events(B.read(d + "/tasks.state")))[0])))
+PY2
+}
+[ "$(epending)" = "修一下登录页的超时|导出支持按月分文件|普通任务" ] || fail "eta pending before moving: $(epending)"
+[ "$(post /api/move '{"project":"eta/repo","from":3,"to":1,"expect":"000000000000"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'a stale fingerprint refuses the move'
+grep -q '刷新' "${TMP}/resp" || fail 'the conflict says to refresh'
+[ "$(post /api/move '{"project":"eta/repo","from":3,"to":1,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'move a pending task from the page'; }
+[ "$(epending)" = "普通任务|修一下登录页的超时|导出支持按月分文件" ] || fail "moved to the front: $(epending)"
+[ "$(post /api/move '{"project":"eta/repo","from":1,"to":2,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'the old fingerprint no longer matches after a change'
+QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").read()).hexdigest()[:12])' "${TMP}/eta/review/queue.md")
+[ "$(post /api/edit '{"project":"eta/repo","pos":2,"title":"修一下登录页的超时（改）","flow":"不评审","body":"## 坏","expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'edit refuses a ## body line'
+[ "$(post /api/edit '{"project":"eta/repo","pos":2,"title":"修一下登录页的超时（改）","flow":"不评审","body":"### 范围\n- 只改超时","expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'edit a pending task from the page'; }
+grep -qx '## 修一下登录页的超时（改）' "${TMP}/eta/review/queue.md" || fail 'edited title written, still unnumbered'
+python3 - "${TMP}/eta/review/queue.md" <<'PY2' || fail 'edited block carries its flow line and new body'
+import sys; q = open(sys.argv[1], encoding="utf-8").read()
+i = q.index("## 修一下登录页的超时（改）"); j = q.find("\n## ", i + 1)
+assert q[i:j].strip() == "## 修一下登录页的超时（改）\n流程：不评审\n### 范围\n- 只改超时", repr(q[i:j])
+PY2
+echo 'PASS review-board serve: reorder and edit pending tasks via review-task move / edit, guarded by the queue fingerprint'

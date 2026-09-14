@@ -312,7 +312,7 @@ agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
 
-**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因），任务看板标题栏的「+ 加任务」。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
+**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因），任务看板标题栏的「+ 加任务」。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
 
 项目发现：`~/Developer/personal_projs/*/.review.conf`，加上 `~/.review/projects` 里登记的路径（`herdsman-init`
 自动登记，所以仓库放在哪都会被扫到；一行一个路径，可手动增删）。
@@ -2321,6 +2321,11 @@ def task_flow(body):
     return m.group(1) if m else ""
 
 
+def queue_version(text):
+    """queue.md 内容的短指纹：页面记下它，改顺序 / 改任务时带回来，对不上说明这期间队列被别人改过。"""
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
+
+
 def task_events(text):
     out = []
     for line in (text or "").splitlines():
@@ -2439,7 +2444,7 @@ def task_view(repo, conf, p):
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
                          "plan_n": plan_n, "code_n": code_n, "noreview": task_flow(f.get("body")) == "不评审", "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
-    return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished,
+    return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished, "qv": queue_version(qtext),
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
             "done": sum(x["status"] == "done" for x in tasks.values()),
             "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
@@ -2766,8 +2771,12 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 :focus-visible{outline:2px solid #4a7fc1;outline-offset:2px}
 .act{display:none}.live .act{display:inline-block;font:600 11.5px/1 inherit;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid transparent}
 .live .act.go{background:#c8375a;color:#fff;margin-top:6px}.live .act.go:hover{background:#d8456a}
-ol.q li{position:relative}.live ol.q li .act.drop{position:absolute;top:8px;right:8px;padding:3px 9px;background:#2d2f35;color:#c9c7c1;border-color:#4a4c52;opacity:0;transition:opacity .12s}
-.live ol.q li:hover .act.drop,.live ol.q li .act.drop:focus-visible{opacity:1}.live ol.q li .act.drop:hover{border-color:#e5b866;color:#e5b866}
+ol.q li{position:relative}.qa{position:absolute;top:6px;right:6px;display:flex;gap:3px;padding-left:24px;background:linear-gradient(90deg,rgba(53,56,62,0),#35383e 22px);border-radius:0 3px 3px 0;opacity:0;pointer-events:none;transition:opacity .12s}
+.live ol.q li:hover .qa,.live ol.q li:focus-within .qa{opacity:1;pointer-events:auto}
+.live ol.q li .qa .act{font:600 11px/16px inherit;padding:1px 7px;border-radius:3px;background:#2a2c31;color:#c9c7c1;border-color:#4a4c52}.live ol.q li .qa .act:hover{border-color:#8fb8ee;color:#8fb8ee}
+.live ol.q li .qa .act.drop:hover{border-color:#e5b866;color:#e5b866}.live ol.q li .qa .act.mv{padding:1px 6px}
+.live ol.q li[draggable]{cursor:grab}.live ol.q li.dragging{opacity:.45}
+.live ol.q li.drop-before{box-shadow:0 -3px 0 #8fb8ee}.live ol.q li.drop-after{box-shadow:0 3px 0 #8fb8ee}
 dialog.rbd{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(460px,90vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
 dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .rbd-t{font-size:15px;font-weight:700;color:#f2f0eb}.rbd-m{margin-top:8px;font-size:12.5px;color:#b1afa9;line-height:1.6}
@@ -3015,6 +3024,8 @@ JS = """
     document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
       e.preventDefault();e.stopPropagation();
       if(b.dataset.act==='add'){openEditor(b.dataset.p);return}
+      if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
+      if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
       cur=b.dataset;
       var go=cur.act==='go';
       t.textContent=(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title;
@@ -3030,10 +3041,28 @@ JS = """
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
         .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：review-board serve 还在运行吗？';ok.disabled=false})});
     dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
+    function qvOf(proj){var sec=[].filter.call(document.querySelectorAll('section.tasks[data-qv]'),function(x){return x.dataset.p===proj})[0];return sec?sec.dataset.qv:''}
+    function api(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},body:JSON.stringify(payload)})
+      .then(function(r){return r.json()}).catch(function(){return {ok:false,out:'服务没有响应：review-board serve 还在运行吗？'}})}
+    function showFail(title,text){t.textContent=title;m.textContent='';rs.hidden=true;out.hidden=false;out.className='rbd-out bad';out.textContent=text;
+      ok.hidden=true;no.textContent='关闭';dlg.showModal()}
+    // 调整顺序：↑ ↓ 或拖动；带着页面生成时 queue.md 的指纹，队列被别人改过就不动并提示刷新
+    function moveTask(proj,from,to){if(from===to)return;
+      api('/api/move',{project:proj,from:from,to:to,expect:qvOf(proj)}).then(function(j){if(j.ok)reloadKeep();else showFail('没挪成',j.out||'')})}
+    var dragFrom=null,dragProj=null;
+    document.addEventListener('dragstart',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li)return;
+      dragFrom=+li.dataset.pos;dragProj=li.closest('section.tasks').dataset.p;li.classList.add('dragging');e.dataTransfer.effectAllowed='move';
+      try{e.dataTransfer.setData('text/plain',String(dragFrom))}catch(x){}});
+    document.addEventListener('dragend',function(){document.querySelectorAll('ol.q li.dragging,ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('dragging','drop-before','drop-after')});dragFrom=null});
+    document.addEventListener('dragover',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
+      e.preventDefault();var to=+li.dataset.pos;document.querySelectorAll('ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('drop-before','drop-after')});
+      if(to!==dragFrom)li.classList.add(to<dragFrom?'drop-before':'drop-after')});
+    document.addEventListener('drop',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
+      e.preventDefault();var from=dragFrom,to=+li.dataset.pos;dragFrom=null;moveTask(dragProj,from,to)});
     // 加任务：标题 + 流程 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
     var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),eF=ed.querySelector('.rbe-flow'),
         eB=ed.querySelector('.rbe-body'),ePv=ed.querySelector('.rbe-pv'),eOut=ed.querySelector('.rbe-out'),
-        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null;
+        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null,eEdit=null;
     function dkey(){return 'rb.draft.'+eProj}
     function el(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;return d}
     function preview(){ePv.innerHTML='';
@@ -3048,18 +3077,25 @@ JS = """
         if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
         body.appendChild(el('dp',s));last='p'});
       if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));ePv.appendChild(body);
-      try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
-    function openEditor(proj){eProj=proj;var d={};try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}
+      if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
+    function openEditor(proj,raw,pos){eProj=proj;var d={};
+      if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,f:raw.flow,b:raw.body}}
+      else{eEdit=null;try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}}
       eT.value=d.t||'';eF.value=d.f||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
+      ed.querySelector('.rbe-t').textContent=raw?'改任务 '+(raw.id||'（未编号）'):'加任务';
+      ed.querySelector('.rbe-hint').textContent=raw?'整块改写队列第 '+pos+' 个，编号不变 · 小标题用 ###，别用 ##':'加到队列末尾，自动编号 · 小标题用 ###，别用 ##';
+      eOk.textContent=raw?'保存修改':'加入队列';
       ed.querySelector('.rbe-p').textContent=proj;preview();ed.showModal();eT.focus()}
     [eT,eF,eB].forEach(function(x){x.addEventListener('input',preview)});
     ed.querySelector('form').addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       eOk.disabled=true;
-      fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify({project:eProj,title:eT.value,flow:eF.value,body:eB.value})})
+      var payload={project:eProj,title:eT.value,flow:eF.value,body:eB.value};
+      if(eEdit){payload.pos=eEdit.pos;payload.expect=eEdit.qv}
+      fetch(eEdit?'/api/edit':'/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
+        body:JSON.stringify(payload)})
         .then(function(r){return r.json()}).then(function(j){
           eOut.hidden=false;eOut.textContent=j.out||'';eOut.className='rbe-out rbd-out'+(j.ok?' ok':' bad');
-          if(j.ok){try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
+          if(j.ok){if(!eEdit)try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
         .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：review-board serve 还在运行吗？';eOk.disabled=false})});
     ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
   }
@@ -3350,10 +3386,21 @@ def render_tasks(p, live=None):
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
-        # 页面上只能放弃还没开始、有编号的任务（review-task drop 按编号认）；正在做的在终端里停
-        drop = (f'<button class="act drop" type="button" data-act="drop" data-p="{esc(p["name"])}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>'
-                if live and b["id"] else "")
-        q.append(f'<li data-td="{esc(key)}"><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{drop}</li>')
+        acts, drag = "", ""
+        if live:
+            # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（review-task drop），正在做的在终端里停
+            pn, pos = esc(p["name"]), i + 1
+            flow_b = task_flow(b["body"])
+            raw = json.dumps({"id": b["id"] or "", "title": b["title"], "flow": flow_b,
+                              "body": "\n".join(l for l in b["body"].splitlines() if not TASK_FLOW.match(l)) if flow_b else b["body"]}, ensure_ascii=False)
+            acts = ('<span class="qa">'
+                    + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
+                    + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
+                    + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
+                    + (f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>' if b["id"] else "")
+                    + '</span>')
+            drag = f' draggable="true" data-pos="{pos}"'
+        q.append(f'<li data-td="{esc(key)}"{drag}><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{acts}</li>')
         descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], src_queue))
     queue = f'<ol class="q">{"".join(q)}</ol>' if q else '<div class="empty">空</div>'
     if c:
@@ -3397,7 +3444,8 @@ def render_tasks(p, live=None):
         descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
     add = f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>' if live else ""
-    return (f'<section class="tasks"><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
+    qattr = f' data-p="{esc(p["name"])}" data-qv="{esc(tv["qv"])}"' if live else ""
+    return (f'<section class="tasks"{qattr}><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
             f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
             f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
@@ -3710,7 +3758,8 @@ def live_action(list_path, act, body):
     if not tv:
         return 409, {"ok": False, "out": "这个项目没有接任务队列"}
     task_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
-    if act == "add":
+    expect = ["--expect", str(body.get("expect") or "")]
+    if act in ("add", "edit"):
         title = str(body.get("title") or "").strip()
         flow = str(body.get("flow") or "").strip()
         lines = str(body.get("body") or "").replace("\r\n", "\n").rstrip().split("\n") if str(body.get("body") or "").strip() else []
@@ -3725,7 +3774,10 @@ def live_action(list_path, act, body):
             return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
         if flow:                                                      # 选了流程就以下拉框为准，正文里手写的那行不重复
             lines = [l for l in lines if not TASK_FLOW.match(l)]
-        cmd = [task_bin, "add", title, *([f"流程：{flow}"] if flow else []), *lines]
+        text = [title, *([f"流程：{flow}"] if flow else []), *lines]
+        cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
+    elif act == "move":
+        cmd = [task_bin, "move", str(body.get("from") or ""), str(body.get("to") or ""), *expect]
     elif act == "go":
         if not tv["awaiting"]:
             return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
@@ -3737,7 +3789,10 @@ def live_action(list_path, act, body):
         reason = " ".join(str(body.get("reason") or "").split())[:300]
         cmd = [task_bin, "drop", tid, reason]
     r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
-    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": (r.stdout + r.stderr).strip()}
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 2 and act in ("move", "edit"):
+        return 400, {"ok": False, "code": 2, "out": out.split("\n\n")[0]}
+    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": out}
 
 
 def serve(args):
@@ -3777,7 +3832,7 @@ def serve(args):
                 return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 return self.reply(415, {"ok": False, "out": "只接受 JSON"})
-            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add"}.get(self.path)
+            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit"}.get(self.path)
             if not act:
                 return self.reply(404, {"ok": False, "out": "没有这个操作"})
             try:
@@ -3853,7 +3908,11 @@ if __name__ == "__main__":
   review-task go                      人：放行（放行模式）
   review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
-退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足。
+  review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
+  review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
+                                      --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写
+退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足；
+        10 队列在这期间被改过（--expect 对不上），什么都没写。
 .review.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
 """
 import importlib.machinery
@@ -4060,6 +4119,93 @@ def check_done(task):
 
 
 # ============================================================ 命令
+def split_blocks(text):
+    """queue.md → (第一个 ## 之前的前言, [每块的原文])；和看板的 task_blocks 用同一个标题行判据，逐行原样保留。"""
+    pre, blocks = [], []
+    for line in (text or "").splitlines(keepends=True):
+        if B.TASK_HDR.match(line.rstrip("\r\n")):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+        else:
+            pre.append(line)
+    return "".join(pre), ["".join(b) for b in blocks]
+
+
+def join_blocks(pre, blocks):
+    """块之间至少隔一个空行；只补缺的，不动原有的空行。"""
+    out = pre
+    for i, b in enumerate(blocks):
+        if out and not out.endswith("\n"):
+            out += "\n"
+        if i and not out.endswith("\n\n"):
+            out += "\n"
+        out += b
+    return out if out.endswith("\n") else out + "\n"
+
+
+def write_queue(text):
+    """先写临时文件再整体替换：写手这时运行 next 读到的要么是旧的，要么是新的，不会是半个。"""
+    tmp = f"{Q}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, Q)
+
+
+def pending_slots(expect):
+    """→ (前言, 各块原文, 待办块在各块里的下标)。--expect 对不上直接退出 10。"""
+    text = B.read(Q) or ""
+    if expect and expect != B.queue_version(text):
+        die(10, "CONFLICT: queue.md 在这期间被改过（别人刚加了或改了任务），什么都没写。刷新后再操作。")
+    pre, raw = split_blocks(text)
+    parsed = [B.task_blocks(r)[0] for r in raw]
+    todo = B.task_pending(parsed, fold()[0])
+    return pre, raw, [next(i for i, b in enumerate(parsed) if b is t) for t in todo]
+
+
+def check_task_text(title, notes):
+    if not title or "\n" in title:
+        die(2, "ERROR: 标题要是一行非空的文字")
+    bad = [n for n in notes if B.TASK_HDR.match(n)]
+    if bad:
+        die(2, f"ERROR: 说明里顶格的「## 」会被当成另一个任务：{bad[0]}；小标题请用 ###")
+
+
+def slot(pos, slots):
+    if not re.fullmatch(r"\d+", pos or "") or not 1 <= int(pos) <= len(slots):
+        die(2, f"ERROR: 位置要是 1 到 {len(slots)} 之间的数字（队列里还没开始的任务按顺序数），现在是 {pos}")
+    return int(pos) - 1
+
+
+def cmd_move(src, dst, expect):
+    pre, raw, slots = pending_slots(expect)
+    a, b = slot(src, slots), slot(dst, slots)
+    if a == b:
+        print("位置没变。")
+        return 0
+    order = [raw[i].rstrip("\r\n") + "\n" for i in slots]   # 挪动的块去掉尾部空行，块间空行由 join_blocks 统一补
+    block = order.pop(a)
+    order.insert(b, block)
+    for i, r in zip(slots, order):          # 待办块只在自己原来占的那几个位置里换，前言和开始过的块不动
+        raw[i] = r
+    write_queue(join_blocks(pre, [r if r.endswith("\n") else r + "\n" for r in raw]))
+    t = B.task_blocks(block)[0]
+    print(f"已把 {t['id'] or '（未编号）'} {t['title']} 挪到队列第 {b + 1} 个。")
+    return 0
+
+
+def cmd_edit(pos, title, notes, expect):
+    title = title.strip()
+    check_task_text(title, notes)
+    pre, raw, slots = pending_slots(expect)
+    i = slots[slot(pos, slots)]
+    old = B.task_blocks(raw[i])[0]
+    raw[i] = f"## {old['id'] + ' ' if old['id'] else ''}{title}\n" + "".join(n.rstrip("\n") + "\n" for n in notes)
+    write_queue(join_blocks(pre, [r if r.endswith("\n") else r + "\n" for r in raw]))
+    print(f"已改写队列第 {int(pos)} 个：{old['id'] or '（未编号）'} {title}")
+    return 0
+
+
 def cmd_add(title, notes):
     title = title.strip()
     if not title or "\n" in title:
@@ -4187,6 +4333,14 @@ def main(argv):
         return 0 if argv else 2
     setup()
     cmd, rest = argv[0], argv[1:]
+    expect = None
+    if "--expect" in rest:
+        k = rest.index("--expect")
+        if k + 1 >= len(rest):
+            die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
+        expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
+        if cmd not in ("move", "edit"):
+            die(2, "ERROR: --expect 只用于 move / edit")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and not rest:
@@ -4199,6 +4353,10 @@ def main(argv):
         return cmd_go()
     if cmd == "drop" and rest:
         return cmd_drop(rest[0].upper(), " ".join(rest[1:]))
+    if cmd == "move" and len(rest) == 2:
+        return cmd_move(rest[0], rest[1], expect)
+    if cmd == "edit" and len(rest) >= 2:
+        return cmd_edit(rest[0], rest[1], rest[2:], expect)
     if cmd in ("pause", "resume") and not rest:
         return cmd_pause(cmd == "pause")
     die(2, f"ERROR: 用法不对：review-task {' '.join(argv)}\n\n{__doc__.strip()}")
@@ -4413,9 +4571,9 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 两档都以发出时的正文快照为准，开始后改 `queue.md` 不生效；要改就 `drop` 掉重发。四种写法（正常、不走规划、修好再审、不评审）各一个完整示例见 [`docs/queue-example.md`](queue-example.md)，那个文件本身就是能直接用的 `queue.md`。
 
-**命令**（在仓库目录里运行）：`add "标题" [说明行 …]` 加到队列末尾并自动编号；`list` 看全貌；`go` 放行；`drop T5 "原因"` 放弃；`pause` / `resume` 暂停或恢复发新任务，正在做的照常做完。退出码：0 发出任务或操作成功；8 停下把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法错误。
+**命令**（在仓库目录里运行）：`add "标题" [说明行 …]` 加到队列末尾并自动编号；`list` 看全貌；`go` 放行；`drop T5 "原因"` 放弃；`pause` / `resume` 暂停或恢复发新任务，正在做的照常做完；`move 4 1` 把队列里第 4 个还没开始的任务挪到第 1 个，`edit 2 "标题" [说明行 …]` 整块改写第 2 个（编号不变）——位置就是 `list` 里「队列」的序号，没编号的任务也能这样认；两者都可带 `--expect <指纹>`（`queue.md` 内容的短 sha1），对不上说明这期间队列被别人改过，什么都不写、退出码 10。改写时先写临时文件再整体替换，前言和开始过的块原地不动。退出码：0 发出任务或操作成功；8 停下把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法错误；10 队列在这期间被改过（`--expect` 对不上）。
 
-**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。静态文件只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令；用本机服务打开时（见前面「带按钮的看板」一段），放行、放弃队列里还没开始的任务、加任务都可以直接在页面上做。
+**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。静态文件只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令；用本机服务打开时（见前面「带按钮的看板」一段），放行、加任务，以及队列里还没开始的任务的放弃、调整顺序、修改，都可以直接在页面上做。
 
 ---
 

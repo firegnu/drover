@@ -20,7 +20,11 @@
   review-task go                      人：放行（放行模式）
   review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
-退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足。
+  review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
+  review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
+                                      --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写
+退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足；
+        10 队列在这期间被改过（--expect 对不上），什么都没写。
 .review.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
 """
 import importlib.machinery
@@ -227,6 +231,93 @@ def check_done(task):
 
 
 # ============================================================ 命令
+def split_blocks(text):
+    """queue.md → (第一个 ## 之前的前言, [每块的原文])；和看板的 task_blocks 用同一个标题行判据，逐行原样保留。"""
+    pre, blocks = [], []
+    for line in (text or "").splitlines(keepends=True):
+        if B.TASK_HDR.match(line.rstrip("\r\n")):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+        else:
+            pre.append(line)
+    return "".join(pre), ["".join(b) for b in blocks]
+
+
+def join_blocks(pre, blocks):
+    """块之间至少隔一个空行；只补缺的，不动原有的空行。"""
+    out = pre
+    for i, b in enumerate(blocks):
+        if out and not out.endswith("\n"):
+            out += "\n"
+        if i and not out.endswith("\n\n"):
+            out += "\n"
+        out += b
+    return out if out.endswith("\n") else out + "\n"
+
+
+def write_queue(text):
+    """先写临时文件再整体替换：写手这时运行 next 读到的要么是旧的，要么是新的，不会是半个。"""
+    tmp = f"{Q}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, Q)
+
+
+def pending_slots(expect):
+    """→ (前言, 各块原文, 待办块在各块里的下标)。--expect 对不上直接退出 10。"""
+    text = B.read(Q) or ""
+    if expect and expect != B.queue_version(text):
+        die(10, "CONFLICT: queue.md 在这期间被改过（别人刚加了或改了任务），什么都没写。刷新后再操作。")
+    pre, raw = split_blocks(text)
+    parsed = [B.task_blocks(r)[0] for r in raw]
+    todo = B.task_pending(parsed, fold()[0])
+    return pre, raw, [next(i for i, b in enumerate(parsed) if b is t) for t in todo]
+
+
+def check_task_text(title, notes):
+    if not title or "\n" in title:
+        die(2, "ERROR: 标题要是一行非空的文字")
+    bad = [n for n in notes if B.TASK_HDR.match(n)]
+    if bad:
+        die(2, f"ERROR: 说明里顶格的「## 」会被当成另一个任务：{bad[0]}；小标题请用 ###")
+
+
+def slot(pos, slots):
+    if not re.fullmatch(r"\d+", pos or "") or not 1 <= int(pos) <= len(slots):
+        die(2, f"ERROR: 位置要是 1 到 {len(slots)} 之间的数字（队列里还没开始的任务按顺序数），现在是 {pos}")
+    return int(pos) - 1
+
+
+def cmd_move(src, dst, expect):
+    pre, raw, slots = pending_slots(expect)
+    a, b = slot(src, slots), slot(dst, slots)
+    if a == b:
+        print("位置没变。")
+        return 0
+    order = [raw[i].rstrip("\r\n") + "\n" for i in slots]   # 挪动的块去掉尾部空行，块间空行由 join_blocks 统一补
+    block = order.pop(a)
+    order.insert(b, block)
+    for i, r in zip(slots, order):          # 待办块只在自己原来占的那几个位置里换，前言和开始过的块不动
+        raw[i] = r
+    write_queue(join_blocks(pre, [r if r.endswith("\n") else r + "\n" for r in raw]))
+    t = B.task_blocks(block)[0]
+    print(f"已把 {t['id'] or '（未编号）'} {t['title']} 挪到队列第 {b + 1} 个。")
+    return 0
+
+
+def cmd_edit(pos, title, notes, expect):
+    title = title.strip()
+    check_task_text(title, notes)
+    pre, raw, slots = pending_slots(expect)
+    i = slots[slot(pos, slots)]
+    old = B.task_blocks(raw[i])[0]
+    raw[i] = f"## {old['id'] + ' ' if old['id'] else ''}{title}\n" + "".join(n.rstrip("\n") + "\n" for n in notes)
+    write_queue(join_blocks(pre, [r if r.endswith("\n") else r + "\n" for r in raw]))
+    print(f"已改写队列第 {int(pos)} 个：{old['id'] or '（未编号）'} {title}")
+    return 0
+
+
 def cmd_add(title, notes):
     title = title.strip()
     if not title or "\n" in title:
@@ -354,6 +445,14 @@ def main(argv):
         return 0 if argv else 2
     setup()
     cmd, rest = argv[0], argv[1:]
+    expect = None
+    if "--expect" in rest:
+        k = rest.index("--expect")
+        if k + 1 >= len(rest):
+            die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
+        expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
+        if cmd not in ("move", "edit"):
+            die(2, "ERROR: --expect 只用于 move / edit")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and not rest:
@@ -366,6 +465,10 @@ def main(argv):
         return cmd_go()
     if cmd == "drop" and rest:
         return cmd_drop(rest[0].upper(), " ".join(rest[1:]))
+    if cmd == "move" and len(rest) == 2:
+        return cmd_move(rest[0], rest[1], expect)
+    if cmd == "edit" and len(rest) >= 2:
+        return cmd_edit(rest[0], rest[1], rest[2:], expect)
     if cmd in ("pause", "resume") and not rest:
         return cmd_pause(cmd == "pause")
     die(2, f"ERROR: 用法不对：review-task {' '.join(argv)}\n\n{__doc__.strip()}")
