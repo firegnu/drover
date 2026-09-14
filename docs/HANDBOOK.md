@@ -2892,8 +2892,8 @@ ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit
 .dsrc{margin-top:6px;font-size:11.5px;color:#8a8884}
 .dbody{margin-top:14px;border-top:1px solid #33353a;padding-top:12px;font-size:13px;line-height:1.7;color:#d6d3cc}
 .dbody .dh4{margin:12px 0 4px;font-weight:700;color:#f2f0eb}.dbody .dli{padding-left:16px;position:relative}.dbody .dli::before{content:"·";position:absolute;left:5px;color:#999793}.dbody .dgap{height:8px}
-.grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start}
-.side{border-right:1px solid #33353a;position:sticky;top:45px;align-self:start;padding:14px 0;max-height:calc(100vh - 45px);overflow:auto}
+.grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start;background:linear-gradient(to right,#1f2126 0,#1f2126 231px,#33353a 231px,#33353a 232px,transparent 232px)}
+.side{position:sticky;top:45px;align-self:start;padding:14px 0;max-height:calc(100vh - 45px);overflow:auto}
 .side .cap{padding:0 18px 8px;font-size:11px;color:#9a9893;letter-spacing:.06em}
 .proj{margin:2px 8px;padding:8px 10px 8px 10px;cursor:pointer;border-left:3px solid transparent;border-radius:5px;transition:background-color .12s}
 .proj:hover{background:#2c2e34}.proj.needs{border-left-color:#c8375a}.proj.sel{background:#30333a;border-left-color:#e6e4df}
