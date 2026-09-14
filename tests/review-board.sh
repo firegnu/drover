@@ -407,3 +407,41 @@ rm -f "${TMP}/board-notified.json"
 board "${TMP}/no-such-notifier" --notify || fail 'a missing notifier must not break the board'
 has 'Review board' 'page still written when notifications cannot be sent'
 echo 'PASS 等你 notifications: only with --notify, once per project, again when an item returns, escaped, never fatal'
+
+# ---- 本机服务：review-board serve。页面带令牌和按钮；放行、放弃转给 review-task；只认本机 Host / Origin 和令牌 ----
+lacks '<meta name="rb-token"' 'the static board carries no token'
+lacks 'data-act=' 'the static board carries no action buttons'
+PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" serve --projects "${TMP}/projects" --port "${PORT}" > /dev/null 2> "${TMP}/serve.err" &
+SERVE=$!
+trap 'kill "${SERVE}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+U="http://127.0.0.1:${PORT}"
+for _ in $(seq 50); do curl -s -o /dev/null "${U}/v" && break; sleep 0.1; done
+curl -s "${U}/" > "${TMP}/live.html" || { cat "${TMP}/serve.err"; fail 'serve answers GET /'; }
+TOKEN=$(sed -n 's/.*<meta name="rb-token" content="\([^"]*\)".*/\1/p' "${TMP}/live.html")
+[ -n "${TOKEN}" ] || fail 'served page embeds the token'
+grep -qF 'data-act="go" data-p="theta/repo" data-id="T3"' "${TMP}/live.html" || fail 'release button on the card waiting for release'
+grep -qF 'data-act="drop" data-p="eta/repo" data-id="T9"' "${TMP}/live.html" || fail 'drop button on a numbered pending task'
+grep -qF 'data-act="drop" data-p="eta/repo" data-id="T8"' "${TMP}/live.html" && fail 'no drop button on the task in progress'
+grep -q '"v"' <(curl -s "${U}/v") || fail 'GET /v returns a version'
+post() {   # <path> <json> [extra curl args…] → HTTP 状态码；响应体在 ${TMP}/resp
+  curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: application/json' "${@:3}" --data "$2" "${U}$1"
+}
+[ "$(post /api/go '{"project":"theta/repo"}')" = 403 ] || fail 'POST without the token is refused'
+[ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: wrong")" = 403 ] || fail 'POST with a wrong token is refused'
+[ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}" -H "Origin: http://evil.example")" = 403 ] || fail 'POST from another origin is refused'
+[ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}" -H "Host: evil.example:${PORT}")" = 403 ] || fail 'a foreign Host header is refused'
+[ "$(post /api/go '{"project":"nope/repo"}' -H "X-RB-Token: ${TOKEN}")" = 404 ] || fail 'unknown project'
+V1=$(curl -s "${U}/v")
+ES=$(wc -l < "${TMP}/eta/review/tasks.state")
+[ "$(post /api/drop '{"project":"eta/repo","id":"T8","reason":"x"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'the task in progress cannot be dropped from the page'
+[ "$(wc -l < "${TMP}/eta/review/tasks.state")" = "${ES}" ] || fail 'a refused drop writes nothing'
+[ "$(post /api/drop '{"project":"eta/repo","id":"T9","reason":"不需要了"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'drop a pending task'; }
+grep -q '"ok": true' "${TMP}/resp" || fail 'drop reports ok'
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "drop", "id": "T9".*不需要了' || fail 'drop goes through review-task with the reason'
+[ "$(post /api/go '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'go refused when nothing waits for release'
+[ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'release the finished task'; }
+tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go", "id": "T3"' || fail 'go goes through review-task'
+grep -q '继续' "${TMP}/resp" || fail 'go passes on what to tell the writer'
+[ "$(curl -s "${U}/v")" != "${V1}" ] || fail 'the version changes after the queue state changes'
+echo 'PASS review-board serve: token, local Host/Origin only, release and drop via review-task, in-progress task not droppable'

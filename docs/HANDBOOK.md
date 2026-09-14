@@ -258,6 +258,7 @@ rubric 放仓库外还有个用意：写手读不到（虽然有 shell 就能 ca
 ✋ ~/.local/bin/review-board            # 全局；看板生成器，request-review 每次退出时调用
 ✋ ~/.local/bin/review-map              # 全局；从归档/依赖/测试生成风险图草案，--suggest 给出差异
 ✋ ~/Library/LaunchAgents/dev.herdsman.review-board.plist   # 每 30 秒生成一次看板，install.sh 装
+✋ ~/Library/LaunchAgents/dev.herdsman.review-board-serve.plist   # 看板的本机服务 http://127.0.0.1:10086/（放行 / 放弃按钮），install.sh 装
 ✋ ~/.config/review/rubric.md           # 全局
 ⚙ ~/.review/board.html                 # 只读看板，review-board 生成，浏览器常开
 ⚙ ~/.review/<短名>/                     # 交接目录，脚本 mkdir -p
@@ -310,6 +311,8 @@ rubric 放仓库外还有个用意：写手读不到（虽然有 shell 就能 ca
 agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
+
+**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出两个按钮：做完等放行的任务卡上的「放行」，队列里还没开始、有编号的任务悬停时出现的「放弃」（可填原因）；都先弹确认框，结果原样显示 `review-task` 的输出。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `review-task drop`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
 
 项目发现：`~/Developer/personal_projs/*/.review.conf`，加上 `~/.review/projects` 里登记的路径（`herdsman-init`
 自动登记，所以仓库放在哪都会被扫到；一行一个路径，可手动增删）。
@@ -1907,10 +1910,14 @@ F4 defer — 命名问题成立，但本轮不改，留 Backlog
 项目发现: ~/Developer/personal_projs/*/.review.conf；另可在 ~/.review/projects 里一行一个仓库路径。
 """
 import glob
+import hashlib
+import hmac
 import html
+import http.server
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -2757,6 +2764,17 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 .tasks .foot-note{margin-top:10px;font-size:11.5px;color:#8a8884}.tasks .foot-note code{color:#a3a19b}
 [hidden]{display:none!important}
 :focus-visible{outline:2px solid #4a7fc1;outline-offset:2px}
+.act{display:none}.live .act{display:inline-block;font:600 11.5px/1 inherit;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid transparent}
+.live .act.go{background:#c8375a;color:#fff;margin-top:6px}.live .act.go:hover{background:#d8456a}
+ol.q li{position:relative}.live ol.q li .act.drop{position:absolute;top:8px;right:8px;padding:3px 9px;background:#2d2f35;color:#c9c7c1;border-color:#4a4c52;opacity:0;transition:opacity .12s}
+.live ol.q li:hover .act.drop,.live ol.q li .act.drop:focus-visible{opacity:1}.live ol.q li .act.drop:hover{border-color:#e5b866;color:#e5b866}
+dialog.rbd{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(460px,90vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
+dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
+.rbd-t{font-size:15px;font-weight:700;color:#f2f0eb}.rbd-m{margin-top:8px;font-size:12.5px;color:#b1afa9;line-height:1.6}
+.rbd-r{margin-top:12px;width:100%;box-sizing:border-box;font:12.5px inherit;padding:6px 10px;border:1px solid #42444a;border-radius:4px;background:#222429;color:#e6e4df;outline:none}.rbd-r:focus{border-color:#4a7fc1}
+.rbd-out{margin:12px 0 0;padding:8px 10px;border-radius:4px;font-size:12px;white-space:pre-wrap;background:#222429;border:1px solid #36383e;color:#c9c7c1}.rbd-out.ok{border-color:#356243}.rbd-out.bad{border-color:#803733;color:#f0a3b3}
+.rbd-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.rbd-b button{font:600 12.5px inherit;padding:6px 14px;border-radius:4px;cursor:pointer;border:1px solid #45474d;background:#2d2f35;color:#d6d3cc}
+.rbd-b .rbd-ok{background:#4a7fc1;border-color:#4a7fc1;color:#fff}.rbd-b .rbd-ok:disabled{opacity:.6;cursor:default}
 .side,pre.block,.drawer .dct{scrollbar-width:thin;scrollbar-color:#414348 transparent}
 .lanes .lb{max-height:min(46vh,440px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#414348 transparent}
 .blist{max-height:min(60vh,560px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#46484d transparent}
@@ -2904,6 +2922,11 @@ h2 .sub{font-weight:400;color:#999793;font-size:12px;margin-left:6px}
 DRAWER = ('<div class="scrim" hidden></div><aside class="drawer" hidden><div class="dhd"><span>任务描述 · Esc 关闭</span>'
           '<button class="dx" type="button">关闭</button></div><div class="dct"></div></aside>')
 
+# 本机服务打开时的确认框：放行 / 放弃都先确认，结果原样显示 review-task 的输出
+LIVE_DIALOG = ('<dialog class="rbd"><form method="dialog"><div class="rbd-t"></div><div class="rbd-m"></div>'
+               '<input class="rbd-r" type="text" maxlength="300" placeholder="原因（可留空）"><pre class="rbd-out" hidden></pre>'
+               '<div class="rbd-b"><button value="cancel" class="rbd-no">取消</button><button value="ok" class="rbd-ok">确认</button></div></form></dialog>')
+
 JS = """
 (function(){
   var KEY='rb.selected';
@@ -2950,12 +2973,41 @@ JS = """
   if(st.y)window.scrollTo(0,st.y);
   (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb,.blist')[i];if(b)b.scrollTop=v});
   if(st.td){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
-  setInterval(function(){if(document.hidden)return;
+  function reloadKeep(){
     try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
       open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
       ls:[].map.call(document.querySelectorAll('.lb,.blist'),function(b){return b.scrollTop}),
       td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0})}catch(e){}
-    location.reload()},30000);
+    location.reload()}
+  var dlg=document.querySelector('dialog.rbd');
+  setInterval(function(){if(document.hidden||(dlg&&dlg.open))return;reloadKeep()},30000);
+  // 本机服务打开时（页面里有令牌）：放行 / 放弃按钮可用；每 4 秒问一次有没有变化，变了就刷新（确认框开着时不刷）
+  var tk=document.querySelector('meta[name=rb-token]');
+  if(tk&&dlg){
+    document.body.classList.add('live');
+    var ver=null;
+    setInterval(function(){if(document.hidden||dlg.open)return;
+      fetch('/v',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+        if(ver&&j.v!==ver)reloadKeep();ver=j.v}).catch(function(){})},4000);
+    var f=dlg.querySelector('form'),t=dlg.querySelector('.rbd-t'),m=dlg.querySelector('.rbd-m'),
+        rs=dlg.querySelector('.rbd-r'),out=dlg.querySelector('.rbd-out'),ok=dlg.querySelector('.rbd-ok'),no=dlg.querySelector('.rbd-no'),cur=null;
+    document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
+      e.preventDefault();e.stopPropagation();cur=b.dataset;
+      var go=cur.act==='go';
+      t.textContent=(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title;
+      m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。':'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。';
+      rs.hidden=go;rs.value='';out.hidden=true;out.textContent='';ok.hidden=false;ok.disabled=false;no.textContent='取消';
+      dlg.showModal();if(!go)rs.focus()},true);
+    f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
+      ok.disabled=true;
+      fetch('/api/'+cur.act,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
+        body:JSON.stringify({project:cur.p,id:cur.id,reason:rs.value})})
+        .then(function(r){return r.json()}).then(function(j){
+          out.hidden=false;out.textContent=j.out||'';out.className='rbd-out'+(j.ok?' ok':' bad');
+          ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
+        .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：review-board serve 还在运行吗？';ok.disabled=false})});
+    dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
+  }
 })();
 """
 
@@ -3215,13 +3267,13 @@ def task_desc(key, tid, title, status, meta, body, source):
             f'<div class="dsrc">{esc(source)}</div><div class="dbody">{task_body_html(body)}</div></template>')
 
 
-def render_tasks(p):
+def render_tasks(p, live=None):
     """任务区：独立的框，队列 / 进行中（阶段条）/ 已完成三栏，队列和已完成各自滚动；点任务在右侧抽屉看全文。
     只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 review-task。"""
     tv = p.get("tasks")
     if not tv:
         return ""
-    live, snap = "queue.md 当前内容（还没发出，改了就生效）", "发出时的快照（写手收到的版本；之后改 queue.md 不影响它）"
+    src_queue, src_snap = "queue.md 当前内容（还没发出，改了就生效）", "发出时的快照（写手收到的版本；之后改 queue.md 不影响它）"
     descs = []
     mode = ('<span class="mode paused">暂停中</span>' if tv["paused"] else
             '<span class="mode gate">放行模式</span>' if tv["gate"] else '<span class="mode">自动模式</span>')
@@ -3243,8 +3295,11 @@ def render_tasks(p):
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
-        q.append(f'<li data-td="{esc(key)}"><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + '</li>')
-        descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], live))
+        # 页面上只能放弃还没开始、有编号的任务（review-task drop 按编号认）；正在做的在终端里停
+        drop = (f'<button class="act drop" type="button" data-act="drop" data-p="{esc(p["name"])}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>'
+                if live and b["id"] else "")
+        q.append(f'<li data-td="{esc(key)}"><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{drop}</li>')
+        descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], src_queue))
     queue = f'<ol class="q">{"".join(q)}</ol>' if q else '<div class="empty">空</div>'
     if c:
         rows = []
@@ -3254,6 +3309,9 @@ def render_tasks(p):
         if c["waiting"]:
             nxt = tv["todo"][0]["title"] if tv["todo"] else ""
             line = '<span>核对通过，等你放行</span>' + (f'<span class="dim">放行后发出：{esc(nxt)}</span>' if nxt else '<span class="dim">放行后队列就空了</span>')
+            if live:
+                line += (f'<span><button class="act go" type="button" data-act="go" data-p="{esc(p["name"])}" data-id="{esc(c["id"])}" '
+                         f'data-title="{esc(c["title"])}">放行 {esc(c["id"])}</button></span>')
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
@@ -3263,7 +3321,7 @@ def render_tasks(p):
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
         descs.append(task_desc(key, c["id"], c["title"], "做完了 · 等你放行" if c["waiting"] else "进行中",
-                               f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], snap))
+                               f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], src_snap))
     else:
         doing = f'<div class="empty">{"队列空了，写手会停下" if not tv["todo"] else "没有进行中的任务"}</div>'
     fin = []
@@ -3273,7 +3331,7 @@ def render_tasks(p):
             fin.append(f'<div class="drow dropped" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                        f'<span class="r">放弃</span><span class="s"><span>{esc(f["reason"] or "没写原因")}</span></span></div>')
             descs.append(task_desc(key, f["id"], f["title"], "放弃", f'<span>原因：{esc(f["reason"] or "没写原因")}</span>',
-                                   f["body"], snap if f["body"] else "没发出过，队列里的原文已不在快照中"))
+                                   f["body"], src_snap if f["body"] else "没发出过，队列里的原文已不在快照中"))
             continue
         rounds = " · ".join(x for x in (f'计划评审 {f["plan_n"]}' if f["plan_n"] else "", f'代码评审 {f["code_n"]}' if f["code_n"] else "") if x) or "无评审"
         kind = ('<span class="kind noreview">未评审</span>' if f["noreview"] else
@@ -3281,7 +3339,7 @@ def render_tasks(p):
         rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
         fin.append(f'<div class="drow" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
-        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], snap))
+        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
     return (f'<section class="tasks"><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
             f'<span class="src">点任务看全文 · queue.md · tasks.state</span></div><div class="lanes">'
@@ -3292,7 +3350,7 @@ def render_tasks(p):
             f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
 
-def render_panel(p, archives, self_closed):
+def render_panel(p, archives, self_closed, live=None):
     parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
     badge = state_badge(p)
     parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
@@ -3329,7 +3387,7 @@ def render_panel(p, archives, self_closed):
             rows = "".join(f'<li><span class="mute">{"建议降级" if k == "lower" else "建议加入"}</span> <code>{esc(g)}</code> {esc(lv)} <span class="dim">· {esc(why)}</span></li>' for k, g, lv, why in sug)
             body += f'<details class="mapsug"><summary>不急 · 风险图有 {len(sug)} 条建议，等你点头</summary><ul>{rows}</ul></details>'
         parts.append(f'<div class="wait{"" if items else " calm"}" id="w-{esc(p["name"])}">{body}</div>')
-    parts.append(render_tasks(p))
+    parts.append(render_tasks(p, live))
     pl = p.get("planning")
     if pl:
         parts.append(f'<div class="planning"><b>规划中</b><span class="age">{ago(pl["since"])}</span>'
@@ -3491,7 +3549,8 @@ def notify_new(projects, state_path):
             os.remove(tmp)
 
 
-def render(projects, archives, self_closed):
+def render(projects, archives, self_closed, live=None):
+    """live：本机服务打开时的 {"token": …}，页面多出令牌、放行 / 放弃按钮和确认框；静态文件为 None，和原来一样。"""
     waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
     if waits:
         banner = (f'<div class="banner"><div class="t">等你 · {len(waits)}</div><div class="items">' + "".join(
@@ -3504,7 +3563,7 @@ def render(projects, archives, self_closed):
         status = state_badge(p)
         side.append(f'<div class="proj{" needs" if p["needs_me"] else ""}" data-p="{esc(p["name"])}"><div class="row"><span class="nm">{esc(p["name"])}</span>'
                     f'<span class="age">{ago(p["since"])}</span></div><div class="st">{status}<span class="who">{esc(p["waiting"])}</span></div></div>')
-    panels = "".join(render_panel(p, archives[p["name"]], self_closed[p["name"]]) for p in projects)
+    panels = "".join(render_panel(p, archives[p["name"]], self_closed[p["name"]], live) for p in projects)
     gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     kinds = sorted({p["kind"] for p in projects}) or ["claude"]
     writer_kinds = [((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects]
@@ -3517,10 +3576,11 @@ def render(projects, archives, self_closed):
                          next((p["plan_args"] for p in projects if p.get("plan_kind")), ""))
     mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>'
             f'<span class="gen">生成于 {gen[11:]}</span></div>')
-    return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title><style>{CSS}</style></head><body>'
+    token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
+    return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
             f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .review.conf 指向的交接目录与 docs/reviews</div></div>'
-            + (DRAWER if 'data-td="' in panels else "") +
+            + (DRAWER if 'data-td="' in panels else "") + (LIVE_DIALOG if live else "") +
             f'<script>{JS}</script></body></html>')
 
 
@@ -3539,10 +3599,8 @@ def discover(list_path):
     return out
 
 
-def main():
-    args = sys.argv[1:]
-    out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
-    list_path = args[args.index("--projects") + 1] if "--projects" in args else None
+def collect(list_path):
+    """各项目的当前状态 → (projects, archives, self_closed)；生成静态页和本机服务共用。"""
     projects, archives, self_closed = [], {}, {}
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.review.conf")
@@ -3560,6 +3618,119 @@ def main():
     archives = {p["name"]: archives[p["repo"]] for p in projects}
     self_closed = {p["name"]: self_closed[p["repo"]] for p in projects}
     projects.sort(key=lambda p: (not p["needs_me"], -(p["since"] or p["last_activity"] or 0), p["name"]))
+    return projects, archives, self_closed
+
+
+# ============================================================ 本机服务（review-board serve）
+# 静态看板改不了任何东西；这个服务只监听 127.0.0.1，页面上的放行 / 放弃发到这里，再原样转给 review-task ——
+# 写入权仍只在 review-task（它的核对一条不绕过）。防别的网页伪造请求：Host / Origin 只认本机这个端口，
+# 请求必须带启动时随机生成、嵌在页面里的令牌，而且是 JSON（跨源的 JSON POST 要先预检，这里不应答预检）。
+def live_version(list_path):
+    """交接目录、docs/reviews、git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
+    h = hashlib.sha1()
+    for repo in discover(list_path):
+        d = parse_conf(f"{repo}/.review.conf").get("REVIEW_DIR")
+        for base in (d, f"{repo}/docs/reviews"):
+            try:
+                for e in sorted(os.scandir(base), key=lambda e: e.name):
+                    h.update(f"{e.path}:{e.stat().st_mtime_ns}\n".encode())
+            except (OSError, TypeError):
+                pass
+        for f in (f"{repo}/.git/HEAD", f"{repo}/.git/logs/HEAD"):
+            try:
+                h.update(f"{f}:{os.stat(f).st_mtime_ns}\n".encode())
+            except OSError:
+                pass
+    return h.hexdigest()[:16]
+
+
+def live_action(list_path, act, body):
+    """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 review-task。"""
+    projects, _, _ = collect(list_path)
+    p = next((x for x in projects if x["name"] == body.get("project")), None)
+    if not p:
+        return 404, {"ok": False, "out": "找不到这个项目"}
+    tv = p.get("tasks")
+    if not tv:
+        return 409, {"ok": False, "out": "这个项目没有接任务队列"}
+    task_bin = os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
+    if act == "go":
+        if not tv["awaiting"]:
+            return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
+        cmd = [task_bin, "go"]
+    else:
+        tid = str(body.get("id") or "")
+        if tid not in [b["id"] for b in tv["todo"] if b["id"]]:
+            return 409, {"ok": False, "out": f"{tid or '这个任务'} 不在队列里还没开始的任务中：页面上只能放弃还没开始、有编号的任务"}
+        reason = " ".join(str(body.get("reason") or "").split())[:300]
+        cmd = [task_bin, "drop", tid, reason]
+    r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
+    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": (r.stdout + r.stderr).strip()}
+
+
+def serve(args):
+    port = int(args[args.index("--port") + 1]) if "--port" in args else int(os.environ.get("REVIEW_BOARD_PORT", "10086"))
+    list_path = args[args.index("--projects") + 1] if "--projects" in args else None
+    token = secrets.token_urlsafe(24)
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def reply(self, code, body, ctype="application/json; charset=utf-8"):
+            data = body if isinstance(body, bytes) else (json.dumps(body, ensure_ascii=False) if not isinstance(body, str) else body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.headers.get("Host", "") not in hosts:
+                return self.reply(403, {"ok": False, "out": "只接受本机访问"})
+            path = self.path.split("?", 1)[0]
+            if path in ("/", "/index.html"):
+                return self.reply(200, render(*collect(list_path), live={"token": token}), "text/html; charset=utf-8")
+            if path == "/v":
+                return self.reply(200, {"v": live_version(list_path)})
+            return self.reply(404, {"ok": False, "out": "没有这个地址"})
+
+        def do_POST(self):
+            origin = self.headers.get("Origin")
+            if self.headers.get("Host", "") not in hosts or (origin and origin not in {f"http://{h}" for h in hosts}):
+                return self.reply(403, {"ok": False, "out": "只接受本机页面的请求"})
+            if not hmac.compare_digest(self.headers.get("X-RB-Token", ""), token):
+                return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
+            if not self.headers.get("Content-Type", "").startswith("application/json"):
+                return self.reply(415, {"ok": False, "out": "只接受 JSON"})
+            act = {"/api/go": "go", "/api/drop": "drop"}.get(self.path)
+            if not act:
+                return self.reply(404, {"ok": False, "out": "没有这个操作"})
+            try:
+                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
+                assert isinstance(body, dict)
+            except (ValueError, AssertionError):
+                return self.reply(400, {"ok": False, "out": "请求格式不对"})
+            code, res = live_action(list_path, act, body)
+            return self.reply(code, res)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"review-board serve: http://127.0.0.1:{port}/", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["serve"]:
+        return serve(args[1:])
+    out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
+    list_path = args[args.index("--projects") + 1] if "--projects" in args else None
+    projects, archives, self_closed = collect(list_path)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     # 先写临时文件再改名：浏览器 30 秒一刷，直接覆盖会有一瞬读到空文件。临时文件名带进程号：launchd 的定时刷新
     # 和 request-review 退出时的刷新会同时跑，共用一个名字时后到的那个改名会扑空。写失败就删掉自己的，不留残留。
@@ -4172,7 +4343,7 @@ AGENTS.md §16 里「计划由规划者写」那一节是写给写手的：你�
 
 **命令**（在仓库目录里运行）：`add "标题" [说明行 …]` 加到队列末尾并自动编号；`list` 看全貌；`go` 放行；`drop T5 "原因"` 放弃；`pause` / `resume` 暂停或恢复发新任务，正在做的照常做完。退出码：0 发出任务或操作成功；8 停下把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法错误。
 
-**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。它只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令。
+**看板上。** 接了队列的项目多一个独立的「任务看板」框（队列和已完成两栏限高、各自滚动；点任意一条任务，右侧抽屉显示它的全文，Esc 关闭——没发出的读 `queue.md` 当前内容，发出过的读写手收到的快照）：队列（序号就是顺序，第一个标「下一个」，没编号的标「手写」）、进行中（五格阶段条：规划 → 计划评审 → 实施 → 代码评审 → 收尾，当前那一格按正开着的周期着色）、已完成（用时、评审轮数、sha 区间，放弃的划掉并写原因）。`流程：…` 的任务在队列和进行中卡片上标出档位；「不评审」的做完后在已完成里标「未评审」，方便事后查哪些代码没审过。静态文件只读：加任务、调顺序在 `queue.md` 里做，放行、暂停用上面的命令；用本机服务打开时（见前面「带按钮的看板」一段），放行和放弃队列里还没开始的任务可以直接在页面上点。
 
 ---
 

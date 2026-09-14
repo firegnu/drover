@@ -54,6 +54,15 @@ if [ "$(uname)" = Darwin ]; then
   else
     echo "  ✗ launchctl bootstrap 失败：${PLIST}"
   fi
+  # 看板的本机服务（放行 / 放弃按钮）：常驻，挂了自动拉起；重装时先卸再装，用上新版本
+  SPLIST="${AGENTS}/dev.herdsman.review-board-serve.plist"
+  sed "s|__HOME__|${HOME}|g" "${SRC}/templates/review-board-serve.plist" > "${SPLIST}"
+  launchctl bootout "gui/$(id -u)/dev.herdsman.review-board-serve" >/dev/null 2>&1 || true
+  if launchctl bootstrap "gui/$(id -u)" "${SPLIST}" 2>/dev/null; then
+    echo "  ✓ ${SPLIST}（看板带按钮的版本：http://127.0.0.1:10086/）"
+  else
+    echo "  ✗ launchctl bootstrap 失败：${SPLIST}"
+  fi
 fi
 
 echo
