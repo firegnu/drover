@@ -879,8 +879,8 @@ def md(text):
 
 # ============================================================ 渲染
 CSS = """
-:root{--s0:#222429;--rail:#1f2126;--s1:#26282d;--s2:#2e3036;--s3:#35383e;--mast:#16181d;--line:#34363c;--line-soft:#2d2f35;--line-strong:#45474d;
---t1:#f2f0eb;--t2:#e6e4df;--t3:#b1afa9;--t4:#8f8d88;--t5:#6f7176;
+:root{--s0:#1b1e26;--rail:#181b22;--s1:#21252e;--s2:#2a2f3a;--s3:#333947;--mast:#13161d;--mast-hi:#1c2029;--line:rgba(255,255,255,.08);--line-soft:rgba(255,255,255,.05);--line-strong:rgba(255,255,255,.15);
+--t1:#f4f5f8;--t2:#e2e4ea;--t3:#aeb3bf;--t4:#858b98;--t5:#646a77;
 --red:#c8375a;--red-t:#f0a3b3;--red-bg:#3a2530;--blue:#4a7fc1;--blue-t:#8fb8ee;--blue-bg:#27364a;--purple:#8f6ccf;--purple-t:#c4a6f0;--purple-bg:#332c50;
 --amber:#d9a83a;--amber-t:#e5b866;--amber-bg:#3e3324;--green:#4a8a55;--green-t:#7fd48a;--green-bg:#273e33;
 --r1:4px;--r2:6px;--r3:8px;--fs1:11px;--fs2:12px;--fs3:13px;--fs4:15px;--fs5:20px;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
@@ -894,9 +894,9 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .hit{outline:2px solid var(--red);outline-offset:2px}
 .mute{color:var(--t4)}.dim{color:var(--t3)}.ink{color:var(--t5)}
 .wrap{min-height:100vh;display:flex;flex-direction:column;min-width:1200px}
-.mast{display:flex;align-items:center;gap:20px;padding:0 24px;height:46px;background:var(--mast);color:var(--t2);border-bottom:1px solid #000;box-shadow:0 1px 0 var(--line-soft);position:sticky;top:0;z-index:5}
+.mast{display:flex;align-items:center;gap:20px;padding:0 24px;height:46px;background:linear-gradient(var(--mast-hi),var(--mast));color:var(--t2);border-bottom:1px solid rgba(0,0,0,.6);box-shadow:0 1px 0 rgba(255,255,255,.06);position:sticky;top:0;z-index:5}
 .mast .brand{font-weight:700;font-size:var(--fs4);letter-spacing:.01em;color:#fff}
-.mast .agents{display:flex;align-items:center;gap:8px;font-size:var(--fs2);flex-wrap:wrap}.mast .ag{padding:0 11px;line-height:24px;border:1px solid #3a3c43;border-radius:999px;background:#21232a}.mast .ag b{font-weight:600;margin-right:6px}
+.mast .agents{display:flex;align-items:center;gap:8px;font-size:var(--fs2);flex-wrap:wrap}.mast .ag{padding:0 11px;line-height:24px;border:1px solid rgba(255,255,255,.1);border-radius:999px;background:rgba(255,255,255,.04)}.mast .ag b{font-weight:600;margin-right:6px}
 .mast .ag.wr{color:var(--amber-t)}.mast .ag.rv{color:var(--blue-t)}.mast .ag.pl{color:var(--purple-t)}.mast .ag .off{color:var(--t5)}
 .mast .agents .mute{color:var(--t4)}
 .mast .gen{margin-left:auto;font-size:var(--fs2);color:var(--t4);font-variant-numeric:tabular-nums}.mast .golive{color:var(--blue-t)}
@@ -958,7 +958,7 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .rbd-out{margin:12px 0 0;padding:8px 10px;border-radius:var(--r1);font-size:var(--fs2);white-space:pre-wrap;background:var(--s0);border:1px solid var(--line);color:var(--t3)}.rbd-out.ok{border-color:#356243}.rbd-out.bad{border-color:#803733;color:var(--red-t)}
 .rbd-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.rbd-b button{font:600 var(--fs3) inherit;padding:7px 14px;border-radius:var(--r1);cursor:pointer;border:1px solid var(--line-strong);background:var(--s2);color:var(--t2)}
 .rbd-b .rbd-ok{background:var(--blue);border-color:var(--blue);color:#fff}.rbd-b .rbd-ok:disabled{opacity:.6;cursor:default}
-.hp{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font:var(--fs2) inherit;color:var(--t3);background:#21232a;border:1px solid #3a3c43;border-radius:999px;padding:0 11px 0 9px;line-height:24px;cursor:pointer;font-variant-numeric:tabular-nums}
+.hp{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font:var(--fs2) inherit;color:var(--t3);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:0 11px 0 9px;line-height:24px;cursor:pointer;font-variant-numeric:tabular-nums}
 .hp:hover{border-color:var(--line-strong);color:var(--t2)}.hp .hdot,.hrow .hdot{width:8px;height:8px;border-radius:50%;background:var(--t5);flex:none}
 .hp.ok .hdot,.hrow.ok .hdot{background:#5fb36a;box-shadow:0 0 0 3px rgba(95,179,106,.2)}.hp.warn .hdot,.hrow.warn .hdot{background:var(--amber-t);box-shadow:0 0 0 3px rgba(229,184,102,.2)}
 .hp.warn{color:var(--amber-t);border-color:#5e4c2c}.hp.bad .hdot{background:#e5533d;box-shadow:0 0 0 3px rgba(229,83,61,.25)}.hp.bad{color:var(--red-t);border-color:#6e3345}
@@ -1127,6 +1127,9 @@ h2 .sub{font-weight:400;color:var(--t4);font-size:var(--fs2);margin-left:8px}
 .tab{font-variant-numeric:tabular-nums}
 .foot{padding:14px 24px;color:var(--t4);font-size:var(--fs1);border-top:1px solid var(--line)}
 .empty{color:var(--t4);padding:8px 0;font-size:var(--fs2)}
+.tasks,.sec,.round,.cycle,details.prev,.wait,.planning,details.lastrun{box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 10px 28px -16px rgba(0,0,0,.6)}
+ol.q li,.drow,.card,.bhead,.crew .agent,.accum,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.lanes .empty{border-color:rgba(255,255,255,.12)}
 """
 
 # 任务全文抽屉：整页只有一个，盖在页面右侧，不占看板空间；内容由 JS 从被点任务的 <template> 里取
