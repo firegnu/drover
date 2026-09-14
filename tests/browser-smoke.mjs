@@ -80,6 +80,18 @@ await until("drop confirmation opens and cancels", `${eta}const b=P.querySelecto
   const d=document.querySelector('dialog.rbd');const ok=d.open&&d.querySelector('.rbd-t').textContent.indexOf('放弃')===0&&!d.querySelector('.rbd-r').hidden;
   d.querySelector('.rbd-no').click();await new Promise(r=>setTimeout(r,80));return ok&&!d.open`);
 
+// 确认框点「确认」真的生效（放行 / 放弃 / 暂停 / 恢复 / 开关循环共用同一段提交代码）：暂停再恢复
+await until("confirming pause really pauses", `${eta}const b=P.querySelector('[data-act="pause"]');if(!b)return 'no pause button';b.click();
+  await new Promise(r=>setTimeout(r,80));const d=document.querySelector('dialog.rbd');d.querySelector('.rbd-ok').click();
+  for(let i=0;i<30&&d.querySelector('.rbd-out').hidden;i++)await new Promise(r=>setTimeout(r,100));
+  const ok=/rbd-out ok/.test(d.querySelector('.rbd-out').className);if(ok)d.querySelector('.rbd-no').click();return ok`);
+await sleep(1500);
+await until("confirming resume really resumes", `${eta}const b=P.querySelector('[data-act="resume"]');if(!b)return 'no resume button';b.click();
+  await new Promise(r=>setTimeout(r,80));const d=document.querySelector('dialog.rbd');d.querySelector('.rbd-ok').click();
+  for(let i=0;i<30&&d.querySelector('.rbd-out').hidden;i++)await new Promise(r=>setTimeout(r,100));
+  const ok=/rbd-out ok/.test(d.querySelector('.rbd-out').className);if(ok)d.querySelector('.rbd-no').click();return ok`);
+await sleep(1500);
+
 // 查看全部：列表、筛「放弃」、点一行看详情
 await until("history drawer lists, filters and opens a task", `${eta}P.querySelector('[data-act="history"]').click();
   for(let i=0;i<30&&!document.querySelector('.drawer .hlist2 .drow');i++)await new Promise(r=>setTimeout(r,100));
@@ -102,5 +114,5 @@ process.kill(Number(servePid));
 await until("pill turns red and buttons disable when the service stops", `const h=document.querySelector('.hp');
   const b=document.querySelector('.panel.sel [data-act]');return /\\bbad\\b/.test(h.className)&&document.body.classList.contains('offline')&&(!b||getComputedStyle(b).pointerEvents==='none')`, 12000);
 
-console.log("PASS browser smoke: live mode, health pill, task drawer, editor preview, drop dialog, history, move, offline");
+console.log("PASS browser smoke: live mode, health pill, task drawer, editor preview, drop dialog, confirm (pause/resume), history, move, offline");
 ws.close(); await finish(0);

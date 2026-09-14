@@ -1258,7 +1258,7 @@ JS = """
     f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       ok.disabled=true;
       fetch('/api/'+cur.act,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify(cur.act==='drop'?{project:cur.p,pos:+cur.pos,reason:rs.value,expect:qvOf(cur.p)}:lp?{project:cur.p,on:cur.on!=='1'}:{project:cur.p,id:cur.id,reason:rs.value})})
+        body:JSON.stringify(cur.act==='drop'?{project:cur.p,pos:+cur.pos,reason:rs.value,expect:qvOf(cur.p)}:cur.act==='loop'?{project:cur.p,on:cur.on!=='1'}:{project:cur.p,id:cur.id,reason:rs.value})})
         .then(function(r){return r.json()}).then(function(j){
           out.hidden=false;out.textContent=j.out||'';out.className='rbd-out'+(j.ok?' ok':' bad');
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
