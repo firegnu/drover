@@ -2735,7 +2735,7 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .lanes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.45fr) minmax(0,1.15fr);gap:20px;align-items:start}
 .lane>.lh{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid #4f5156;padding:6px 0;font-size:11px;letter-spacing:.04em;color:#999793}.lane>.lh .n{font-variant-numeric:tabular-nums;color:#a3a19b}
 .tid{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;color:#a3a19b;margin-right:7px}
-ol.q{list-style:none;margin:0;padding:0;counter-reset:q}ol.q li{counter-increment:q;display:grid;grid-template-columns:18px minmax(0,1fr);gap:3px 8px;padding:9px 0;border-bottom:1px solid #303237}
+ol.q{list-style:none;margin:0;padding:0;counter-reset:q}ol.q li{counter-increment:q;display:grid;grid-template-columns:18px minmax(0,1fr);gap:3px 8px;padding:9px 10px 9px 8px;margin:0 0 8px;background:#2e3036;border:1px solid #3c3e44;border-left:3px solid #56595f;border-radius:3px}ol.q li:first-child{border-left-color:#8fb8ee}
 ol.q li::before{content:counter(q);grid-row:span 2;color:#787674;font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px}
 ol.q .t{color:#e6e4df;font-size:13px}ol.q .sub{font-size:11.5px;color:#999793;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
 .next{font-size:10.5px;font-weight:700;color:#222429;background:#e6e4df;border-radius:2px;padding:0 5px;line-height:16px}.next.hold{background:transparent;color:#f0a3b3;border:1px solid #613344;font-weight:600}
@@ -2748,7 +2748,7 @@ ol.steps li.ok{border-top-color:#3f7a49;color:#a3a19b}ol.steps li.ok .x{color:#8
 ol.steps li.now{border-top-color:#4a7fc1;color:#8fb8ee;font-weight:700}ol.steps li.now .x{color:#8fb8ee;font-weight:400}
 ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.release .x{color:#f0a3b3}
 .card .nowl{border-top:1px solid #33353a;padding-top:8px;display:grid;gap:3px;font-size:12.5px;color:#d6d3cc}.card .nowl .dim{color:#999793;font-size:12px}
-.drow{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:3px 10px;padding:9px 0;border-bottom:1px solid #303237;align-items:baseline}
+.drow{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:3px 10px;padding:9px 10px 9px 8px;margin:0 0 8px;align-items:baseline;background:#2e3036;border:1px solid #3c3e44;border-left:3px solid #3f7a49;border-radius:3px}.drow.dropped{border-left-color:#6b5325}
 .drow .t{color:#d6d3cc;font-size:12.5px}.drow .r{font-size:11.5px;color:#999793;font-variant-numeric:tabular-nums;white-space:nowrap}
 .drow .s{grid-column:2 / 4;font-size:11px;color:#8a8884;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}.drow .s code{font-size:10.5px;color:#8a8884}
 .drow.dropped .t{color:#999793;text-decoration:line-through;text-decoration-color:#686763}.drow.dropped .r{color:#e5b866}
@@ -2757,8 +2757,9 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 .tasks .foot-note{margin-top:10px;font-size:11.5px;color:#8a8884}.tasks .foot-note code{color:#a3a19b}
 [hidden]{display:none!important}
 .lanes .lb{max-height:min(46vh,440px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#414348 transparent}
-.lanes .lb::-webkit-scrollbar{width:8px}.lanes .lb::-webkit-scrollbar-thumb{background:#414348;border-radius:4px}
-[data-td]{cursor:pointer}ol.q li[data-td]:hover,.drow[data-td]:hover{background:#2c2e33}.card[data-td]:hover{border-color:#4a4c51}
+.blist{max-height:min(60vh,560px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#46484d transparent}
+.lanes .lb::-webkit-scrollbar,.blist::-webkit-scrollbar{width:8px}.lanes .lb::-webkit-scrollbar-thumb,.blist::-webkit-scrollbar-thumb{background:#414348;border-radius:4px}
+[data-td]{cursor:pointer}ol.q li[data-td]:hover,.drow[data-td]:hover{background:#35383e;border-color:#50535a}.card[data-td]:hover{border-color:#4a4c51}
 ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,92vw);background:#25272c;border-left:1px solid #3b3d42;box-shadow:-12px 0 32px rgba(0,0,0,.5);z-index:21;display:flex;flex-direction:column}
@@ -2919,7 +2920,7 @@ JS = """
   window.rbFilter=function(inp){var q=inp.value.trim().toLowerCase();
     inp.nextElementSibling.querySelectorAll('.bgrp').forEach(function(g,i){var any=false;
       g.querySelectorAll('.bitem').forEach(function(r){var hit=!q||r.textContent.toLowerCase().indexOf(q)>=0;r.style.display=hit?'':'none';any=any||hit});
-      g.style.display=any?'':'none';if(q)g.open=any;else g.open=(i===0)})};
+      g.style.display=any?'':'none';if(q)g.open=any;else g.open=false})};
   window.rbGo=function(name,anchor){select(name);setTimeout(function(){hit(anchor)},30);return false};
   var names=[].map.call(document.querySelectorAll('.proj'),function(e){return e.dataset.p});
   var first=document.querySelector('.proj.needs');
@@ -2945,12 +2946,12 @@ JS = """
   // 自动刷新：整页重载前存状态，重载后恢复（file:// 下无法局部拉取）
   (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
   if(st.y)window.scrollTo(0,st.y);
-  (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb')[i];if(b)b.scrollTop=v});
+  (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb,.blist')[i];if(b)b.scrollTop=v});
   if(st.td){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
   setInterval(function(){if(document.hidden)return;
     try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
       open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
-      ls:[].map.call(document.querySelectorAll('.lb'),function(b){return b.scrollTop}),
+      ls:[].map.call(document.querySelectorAll('.lb,.blist'),function(b){return b.scrollTop}),
       td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0})}catch(e){}
     location.reload()},30000);
 })();
@@ -3388,9 +3389,9 @@ def render_panel(p, archives, self_closed):
     groups = [a for a in archives if a["deferred"]]
     total = sum(len(a["deferred"]) for a in groups)
     parts.append(f'<div class="sec"><h2>暂缓清单<span class="sub">评审方指出、写手承认但没改的 · {total} 条 · {len(groups)} 个周期</span></h2>'
-                 f'<input class="filter" type="search" placeholder="过滤暂缓清单…" oninput="rbFilter(this)"><div class="list">')
+                 f'<input class="filter" type="search" placeholder="过滤暂缓清单…" oninput="rbFilter(this)"><div class="list blist">')
     for i, a in enumerate(groups):
-        parts.append(f'<details class="bgrp"{" open" if i == 0 else ""}><summary class="bhead" title="{esc(a["artifact"])}">'
+        parts.append(f'<details class="bgrp"><summary class="bhead" title="{esc(a["artifact"])}">'
                      f'<span class="tri">▶</span><code>{esc(a["sha"])}</code>'
                      f'<span class="dim tab">{esc(a["when"])}</span><span>{esc(a["kind"])}</span>'
                      f'<span class="dim">{len(a["deferred"])} 条</span></summary>')
