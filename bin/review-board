@@ -528,16 +528,16 @@ def task_view(repo, conf, p):
              f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else ("不评审" if nr else "修好后审" if flow else "—"))),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "flow": flow,
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "flow": flow, "body": t.get("body", ""),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
         if f["status"] == "dropped":
-            finished.append({"id": f["id"], "title": f["title"], "dropped": True, "reason": f.get("reason", "")})
+            finished.append({"id": f["id"], "title": f["title"], "dropped": True, "reason": f.get("reason", ""), "body": f.get("body", "")})
             continue
         plan_n, code_n = task_rounds(task_commits(repo, f["start"], f.get("end")), timing)
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
-                         "plan_n": plan_n, "code_n": code_n, "noreview": task_flow(f.get("body")) == "不评审",
+                         "plan_n": plan_n, "code_n": code_n, "noreview": task_flow(f.get("body")) == "不评审", "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished,
             "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
@@ -836,7 +836,7 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .wait.calm{border-color:#5a4a2a;background:#231e15}.wait .wh{font-weight:700;color:#f0a3b3;margin-bottom:4px}
 .wait ul{margin:0;padding-left:18px}.wait li{margin:3px 0;color:#e6e4df}.wait li .dim{color:#a3a19b}.wait a{color:#f0a3b3}
 .wait details.mapsug{margin-top:6px}
-.tasks{margin-top:18px}.tasks .th{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}.tasks .th .src{margin-left:auto;font-size:11.5px;color:#7c7a76}
+.tasks{margin:18px 0 26px;background:#1b1b1b;border:1px solid #333;border-top:3px solid #4a7fc1;border-radius:4px;padding:12px 18px}.tasks .th{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}.tasks .th .src{margin-left:auto;font-size:11.5px;color:#7c7a76}
 .mode{display:inline-block;font-size:11px;font-weight:600;line-height:18px;padding:0 6px;border-radius:2px;border:1px solid #3a3a3a;color:#a3a19b;background:#1f1f1f}
 .mode.gate{border-color:#5a2a36;color:#f0a3b3;background:#241519}.mode.paused{border-color:#6b5325;color:#e5b866;background:#231e15}
 .lanes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.45fr) minmax(0,1.15fr);gap:20px;align-items:start}
@@ -862,6 +862,21 @@ ol.steps li.now.release{border-top-color:#c8375a;color:#f0a3b3}ol.steps li.now.r
 .kind{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:2px;line-height:16px;background:#2a2140;color:#c4a6f0}.kind.direct{background:#262626;color:#a3a19b}.kind.noreview{background:#3a2a12;color:#e5b866}
 .flow{font-size:10.5px;font-weight:600;color:#e5b866;border:1px solid #6b5325;border-radius:2px;padding:0 5px;line-height:15px}.flow.later{color:#a3a19b;border-color:#4a4a4a}
 .tasks .foot-note{margin-top:10px;font-size:11.5px;color:#7c7a76}.tasks .foot-note code{color:#a3a19b}
+[hidden]{display:none!important}
+.lanes .lb{max-height:min(46vh,440px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#3a3a3a transparent}
+.lanes .lb::-webkit-scrollbar{width:8px}.lanes .lb::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:4px}
+[data-td]{cursor:pointer}ol.q li[data-td]:hover,.drow[data-td]:hover{background:#222}.card[data-td]:hover{border-color:#444}
+ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,92vw);background:#1a1a1a;border-left:1px solid #333;box-shadow:-12px 0 32px rgba(0,0,0,.5);z-index:21;display:flex;flex-direction:column}
+.drawer .dhd{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid #2e2e2e;font-size:12px;color:#8b8985}
+.drawer .dx{background:none;border:1px solid #3a3a3a;color:#d6d3cc;border-radius:3px;cursor:pointer;font-size:12px;padding:2px 10px}.drawer .dx:hover{border-color:#6a6866}
+.drawer .dct{overflow-y:auto;padding:16px 22px 48px}
+.dtt{font-size:16px;font-weight:700;color:#f2f0eb;letter-spacing:-.01em}
+.dsub{margin-top:6px;display:flex;gap:6px 12px;flex-wrap:wrap;align-items:baseline;font-size:12px;color:#8b8985}.dsub code{color:#a3a19b}.dst{font-weight:600;color:#d6d3cc}
+.dsrc{margin-top:6px;font-size:11.5px;color:#7c7a76}
+.dbody{margin-top:14px;border-top:1px solid #2a2a2a;padding-top:12px;font-size:13px;line-height:1.7;color:#d6d3cc}
+.dbody .dh4{margin:12px 0 4px;font-weight:700;color:#f2f0eb}.dbody .dli{padding-left:16px;position:relative}.dbody .dli::before{content:"·";position:absolute;left:5px;color:#8b8985}.dbody .dgap{height:8px}
 .grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start}
 .side{border-right:1px solid #2e2e2e;position:sticky;top:44px;align-self:start;padding:14px 0;max-height:calc(100vh - 44px);overflow:auto}
 .side .cap{padding:0 16px 8px;font-size:11px;color:#8b8985;letter-spacing:.04em}
@@ -989,6 +1004,10 @@ h2 .sub{font-weight:400;color:#8b8985;font-size:12px;margin-left:6px}
 .empty{color:#8b8985;padding:8px 0}
 """
 
+# 任务全文抽屉：整页只有一个，盖在页面右侧，不占看板空间；内容由 JS 从被点任务的 <template> 里取
+DRAWER = ('<div class="scrim" hidden></div><aside class="drawer" hidden><div class="dhd"><span>任务描述 · Esc 关闭</span>'
+          '<button class="dx" type="button">关闭</button></div><div class="dct"></div></aside>')
+
 JS = """
 (function(){
   var KEY='rb.selected';
@@ -1014,17 +1033,32 @@ JS = """
   var saved=null;try{saved=localStorage.getItem(KEY)}catch(e){}
   var pick=(first&&first.dataset.p)||(names.indexOf(saved)>=0?saved:names[0]);
   if(names.indexOf(saved)>=0&&!first)pick=saved;
-  if(location.hash.length>1){var t=document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  // 自动刷新前存下的状态（滚动、展开项、各栏滚动、打开的任务）；只用一次
+  var st={};try{st=JSON.parse(sessionStorage.rb||'{}');sessionStorage.removeItem('rb')}catch(e){}
+  // 地址栏里的锚点只在你点开或打开链接时跳；自动刷新时不跳，否则每 30 秒都被拽回那一条
+  if(location.hash.length>1&&!st.auto){var t=document.getElementById(decodeURIComponent(location.hash.slice(1)));
     var pn=t&&t.closest('.panel');if(pn){pick=pn.dataset.p;setTimeout(function(){hit(t.id)},30)}}
   if(pick)select(pick);
   document.querySelectorAll('.proj').forEach(function(e){e.addEventListener('click',function(){select(e.dataset.p)})});
-  // 自动刷新：整页重载前存滚动位置与展开项，重载后恢复（file:// 下无法局部拉取）
-  try{var st=JSON.parse(sessionStorage.rb||'{}');
-    (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
-    if(st.y)window.scrollTo(0,st.y)}catch(e){}
+  // 任务全文抽屉：点任务（队列、进行中、已完成）从右侧滑出，Esc / 点遮罩 / 关闭按钮收起
+  var dr=document.querySelector('.drawer'),sc=document.querySelector('.scrim'),openKey=null;
+  function openTd(k){var tp=document.getElementById('td-'+k);if(!tp||!dr)return;
+    var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(tp.content.cloneNode(true));box.scrollTop=0;
+    dr.hidden=false;sc.hidden=false;openKey=k}
+  function closeTd(){if(!dr)return;dr.hidden=true;sc.hidden=true;openKey=null}
+  document.addEventListener('click',function(e){var el=e.target.closest('[data-td]');if(el)openTd(el.dataset.td)});
+  if(dr){sc.addEventListener('click',closeTd);dr.querySelector('.dx').addEventListener('click',closeTd)}
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTd()});
+  // 自动刷新：整页重载前存状态，重载后恢复（file:// 下无法局部拉取）
+  (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
+  if(st.y)window.scrollTo(0,st.y);
+  (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb')[i];if(b)b.scrollTop=v});
+  if(st.td){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
   setInterval(function(){if(document.hidden)return;
-    try{sessionStorage.rb=JSON.stringify({y:window.scrollY,
-      open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0})})}catch(e){}
+    try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
+      open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
+      ls:[].map.call(document.querySelectorAll('.lb'),function(b){return b.scrollTop}),
+      td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0})}catch(e){}
     location.reload()},30000);
 })();
 """
@@ -1253,11 +1287,40 @@ def flow_chip(flow):
     return f'<span class="flow{"" if flow == "不评审" else " later"}">{esc(flow)}</span>'
 
 
+def task_body_html(body):
+    """任务正文 → 抽屉里的排版：### 小标题、- 列表、空行分段，其余按行原样；全部转义，不当 markup 注入。"""
+    out = []
+    for line in (body or "").splitlines():
+        s = line.strip()
+        if not s:
+            if out and out[-1] != '<div class="dgap"></div>':
+                out.append('<div class="dgap"></div>')
+            continue
+        m = re.match(r'^#{1,6}\s+(.*)$', s)
+        if m:
+            out.append(f'<div class="dh4">{esc(m.group(1))}</div>')
+            continue
+        m = re.match(r'^[-*]\s+(.*)$', s)
+        out.append(f'<div class="dli">{esc(m.group(1))}</div>' if m else f'<div class="dp">{esc(s)}</div>')
+    return "".join(out) or '<div class="empty">没有正文</div>'
+
+
+def task_desc(key, tid, title, status, meta, body, source):
+    """一个任务的完整描述，嵌成 <template>；点任务时 JS 把它放进右侧抽屉，不占看板的地方。"""
+    flow = task_flow(body)
+    return (f'<template id="td-{esc(key)}"><div class="dtt"><span class="tid">{esc(tid)}</span>{esc(title)}</div>'
+            f'<div class="dsub"><span class="dst">{esc(status)}</span>{flow_chip(flow) if flow else ""}{meta}</div>'
+            f'<div class="dsrc">{esc(source)}</div><div class="dbody">{task_body_html(body)}</div></template>')
+
+
 def render_tasks(p):
-    """任务区：队列 / 进行中（阶段条）/ 已完成。只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 review-task。"""
+    """任务区：独立的框，队列 / 进行中（阶段条）/ 已完成三栏，队列和已完成各自滚动；点任务在右侧抽屉看全文。
+    只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 review-task。"""
     tv = p.get("tasks")
     if not tv:
         return ""
+    live, snap = "queue.md 当前内容（还没发出，改了就生效）", "发出时的快照（写手收到的版本；之后改 queue.md 不影响它）"
+    descs = []
     mode = ('<span class="mode paused">暂停中</span>' if tv["paused"] else
             '<span class="mode gate">放行模式</span>' if tv["gate"] else '<span class="mode">自动模式</span>')
     c = tv["card"]
@@ -1265,6 +1328,7 @@ def render_tasks(p):
     counts = f'队列 {len(tv["todo"])} · 进行中 {doing_n} · 已完成 {tv["done"]}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
     q = []
     for i, b in enumerate(tv["todo"]):
+        key = f'{p["name"]}:{b["id"] or f"q{i + 1}"}'
         chips = []
         if i == 0:
             chips.append('<span class="next hold">下一个 · 等放行</span>' if tv["awaiting"] else
@@ -1275,9 +1339,10 @@ def render_tasks(p):
             chips.append(flow_chip(task_flow(b["body"])))
         note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_flow(l)), "")
         if note:
-            chips.append(f'<span>{esc(note)}</span>')
+            chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
-        q.append(f'<li><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + '</li>')
+        q.append(f'<li data-td="{esc(key)}"><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + '</li>')
+        descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], live))
     queue = f'<ol class="q">{"".join(q)}</ol>' if q else '<div class="empty">空</div>'
     if c:
         rows = []
@@ -1291,31 +1356,38 @@ def render_tasks(p):
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
         flow = flow_chip(c["flow"]) if c["flow"] else ""
-        doing = (f'<div class="card{" s-me" if c["waiting"] else ""}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
+        key = f'{p["name"]}:{c["id"]}'
+        doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
+        descs.append(task_desc(key, c["id"], c["title"], "做完了 · 等你放行" if c["waiting"] else "进行中",
+                               f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], snap))
     else:
         doing = f'<div class="empty">{"队列空了，写手会停下" if not tv["todo"] else "没有进行中的任务"}</div>'
     fin = []
     for f in tv["finished"]:
+        key = f'{p["name"]}:{f["id"]}'
         if f["dropped"]:
-            fin.append(f'<div class="drow dropped"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
+            fin.append(f'<div class="drow dropped" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                        f'<span class="r">放弃</span><span class="s"><span>{esc(f["reason"] or "没写原因")}</span></span></div>')
+            descs.append(task_desc(key, f["id"], f["title"], "放弃", f'<span>原因：{esc(f["reason"] or "没写原因")}</span>',
+                                   f["body"], snap if f["body"] else "没发出过，队列里的原文已不在快照中"))
             continue
         rounds = " · ".join(x for x in (f'计划评审 {f["plan_n"]}' if f["plan_n"] else "", f'代码评审 {f["code_n"]}' if f["code_n"] else "") if x) or "无评审"
         kind = ('<span class="kind noreview">未评审</span>' if f["noreview"] else
                 '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>')
         rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
-        fin.append(f'<div class="drow"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
+        fin.append(f'<div class="drow" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
+        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
-    return (f'<section class="tasks"><div class="th"><h2>任务<span class="sub">{counts}</span></h2>{mode}'
-            f'<span class="src">queue.md · tasks.state</span></div><div class="lanes">'
-            f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div>{queue}</div>'
+    return (f'<section class="tasks"><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
+            f'<span class="src">点任务看全文 · queue.md · tasks.state</span></div><div class="lanes">'
+            f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
-            f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div>{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div>'
+            f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div></div>'
             f'</div><div class="foot-note">只读。加任务：编辑 <code>{esc(tv["dir"])}/queue.md</code>，或 <code>review-task add "…"</code>；'
-            f'写在最上面的，就是当前任务之后的下一个。</div></section>')
+            f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
 
 def render_panel(p, archives, self_closed):
@@ -1546,6 +1618,7 @@ def render(projects, archives, self_closed):
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title><style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
             f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .review.conf 指向的交接目录与 docs/reviews</div></div>'
+            + (DRAWER if 'data-td="' in panels else "") +
             f'<script>{JS}</script></body></html>')
 
 

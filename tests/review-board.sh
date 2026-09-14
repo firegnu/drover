@@ -161,7 +161,7 @@ printf 'STOP: 无法确认 pane zeta-rv 的评审方身份\n' > "$D/.last.out"
 # 任务区 —— eta：T8 进行中（规划过、计划评审两轮、1 个提交，正在代码评审第 1 轮）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
 E="${TMP}/eta"; EB=$(git -C "$E/repo" rev-parse HEAD~1); EH=$(git -C "$E/repo" rev-parse HEAD); ES=$(git -C "$E/repo" rev-parse --short HEAD)
-printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n流程：修好再审\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n' > "$E/review/queue.md"
+printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n流程：修好再审\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n### 范围\n- 别碰 <b>旧接口</b> & 文档\n' > "$E/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T5", "title": "给导出加进度条", "body": "", "key": "给导出加进度条", "sha": "%s"}\n' "$((now - 9000))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": false}\n' "$((now - 7800))" "$EB"
   printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "流程: 不评审", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
@@ -319,7 +319,26 @@ has 'class="card s-me"' 'finished card turns crimson while it waits'
 has '<li class="now release">收尾<span class="x">核对通过 · 等你放行</span></li>' 'last step waits for release'
 
 # 流程：不评审 —— 队列里标出来（那一行不再当备注）；卡片上规划和计划评审「跳过」、代码评审「不评审」；已完成标「未评审」
-has '<span class="tid">T9</span>订单列表分页</span><span class="sub"><span class="flow">不评审</span><span>只动分页参数</span>' 'pending no-review task marked, flow line not used as the note'
+has '<span class="tid">T9</span>订单列表分页</span><span class="sub"><span class="flow">不评审</span><span class="note">只动分页参数</span>' 'pending no-review task marked, flow line not used as the note'
+
+# 任务区是独立的框；队列和已完成两栏各自滚动；点任务在右侧抽屉看全文 —— 全文嵌在页面里、已转义，未开始的读 queue.md，开始过的读发出时的快照
+has '<section class="tasks">' 'task board is its own section'
+[ "$(grep -o 'class="lb"' "${OUT}" | wc -l | tr -d ' ')" = 4 ] || fail 'queue and finished lanes scroll on their own (2 per board)'
+[ "$(grep -o '<aside class="drawer"' "${OUT}" | wc -l | tr -d ' ')" = 1 ] || fail 'one shared task drawer'
+has 'data-td="eta/repo:T9"' 'pending task opens its description'
+has 'data-td="eta/repo:q1"' 'unnumbered pending task opens its description by position'
+has 'data-td="eta/repo:T8"' 'in-progress card opens its description'
+has 'data-td="eta/repo:T6"' 'dropped task opens its description'
+has '<template id="td-eta/repo:T9">' 'pending task description embedded'
+has 'queue.md 当前内容' 'pending description says it is the live queue text'
+has '<div class="dp">约束：内存不超过 200MB</div>' 'started task description comes from the snapshot'
+has '发出时的快照' 'started description says it is the snapshot the writer got'
+has '<div class="dh4">范围</div>' 'subheadings rendered in the description'
+has '<div class="dli">别碰 &lt;b&gt;旧接口&lt;/b&gt; &amp; 文档</div>' 'list lines rendered and escaped'
+lacks '<b>旧接口</b>' 'task text is never injected as markup'
+has '和 T2 冲突' 'dropped description carries the reason'
+# 自动刷新只恢复滚动位置，不再按地址栏里的锚点跳走
+has '!st.auto' 'anchor jump skipped on auto refresh'
 has '<span class="flow">不评审</span></div>' 'no-review card carries the flow chip'
 has '<li>规划<span class="x">跳过</span></li>' 'no-review card skips planning'
 has '<li>计划评审<span class="x">跳过</span></li>' 'no-review card skips plan review'
