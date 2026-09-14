@@ -990,7 +990,7 @@ h2 .sub{font-weight:400;color:#999793;font-size:12px;margin-left:6px}
 .bl{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 8px;max-width:1100px}
 .bl .who{font-size:11.5px;color:#999793;padding-top:1px}
 .acols,.arow{display:grid;grid-template-columns:20px 72px 92px 48px 48px 84px 72px minmax(0,1fr);gap:0 12px;align-items:baseline}
-.acols{padding:5px 0;font-size:11px;color:#999793}
+.acols{padding:5px 0;font-size:11px;color:#999793}.blist .acols{position:sticky;top:0;z-index:1;background:#222429}
 .arow{padding:8px 0}
 .arch{border-top:1px solid #37393e}
 .arch .body{margin:0 0 10px 32px;padding:10px 14px;background:#292b30;border:1px solid #37393e;font-size:12.5px;overflow-x:auto}
@@ -1512,7 +1512,7 @@ def render_panel(p, archives, self_closed):
         parts.append('<div class="empty">没有暂缓的 finding</div>')
     parts.append("</div></div>")
 
-    parts.append('<div class="sec"><h2>最近归档</h2><div class="list"><div class="acols"><span></span><span>sha</span><span>日期</span>'
+    parts.append('<div class="sec"><h2>最近归档</h2><div class="list blist"><div class="acols"><span></span><span>sha</span><span>日期</span>'
                  '<span>kind</span><span>轮数</span><span title="blocking">阻断</span><span>总耗时</span><span>结束方式</span></div>')
     for a in archives[:ARCHIVES_SHOWN]:
         took = dur(a["secs"]) if a["secs"] else "—"
@@ -1530,7 +1530,7 @@ def render_panel(p, archives, self_closed):
     for c in rows:
         kinds[c[2] or "?"] = kinds.get(c[2] or "?", 0) + 1
     gist = "、".join(f"{n} 条{esc(k)}" for k, n in kinds.items()) if rows else "无记录"
-    parts.append(f'<div class="sec"><details class="sc"><summary><h2>自闭合<span class="sub">最近 {len(rows)} 条：{gist}</span></h2></summary><div class="list">')
+    parts.append(f'<div class="sec"><details class="sc"><summary><h2>自闭合<span class="sub">最近 {len(rows)} 条：{gist}</span></h2></summary><div class="list blist">')
     for c in rows:
         parts.append(f'<div class="srow"><span class="dim tab">{esc(c[0])}</span><code>{esc(c[1])}</code>'
                      f'<span>{esc(c[2])}</span><span class="ink">{esc(c[3])}</span></div>')
