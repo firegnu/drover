@@ -19,7 +19,7 @@ printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "${REPO}" "${D}" > "$
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/herdr.log"\nexit 1\n' "${TMP}" > "${TMP}/bin/herdr"; chmod +x "${TMP}/bin/herdr"
 
 fail() { echo "FAIL: $*" >&2; echo "--- 最后一次输出 ---" >&2; cat "${TMP}/out" >&2 || true; exit 1; }
-rt() { set +e; ( cd "${REPO}" && PATH="${TMP}/bin:${PATH}" python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
+rt() { set +e; ( cd "${REPO}" && PATH="${TMP}/bin:${PATH}" env -u HERDR_PANE_ID python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }   # 测试可能跑在 herdr 里：默认当作不在
 has() { grep -qF -e "$1" "${TMP}/out" || fail "$2 (missing: $1)"; }
 code() { [ "${RC}" = "$1" ] || fail "$2: exit ${RC}, expected $1"; }
 edit() { mkdir -p "$(dirname "${REPO}/$1")"; printf '%s\n' "$2" >> "${REPO}/$1"; git -C "${REPO}" add "$1"; git -C "${REPO}" commit -qm "$2"; }
@@ -218,6 +218,37 @@ tail -1 "${D}/tasks.state" | grep -q '"ev": "drop", "id": "T14"' || fail 'a numb
 rt drop --pos 9 "x"; code 2 'a position past the queue'
 rt list; has '手写戊' 'list shows the dropped unnumbered task'
 rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues the task now at the front'
+
+# ---- 外层循环：loop 文件在交接目录，默认没有 = 关。开着时做完直接领下一个（不管 TASK_GATE），
+# 停在队列那一步（队列空 / 暂停）时留下 .loop-wait 唤醒标记（原因 + 写手 pane，由看板服务去叫醒）；review-task 自己不碰 herdr
+[ ! -f "${D}/loop" ] || fail 'the loop is off by default'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+grep -v '^TASK_GATE=' "${REPO}/.review.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.review.conf"   # 回到放行模式
+rt loop on; code 0 'loop on'; [ -f "${D}/loop" ] || fail 'loop on creates the loop file'
+rt list; has '循环' 'list shows the loop is on'
+rt done "${TID}"; code 0 'with the loop on, done issues the next task even in release mode'; has 'TASK ' 'the next task follows right away'
+grep -q '"ev": "done".*"gate": false' "${D}/tasks.state" || fail 'the done event is not gated while looping'
+while grep -q '^TASK ' "${TMP}/out"; do
+  TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out"); rt done "${TID}"
+done
+code 8 'the loop runs until the queue is empty'; has '队列空了' 'says the queue is empty'
+[ ! -f "${D}/.loop-wait" ] || fail 'no wake marker outside herdr (no HERDR_PANE_ID)'
+has '叫醒' 'says why it cannot be woken automatically'
+rt_pane() { set +e; ( cd "${REPO}" && PATH="${TMP}/bin:${PATH}" HERDR_PANE_ID=w9:p3 python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
+rt_pane next; code 8 'empty queue stops'
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="empty" and m["pane"]=="w9:p3" and m["t"], m' "${D}/.loop-wait" || fail 'the wake marker records reason and pane'
+has '自动叫醒' 'tells the writer it will be woken'
+rt add "循环里新加的任务"; rt pause
+rt_pane next; code 8 'paused stops'
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="paused", m' "${D}/.loop-wait" || fail 'the marker says paused'
+rt resume; rt_pane next; code 0 'next after resume'; has '循环里新加的任务' 'the new task is issued'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+[ ! -f "${D}/.loop-wait" ] || fail 'issuing a task clears the wake marker'
+rt loop off; code 0 'loop off'; [ ! -f "${D}/loop" ] || fail 'loop off removes the loop file'
+rt done "${TID}"; code 8 'with the loop off, release mode stops again'; has '等人放行' 'back to waiting for release'
+rt_pane next; code 8 'waiting for release'
+[ ! -f "${D}/.loop-wait" ] || fail 'no wake marker when the loop is off'
+rt go
 
 # ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'

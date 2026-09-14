@@ -36,11 +36,14 @@ case "$1 $2 $3" in
   'agent read eps-plan') printf '✻ Drafting… (2m 01s · esc to interrupt)\n';;
   'agent read alpha-writer') printf 'some output\n• Working (12m 03s • esc to interrupt)\n\n› Ask Codex\n';;
   'agent read gamma-pane') printf '✻ Reviewing diff… (3m 10s · esc to interrupt)\n\n❯\n';;
+  'agent get theta-writer') printf '{"result":{"agent":{"pane_id":"theta-writer","terminal_id":"%s","agent_status":"%s","cwd":"%s","agent_session":{"value":"s1"}}}}\n' \
+      "$(cat "${MOCK_DIR}/theta.term" 2>/dev/null || echo term_t)" "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)" "${MOCK_THETA}";;
+  'agent prompt theta-writer') printf '%s\n' "$4" >> "${MOCK_DIR}/prompts.log";;
   *) printf '{"error":{"code":"agent_not_found"}}\n' >&2; exit 1;;
 esac
 MOCK
 chmod +x "${TMP}/herdr"
-export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_GAMMA="${TMP}/gamma/repo" MOCK_EPS="${TMP}/epsilon/repo" MOCK_ZETA="${TMP}/zeta/repo"
+export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_GAMMA="${TMP}/gamma/repo" MOCK_EPS="${TMP}/epsilon/repo" MOCK_ZETA="${TMP}/zeta/repo" MOCK_THETA="${TMP}/theta/repo" MOCK_DIR="${TMP}"
 # alpha 的评审 worktree 另在别处，这样 cwd 是仓库的 agent 才算写手
 sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/alpha/wt|" "${TMP}/alpha/repo/.review.conf"
 sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/zeta/wt|" "${TMP}/zeta/repo/.review.conf"
@@ -615,7 +618,7 @@ EOF
 chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/herdr"
 printf '[]\n' > "${TMP}/home/.review/board-notified.json"
 HP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" HERDR_BIN_PATH="${TMP}/hbin/herdr" \
+HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" HERDR_BIN_PATH="${TMP}/hbin/herdr" REVIEW_LOOP_TICK=1 \
   python3 "${TMP}/code/review-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
 SERVE2=$!
 trap 'kill "${SERVE}" "${SERVE2}" 2>/dev/null; rm -rf "${TMP}"' EXIT
@@ -657,6 +660,39 @@ curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
 python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows herdr without a page reload'; }
 rm "${TMP}/herdr.down"
 echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW and agents refreshed; crew polled'
+
+# ---- 外层循环：页面开关；服务看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）、写手空闲、pane 身份没变时，往写手 pane 输入那句话
+curl -s "http://127.0.0.1:${HP}/" > "${TMP}/live2.html"
+TOKEN2=$(sed -n 's/.*<meta name="rb-token" content="\([^"]*\)".*/\1/p' "${TMP}/live2.html")
+grep -qF 'data-act="loop" data-p="theta/repo" data-on="0"' "${TMP}/live2.html" || fail 'loop switch (off) on the task board'
+lpost() { curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-RB-Token: ${TOKEN2}" --data "$2" "http://127.0.0.1:${HP}$1"; }
+[ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 200 ] || { cat "${TMP}/resp"; fail 'turn the loop on from the page'; }
+[ -f "${TMP}/theta/review/loop" ] || fail 'the page switch goes through review-task loop on'
+[ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 409 ] || fail 'loop on refused when already on'
+mark() { printf '{"reason": "empty", "pane": "theta-writer", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
+waitfor() { for _ in $(seq 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
+rm -f "${TMP}/prompts.log"; mark
+waitfor '[ -s "${TMP}/prompts.log" ]' || { cat "${TMP}/serve2.err"; fail 'the service wakes the idle writer when a task is pending'; }
+grep -qx '运行 review-task next，按它的输出办' "${TMP}/prompts.log" || fail 'the wake prompt is the kickoff sentence'
+waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared after a successful wake'
+# 暂停中：不叫
+rm -f "${TMP}/prompts.log"; : > "${TMP}/theta/review/paused"; mark; sleep 2.5
+[ ! -s "${TMP}/prompts.log" ] || fail 'no wake while paused'
+rm "${TMP}/theta/review/paused"
+waitfor '[ -s "${TMP}/prompts.log" ]' || fail 'resuming lets the wake through'
+# 写手在忙时先记下 pane 身份；身份变了（换了 terminal）就不叫，标成失败留给人
+rm -f "${TMP}/prompts.log"; echo working > "${TMP}/theta.status"; mark
+waitfor 'grep -q terminal "${TMP}/theta/review/.loop-wait"' || fail 'the service records the writer pane identity'
+echo term_other > "${TMP}/theta.term"; echo idle > "${TMP}/theta.status"
+waitfor 'grep -q "\"failed\": true" "${TMP}/theta/review/.loop-wait"' || { cat "${TMP}/theta/review/.loop-wait"; fail 'a changed pane identity is marked failed'; }
+[ ! -s "${TMP}/prompts.log" ] || fail 'no wake into a pane whose identity changed'
+curl -s "http://127.0.0.1:${HP}/" | grep -q '自动叫醒失败' || fail 'the task board says the wake failed'
+rm -f "${TMP}/theta.term" "${TMP}/theta.status"
+# 循环关：标记作废，不叫
+[ "$(lpost /api/loop '{"project":"theta/repo","on":false}')" = 200 ] || fail 'turn the loop off from the page'
+mark; sleep 2.5
+[ ! -s "${TMP}/prompts.log" ] || fail 'no wake with the loop off'
+echo 'PASS review-board serve: loop switch; wakes the idle writer when work is pending, not while paused, not into a changed pane, not with the loop off'
 
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
 # 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。

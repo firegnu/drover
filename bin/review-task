@@ -21,6 +21,8 @@
   review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
   review-task drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
+  review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接领下一个；
+                                      写手停在队列那一步（队列空 / 暂停）时留下 .loop-wait，条件满足后由看板服务叫醒它
   review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
@@ -61,12 +63,12 @@ def load_board():
 
 
 B = load_board()
-REPO = D = Q = S = PAUSED = ""
+REPO = D = Q = S = PAUSED = LOOP = ""
 GATE = True
 
 
 def setup():
-    global REPO, D, Q, S, PAUSED, GATE
+    global REPO, D, Q, S, PAUSED, LOOP, GATE
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
@@ -76,7 +78,7 @@ def setup():
         die(2, f"ERROR: {REPO}/.review.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入评审流程。")
     D = conf["REVIEW_DIR"]
     os.makedirs(D, exist_ok=True)
-    Q, S, PAUSED = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused"
+    Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
 
 
@@ -332,20 +334,41 @@ def cmd_add(title, notes):
     return 0
 
 
+def loop_on():
+    return os.path.exists(LOOP)
+
+
+def loop_stop(reason, msg):
+    """写手停在队列那一步。循环开着时留下唤醒标记（原因 + 写手的 herdr pane），看板服务等条件满足、写手空闲时叫醒它；
+    本工具不碰 herdr，pane 的身份由看板服务去核对。不在 herdr 里（没有 HERDR_PANE_ID）就叫不醒，照常等人。"""
+    mark = f"{D}/.loop-wait"
+    if loop_on() and os.environ.get("HERDR_PANE_ID"):
+        tmp = f"{mark}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"reason": reason, "pane": os.environ["HERDR_PANE_ID"], "t": int(time.time())}, f, ensure_ascii=False)
+        os.replace(tmp, mark)
+        return stop(msg + "（循环开着：条件满足后会自动叫醒你，停下等就行，不用报告给人。）")
+    if loop_on():
+        return stop(msg + "（循环开着，但你不在 herdr 里，没法自动叫醒：照上面说的等人。）")
+    return stop(msg)
+
+
 def cmd_next():
     tasks, current, awaiting = fold()
     if current:
         return issue(current, again=True)
     if os.path.exists(PAUSED):
-        return stop("PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 review-task resume 之后，再运行 review-task next。")
+        return loop_stop("paused", "PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 review-task resume 之后，再运行 review-task next。")
     if awaiting:
-        return stop(f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 review-task go 之后，再运行 review-task next。")
+        return loop_stop("release", f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 review-task go 之后，再运行 review-task next。")
     todo = pending(tasks)
     if not todo:
-        return stop(f"EMPTY: 队列空了，没有新任务。停下，把这句报告给人；人往 {Q} 里加了任务之后，再运行 review-task next。")
+        return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。停下，把这句报告给人；人往 {Q} 里加了任务之后，再运行 review-task next。")
     b = todo[0]
     t = {"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]}
     append({"ev": "start", "id": t["id"], "title": t["title"], "body": t["body"], "key": t["title"], "sha": head()})
+    if os.path.exists(f"{D}/.loop-wait"):
+        os.remove(f"{D}/.loop-wait")             # 领到了：唤醒标记作废
     return issue(t)
 
 
@@ -367,8 +390,9 @@ def cmd_done(tid):
             for c in reversed(waive):
                 f.write(f"{time.strftime('%Y-%m-%d')} | {git('rev-parse', '--short', c).strip()} | 任务 {tid} 人指定不评审\n")
         print(f"人指定 {tid} 不评审：{len(waive)} 个提交已登记进 docs/reviews/skipped.md（和评审记录一起提交即可）。")
-    append({"ev": "done", "id": tid, "sha": head(), "gate": GATE})
-    if GATE:
+    gate = GATE and not loop_on()                 # 循环开着：做完直接领下一个
+    append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
+    if gate:
         return stop(f"DONE {tid}：核对通过。放行模式：停下，把这句报告给人，等人放行；放行后运行 review-task next。")
     print(f"DONE {tid}：核对通过。")
     return cmd_next()
@@ -412,6 +436,20 @@ def cmd_drop_pos(pos, reason, expect):
     return 0
 
 
+def cmd_loop(on):
+    if on:
+        with open(LOOP, "w", encoding="utf-8") as f:     # 重写一遍：修改时间就是这次开循环的时刻（「连续做了几个」从这里数）
+            f.write(f"{int(time.time())}\n")
+        print("循环已开：做完直接领下一个；写手停在队列那一步（队列空 / 暂停）时，条件满足后看板服务会叫醒它。"
+              "review-task loop off 关掉。")
+    else:
+        for f in (LOOP, f"{D}/.loop-wait"):
+            if os.path.exists(f):
+                os.remove(f)
+        print("循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。")
+    return 0
+
+
 def cmd_pause(on):
     if on:
         open(PAUSED, "a").close()
@@ -433,7 +471,7 @@ def span(a, b):
 def cmd_list():
     tasks, current, awaiting = fold()
     todo = pending(tasks)
-    print(f"模式：{'放行模式' if GATE else '自动模式'}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
+    print(f"模式：{'循环（做完直接领下一个，停下后自动叫醒）' if loop_on() else '放行模式' if GATE else '自动模式'}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
           + (f"；{awaiting} 已完成，等人放行" if awaiting else ""))
     print("\n进行中：")
     print(f"  {current['id']} {current['title']}（开始于 {current['start'][:7]}）" if current else "  （无）")
@@ -486,6 +524,8 @@ def main(argv):
         return cmd_move(rest[0], rest[1], expect)
     if cmd == "edit" and len(rest) >= 2:
         return cmd_edit(rest[0], rest[1], rest[2:], expect)
+    if cmd == "loop" and rest in (["on"], ["off"]):
+        return cmd_loop(rest[0] == "on")
     if cmd in ("pause", "resume") and not rest:
         return cmd_pause(cmd == "pause")
     die(2, f"ERROR: 用法不对：review-task {' '.join(argv)}\n\n{__doc__.strip()}")
