@@ -2777,7 +2777,7 @@ def md(text):
 
 # ============================================================ 渲染
 CSS = """
-:root{--s0:#1b1e26;--rail:#181b22;--s1:#21252e;--s2:#2a2f3a;--s3:#333947;--mast:#13161d;--mast-hi:#1c2029;--line:rgba(255,255,255,.08);--line-soft:rgba(255,255,255,.05);--line-strong:rgba(255,255,255,.15);
+:root{--s0:#1b1e26;--rail:#181b22;--s1:#21252e;--s2:#2f3541;--s3:#3a4150;--mast:#13161d;--mast-hi:#1c2029;--line:rgba(255,255,255,.08);--line-soft:rgba(255,255,255,.05);--line-strong:rgba(255,255,255,.15);
 --t1:#f4f5f8;--t2:#e2e4ea;--t3:#aeb3bf;--t4:#858b98;--t5:#646a77;
 --red:#c8375a;--red-t:#f0a3b3;--red-bg:#3a2530;--blue:#4a7fc1;--blue-t:#8fb8ee;--blue-bg:#27364a;--purple:#8f6ccf;--purple-t:#c4a6f0;--purple-bg:#332c50;
 --amber:#d9a83a;--amber-t:#e5b866;--amber-bg:#3e3324;--green:#4a8a55;--green-t:#7fd48a;--green-bg:#273e33;
@@ -2921,9 +2921,10 @@ ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit
 .badge.none{background:var(--s3);color:var(--t3);font-weight:500}
 .main{padding:20px 24px 60px;min-width:0}
 .panel{display:none}.panel.sel{display:block}
-.head{display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
-.head h1{margin:0;font-size:var(--fs5);font-weight:700;letter-spacing:-.015em}
-.head .hd{margin-left:auto;color:var(--t4);font-size:var(--fs2);font-family:var(--mono)}
+.head{display:flex;align-items:center;gap:10px;padding:4px 0 6px}
+.head h1{margin:0 4px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--t1);line-height:1.2}
+.head .badge{transform:translateY(1px)}.head>.mute{font-size:var(--fs2);font-variant-numeric:tabular-nums}
+.head .hd{margin-left:auto;color:var(--t4);font-size:var(--fs1);font-family:var(--mono);letter-spacing:.02em;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:var(--r1);padding:0 9px;line-height:22px}.head .hd code{color:var(--t3);font-size:var(--fs2)}
 .crew{display:flex;flex-wrap:wrap;gap:8px 10px;padding:14px 0 2px;font-size:var(--fs3);color:var(--t2)}
 .crew .agent{display:inline-flex;align-items:center;gap:10px;padding:0 14px;line-height:32px;border-radius:var(--r2);background:var(--s1);border:1px solid var(--line)}
 .crew .agent.st-working{border-color:#356243;background:var(--green-bg)}
