@@ -2596,11 +2596,16 @@ def since_last_review(repo, conf):
         return None
     commits = [c for c in git(repo, "rev-list", f"{base}..HEAD").split() if c]
     if not commits:
-        return {"base": base, "n": 0, "skipped": 0, "plan": 0, "unrouted": 0}
+        return {"base": base, "n": 0, "skipped": 0, "plan": 0, "waived": 0, "unrouted": 0}
     closed = read(f"{repo}/docs/reviews/self-closed.md") or ""
-    skipped = sum(1 for c in commits if c[:7] in closed)
-    plan = sum(1 for c in commits if c[:7] in plan_targets)
-    return {"base": base, "n": len(commits), "skipped": skipped, "plan": plan, "unrouted": len(commits) - skipped - plan}
+    # 人用 SKIP_REVIEW（或任务「流程：不评审」）登记的提交：和 request-review 的 range_files 一样按 skipped.md 第二列的短 sha 认
+    waived_shas = {c.split("|")[1].strip() for c in (read(f"{repo}/docs/reviews/skipped.md") or "").splitlines() if c.count("|") >= 2}
+    waived = [c for c in commits if git(repo, "rev-parse", "--short", c).strip() in waived_shas]
+    rest = [c for c in commits if c not in waived]
+    skipped = sum(1 for c in rest if c[:7] in closed)
+    plan = sum(1 for c in rest if c[:7] in plan_targets)
+    return {"base": base, "n": len(commits), "skipped": skipped, "plan": plan, "waived": len(waived),
+            "unrouted": len(rest) - skipped - plan}
 
 
 def map_suggestions(repo):
@@ -3278,6 +3283,8 @@ def render_panel(p, archives, self_closed):
             bits.append(f'{acc["skipped"]} 个 SKIP')
             if acc["plan"]:
                 bits.append(f'{acc["plan"]} 个走了计划评审')
+            if acc["waived"]:
+                bits.append(f'{acc["waived"]} 个人工免审')
             if acc["unrouted"]:
                 bits.append(f'<b>{acc["unrouted"]} 个未经路由</b>')
         cls = "accum warn" if acc["n"] and not p["waiting"] and not p["needs_me"] else "accum mute"

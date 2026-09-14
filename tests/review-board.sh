@@ -182,6 +182,10 @@ printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\
   printf '{"t": %s, "ev": "done", "id": "T3", "sha": "%s", "gate": true}\n' "$((now - 100))" "$THB"
 } > "$TH/review/tasks.state"
 : > "$TH/review/paused"
+# theta 的累积：上次 code 评审 target = HEAD~1，HEAD 那一笔人用 SKIP_REVIEW 放过（skipped.md）→ 算人工免审，不算未经路由
+mkdir -p "$TH/repo/docs/reviews"
+printf '2026-09-01 | %s | round 1/3 | 60s | code\n' "$(git -C "$TH/repo" rev-parse --short HEAD~1)" > "$TH/repo/docs/reviews/timing.md"
+printf '2026-09-02 | %s | 用户批准免审\n' "$(git -C "$TH/repo" rev-parse --short HEAD)" > "$TH/repo/docs/reviews/skipped.md"
 
 printf '%s/alpha/repo\n%s/beta/repo\n%s/gamma/repo\n%s/delta/repo\n%s/epsilon/repo\n%s/zeta/repo\n%s/eta/repo\n%s/theta/repo\n# comment\n%s/nonexistent\n' "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" > "${TMP}/projects"
 HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null
@@ -250,6 +254,7 @@ has '回应 ' 'round timing shown'
 has '<details class="prev"><summary>' 'closed cycle collapsed'
 has '1 轮</span><span>1 暂缓</span>' 'collapsed summary counts'
 has '以来 <b>1</b> 个提交 · 0 个 SKIP · <b>1 个未经路由</b>' 'accumulation counter'
+has '以来 <b>1</b> 个提交 · 0 个 SKIP · 1 个人工免审</div>' 'commits waived in skipped.md are not counted as unrouted'
 has '尚无已完成的代码评审' 'no-review accumulation note'
 has '没有 .review-map，代码路径全部由评审方 triage' 'no-map note'
 has '简报核实于 <code>' 'brief status line'
