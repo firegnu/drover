@@ -312,7 +312,7 @@ agent 在做什么 —— 那部分只在 herdr 的 pane 里。
 
 **通知。** launchd 那次刷新带 `--notify`：「等你」里卡住了那一档出现新条目时，弹一条 macOS 通知——一个项目一条，写有几条新的和第一条的内容——不用一直盯着看板。已通知过的条目记在 `~/.review/board-notified.json`，这是看板唯一自己存的东西，删掉只会把还开着的条目再通知一次；条目解决后从记录里消失，再出现会重新通知。`request-review` 退出时那次刷新不发，免得重复。「不急」档不通知。第一次可能要在「系统设置 → 通知」里允许"脚本编辑器"发通知（通知由 `osascript` 发出，点开的也是脚本编辑器，不是看板）。
 
-**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始的任务悬停时出现的「放弃」（可填原因；没编号的也有，按位置 + 指纹），任务看板标题栏的「+ 加任务」和「暂停发任务 / 恢复发任务」（经 `review-task pause` / `resume`；恢复不会叫醒写手，它停着就对它说「继续」）。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。已完成栏只列最近 5 个，栏底「查看全部 N 个」在右侧抽屉里列出全部做完和放弃的任务（点开时才向服务取 `GET /history`，不把历史嵌进页面）：顶上是完成 / 放弃数、平均用时、未评审数，可按编号或标题搜、按全部 / 完成 / 放弃筛；每行有用时、流程档位、评审轮数、结束时间、sha 区间或放弃原因，点一行看它发出时的正文（没发出过就被放弃的，看 `queue.md` 里还在的原文），「← 返回列表」保留搜索和筛选。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮。日志在 `~/.review/board-serve.log`。
+**带按钮的看板（本机服务）。** `install.sh` 还装一个常驻的 launchd 任务跑 `review-board serve`，用 `http://127.0.0.1:10086/` 打开看板（端口可用 `--port` 或 `REVIEW_BOARD_PORT` 改）。这样打开的页面每次请求现场生成，多出三样：做完等放行的任务卡上的「放行」，队列里还没开始的任务悬停时出现的「放弃」（可填原因；没编号的也有，按位置 + 指纹），任务看板标题栏的「+ 加任务」和「暂停发任务 / 恢复发任务」（经 `review-task pause` / `resume`；恢复不会叫醒写手，它停着就对它说「继续」）。放行、放弃都先弹确认框，结果原样显示 `review-task` 的输出。加任务是一个编辑框：标题、流程下拉（正常 / 修好再审 / 不评审）、正文，右边按抽屉的排版实时预览写手会收到的样子；保存经 `review-task add` 追加到队列末尾并自动编号（选了流程就在正文第一行写上 `流程：…`）。正文里顶格的 `## ` 会被当成另一个任务，预览标红，保存时拒绝；草稿存在浏览器里，关掉再开还在，保存成功才清掉；编辑框开着时页面不自动刷新。追加不重写 `queue.md`，agent 同时往里加任务也不会被冲掉。队列里还没开始的任务悬停时还有 ↑ ↓（也可以直接拖动排序）和「编辑」（同一个编辑框，预先填好，整块改写、编号不变）；这两样带着页面生成时 `queue.md` 的指纹，队列在这期间被别人改过（比如 agent 刚加了任务）就不动，提示刷新再做。已完成栏只列最近 5 个，栏底「查看全部 N 个」在右侧抽屉里列出全部做完和放弃的任务（点开时才向服务取 `GET /history`，不把历史嵌进页面）：顶上是完成 / 放弃数、平均用时、未评审数，可按编号或标题搜、按全部 / 完成 / 放弃筛；每行有用时、流程档位、评审轮数、结束时间、sha 区间或放弃原因，点一行看它发出时的正文（没发出过就被放弃的，看 `queue.md` 里还在的原文），「← 返回列表」保留搜索和筛选。服务只是替你敲命令——它先按当前状态把关（页面可能是旧的），再调用 `review-task go` / `drop` / `add` / `move` / `edit`，写入权仍只在 `review-task`，它的核对一条不绕过；正在做的任务不能在页面上放弃，还在终端里停。页面每 4 秒问服务一次交接目录、`docs/reviews`、git HEAD 有没有变化，变了就刷新（确认框开着时不刷），另保留 30 秒一次的整页刷新。防别的网页伪造请求：只监听 127.0.0.1，Host / Origin 只认本机这个端口，请求须带启动时随机生成、嵌在页面里的令牌，且是 JSON。服务不在时，`file://` 打开的 `~/.review/board.html` 照常能看，只是没有按钮（它顶栏的「带按钮的版本 ↗」指向服务地址）。日志在 `~/.review/board-serve.log`。
 
 **服务健康。** 这样打开的页面，顶栏右侧是一个状态圆点（静态文件仍是「生成于 …」）：绿 = 已同步且各项正常，黄 = 有要留意的项，红 = 连不上服务——按钮变灰，页面停在最后一次同步的样子（不再整页刷新，免得换成浏览器的「无法连接」）。点它在右侧抽屉里看每一项（每 15 秒取一次 `/health`，全是只读检查）：本机服务（pid、端口、已运行多久；启动后 `review-board` / `review-task` 被更新过就标出还在跑旧代码）、服务守护（launchd 是否托管、托管的是不是这个进程）、看板定时生成（launchd 任务是否加载、上次退出码、`board-notified.json` 多久没更新——超过 2 分钟说明「等你」通知可能停了）、生成出错记录（`board.err` 最近 10 分钟有没有新错误，有就附最后几行）、herdr 能不能连上。另外，常驻服务每次生成页面都重取当前时间，页面上「几分钟前」「已进行多久」不会随服务运行越久越偏。
 
@@ -2767,7 +2767,7 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .mast .agents{display:flex;gap:8px;font-size:12.5px;flex-wrap:wrap}.mast .ag{padding:2px 10px;border:1px solid #2c2e34;border-radius:999px;background:#1d1f24}.mast .ag b{font-weight:600;margin-right:6px}
 .mast .ag.wr{color:#e5b866}.mast .ag.rv{color:#8fb8ee}.mast .ag.pl{color:#c4a6f0}.mast .ag .off{color:#787674}
 .mast .agents .mute{color:#999793}
-.mast .gen{margin-left:auto;font-size:12px;color:#999793;font-variant-numeric:tabular-nums}
+.mast .gen{margin-left:auto;font-size:12px;color:#999793;font-variant-numeric:tabular-nums}.mast .golive{color:#8fb8ee}
 .banner{background:#33232b;border-bottom:1px solid #5e2c3d;box-shadow:inset 4px 0 0 #c8375a;padding:10px 24px;display:flex;gap:24px;align-items:baseline}
 .banner .t{font-weight:700;color:#f0a3b3;font-size:14px;flex:none}
 .banner .items{display:flex;flex-direction:column;gap:5px;min-width:0}
@@ -3685,7 +3685,8 @@ def render_panel(p, archives, self_closed, live=None):
         for rnd in p["rounds"]:
             parts.append(render_round(p, rnd))
         parts.append('</details>')
-    elif p["rounds"] or (p["req"] and p["state"] not in ("空闲",) and not p["state"].startswith("triage")):
+    # 有评审轮次，或 request.md 真写了 target：才算有在途周期。等你放行、规划中这类状态本身不是评审周期，不画空卡片
+    elif p["rounds"] or (p["req"].get("target sha") and p["state"] not in ("空闲",) and not p["state"].startswith("triage")):
         parts.append(render_cycle(p))
         for rnd in p["rounds"]:
             parts.append(render_round(p, rnd))
@@ -3815,7 +3816,8 @@ def render(projects, archives, self_closed, live=None):
                          next((p["plan_kind"] for p in projects if p.get("plan_kind")), ""),
                          next((p["plan_args"] for p in projects if p.get("plan_kind")), ""))
     gen_html = ('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
-                if live else f'<span class="gen">生成于 {gen[11:]}</span>')
+                if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("REVIEW_BOARD_PORT", "10086"))}/">'
+                             f'带按钮的版本 ↗</a></span>')
     mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'

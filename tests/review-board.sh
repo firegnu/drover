@@ -351,6 +351,21 @@ has '<li>代码评审<span class="x">不评审</span></li>' 'no-review card says
 has '<span class="kind noreview">未评审</span>' 'finished no-review task marked unreviewed'
 has '<span class="hand">手写 · 发出时编号</span><span class="flow later">修好再审</span></span>' 'pending review-last task marked, flow line not used as the note'
 
+# 没有在途评审（没有 request.md、也没有评审轮次）时不画空的周期卡片：theta 等你放行、epsilon 规划中
+python3 - "${OUT}" <<'PY2' || fail 'no empty cycle card when there is no review in flight'
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+def panel(name):
+    i = page.index(f'<div class="panel" data-p="{name}"'); j = page.find('<div class="panel" data-p=', i + 1)
+    return page[i:j if j > 0 else None]
+for name in ("theta/repo", "epsilon/repo"):
+    assert 'class="cycle' not in panel(name), name
+assert '无在途周期' in panel("theta/repo")
+assert 'class="cycle' in panel("eta/repo")                      # 真在评审的照常有
+PY2
+# 静态看板顶栏提示带按钮的版本在哪（本机服务的地址）；服务页不需要
+has '<a class="golive" href="http://127.0.0.1:10086/">' 'the static board points to the live board'
+
 # 不接触真实项目
 lacks 'jb-finetune' 'real project leaked into fixture board'
 lacks '~/Developer' 'default discovery used'
@@ -557,6 +572,7 @@ echo 'PASS review-board serve: view all finished tasks via GET /history (newest 
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'
+grep -qF 'class="golive"' "${TMP}/live.html" && fail 'the live board does not link to itself'
 # 常驻服务要每次都用当前时间算「几分钟前」：模块里的 NOW 若停在启动那刻，页面上的时长会越来越偏
 python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect refreshes NOW for every page'
 import importlib.machinery, importlib.util, os, sys, time

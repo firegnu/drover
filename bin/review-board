@@ -869,7 +869,7 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .mast .agents{display:flex;gap:8px;font-size:12.5px;flex-wrap:wrap}.mast .ag{padding:2px 10px;border:1px solid #2c2e34;border-radius:999px;background:#1d1f24}.mast .ag b{font-weight:600;margin-right:6px}
 .mast .ag.wr{color:#e5b866}.mast .ag.rv{color:#8fb8ee}.mast .ag.pl{color:#c4a6f0}.mast .ag .off{color:#787674}
 .mast .agents .mute{color:#999793}
-.mast .gen{margin-left:auto;font-size:12px;color:#999793;font-variant-numeric:tabular-nums}
+.mast .gen{margin-left:auto;font-size:12px;color:#999793;font-variant-numeric:tabular-nums}.mast .golive{color:#8fb8ee}
 .banner{background:#33232b;border-bottom:1px solid #5e2c3d;box-shadow:inset 4px 0 0 #c8375a;padding:10px 24px;display:flex;gap:24px;align-items:baseline}
 .banner .t{font-weight:700;color:#f0a3b3;font-size:14px;flex:none}
 .banner .items{display:flex;flex-direction:column;gap:5px;min-width:0}
@@ -1787,7 +1787,8 @@ def render_panel(p, archives, self_closed, live=None):
         for rnd in p["rounds"]:
             parts.append(render_round(p, rnd))
         parts.append('</details>')
-    elif p["rounds"] or (p["req"] and p["state"] not in ("空闲",) and not p["state"].startswith("triage")):
+    # 有评审轮次，或 request.md 真写了 target：才算有在途周期。等你放行、规划中这类状态本身不是评审周期，不画空卡片
+    elif p["rounds"] or (p["req"].get("target sha") and p["state"] not in ("空闲",) and not p["state"].startswith("triage")):
         parts.append(render_cycle(p))
         for rnd in p["rounds"]:
             parts.append(render_round(p, rnd))
@@ -1917,7 +1918,8 @@ def render(projects, archives, self_closed, live=None):
                          next((p["plan_kind"] for p in projects if p.get("plan_kind")), ""),
                          next((p["plan_args"] for p in projects if p.get("plan_kind")), ""))
     gen_html = ('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
-                if live else f'<span class="gen">生成于 {gen[11:]}</span>')
+                if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("REVIEW_BOARD_PORT", "10086"))}/">'
+                             f'带按钮的版本 ↗</a></span>')
     mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
