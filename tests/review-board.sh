@@ -506,6 +506,19 @@ assert q[i:j].strip() == "## 修一下登录页的超时（改）\n流程：不�
 PY2
 echo 'PASS review-board serve: reorder and edit pending tasks via review-task move / edit, guarded by the queue fingerprint'
 
+# ---- 页面上暂停 / 恢复发新任务：标题栏按当前状态给「暂停发任务」或「恢复发任务」，经 review-task pause / resume
+grep -qF 'data-act="pause" data-p="eta/repo"' "${TMP}/live.html" || fail 'pause button on a board that is not paused'
+grep -qF 'data-act="resume" data-p="theta/repo"' "${TMP}/live.html" || fail 'resume button on a paused board'
+grep -qF 'data-act="resume" data-p="eta/repo"' "${TMP}/live.html" && fail 'no resume button on a board that is not paused'
+[ "$(post /api/pause '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'pause from the page'; }
+[ -f "${TMP}/eta/review/paused" ] || fail 'pause goes through review-task pause'
+[ "$(post /api/pause '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'pause refused when already paused (the page was stale)'
+[ "$(post /api/resume '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'resume from the page'; }
+[ ! -f "${TMP}/theta/review/paused" ] || fail 'resume goes through review-task resume'
+[ "$(post /api/resume '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'resume refused when not paused'
+rm -f "${TMP}/eta/review/paused"
+echo 'PASS review-board serve: pause / resume from the page via review-task, refused when the page was stale'
+
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'
@@ -527,7 +540,8 @@ case "\$2" in
   */dev.herdsman.review-board-serve) [ -f "${TMP}/serve.unloaded" ] && exit 113
     pid=\$PPID; [ -f "${TMP}/serve.other" ] && pid=1
     printf '\tstate = running\n\tpid = %s\n\tlast exit code = 0\n' "\$pid";;
-  */dev.herdsman.review-board) printf '\tstate = not running\n\tlast exit code = 0\n';;
+  */dev.herdsman.review-board) code=0; [ -f "${TMP}/board.never" ] && code='(never exited)'
+    printf '\tstate = not running\n\tlast exit code = %s\n' "\$code";;
   *) exit 113;;
 esac
 EOF
@@ -557,6 +571,7 @@ PY2
 }
 health ok 本机服务 true '端口'
 health ok 看板定时生成 true '通知正常'
+: > "${TMP}/board.never"; health ok 看板定时生成 true '通知正常'; rm "${TMP}/board.never"
 printf 'Traceback: boom\n' > "${TMP}/home/.review/board.err"
 health warn 生成出错记录 false 'boom'
 python3 -c 'import os,sys,time; t=time.time()-3600; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.review/board.err"

@@ -895,6 +895,7 @@ dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
 .offline .act{opacity:.35;pointer-events:none}
 .hlist{margin-top:14px;border-top:1px solid #33353a}.hrow{display:grid;grid-template-columns:14px 150px minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:10px 0;border-bottom:1px solid #33353a}
 .hrow .hdot{transform:translateY(-1px)}.hrow b{font-weight:600;color:#e6e4df;font-size:13px}.hdet{font-size:12.5px;color:#b1afa9;white-space:pre-wrap;word-break:break-word}.hrow.warn .hdet{color:#e5c98f}
+.tasks .th .act.pz{margin-left:10px;background:#2d2f35;color:#d6d3cc;border-color:#4a4c52;padding:5px 12px}.tasks .th .act.pz:hover{border-color:#e5b866;color:#e5b866}
 .tasks .th .act.add{margin-left:10px;background:#4a7fc1;color:#fff;padding:5px 12px}.tasks .th .act.add:hover{background:#5a8fd1}
 dialog.rbe{background:#26282d;color:#e6e4df;border:1px solid #45474d;border-radius:8px;padding:18px 20px;width:min(1080px,94vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
 dialog.rbe::backdrop{background:rgba(0,0,0,.5)}
@@ -1166,11 +1167,14 @@ JS = """
       if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
       if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
       cur=b.dataset;
-      var go=cur.act==='go';
-      t.textContent=(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title;
-      m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。':'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。';
-      rs.hidden=go;rs.value='';out.hidden=true;out.textContent='';ok.hidden=false;ok.disabled=false;no.textContent='取消';
-      dlg.showModal();if(!go)rs.focus()},true);
+      var go=cur.act==='go',drop=cur.act==='drop',pz=cur.act==='pause';
+      t.textContent=drop||go?(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title:(pz?'暂停发新任务':'恢复发新任务')+' · '+cur.p;
+      m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。'
+        :drop?'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。'
+        :pz?'暂停后写手运行 review-task next 领不到新任务；正在做的任务照常做完。'
+        :'恢复后写手运行 review-task next 就能领到新任务。写手不会被自动叫醒：它停着的话，对它说「继续」。';
+      rs.hidden=!drop;rs.value='';out.hidden=true;out.textContent='';ok.hidden=false;ok.disabled=false;no.textContent='取消';
+      dlg.showModal();if(drop)rs.focus()},true);
     f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       ok.disabled=true;
       fetch('/api/'+cur.act,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
@@ -1582,7 +1586,9 @@ def render_tasks(p, live=None):
                    f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
         descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
-    add = f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>' if live else ""
+    add = (f'<button class="act pz" type="button" data-act="{"resume" if tv["paused"] else "pause"}" data-p="{esc(p["name"])}">'
+           f'{"恢复发任务" if tv["paused"] else "暂停发任务"}</button>'
+           f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>') if live else ""
     qattr = f' data-p="{esc(p["name"])}" data-qv="{esc(tv["qv"])}"' if live else ""
     return (f'<section class="tasks"{qattr}><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
             f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
@@ -1941,7 +1947,7 @@ def health(started, port):
     age = now - os.stat(nf).st_mtime if os.path.exists(nf) else None
     if not bj:
         add("看板定时生成", False, "定时任务没加载：board.html 不会每 30 秒刷新，「等你」通知也不会发（运行 install.sh）")
-    elif bj["exit"] not in ("", "0"):
+    elif bj["exit"] not in ("", "0") and not bj["exit"].startswith("("):     # 「(never exited)」：刚装好还没跑完第一次
         add("看板定时生成", False, f"上次退出码 {bj['exit']}：看生成出错记录")
     elif age is None:
         add("看板定时生成", False, "还没运行过（board-notified.json 不存在）")
@@ -1992,6 +1998,10 @@ def live_action(list_path, act, body):
             lines = [l for l in lines if not TASK_FLOW.match(l)]
         text = [title, *([f"流程：{flow}"] if flow else []), *lines]
         cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
+    elif act in ("pause", "resume"):
+        if tv["paused"] == (act == "pause"):
+            return 409, {"ok": False, "out": ("已经是暂停状态" if act == "pause" else "没有暂停") + "（页面可能是旧的，刷新看看）"}
+        cmd = [task_bin, act]
     elif act == "move":
         cmd = [task_bin, "move", str(body.get("from") or ""), str(body.get("to") or ""), *expect]
     elif act == "go":
@@ -2051,7 +2061,8 @@ def serve(args):
                 return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 return self.reply(415, {"ok": False, "out": "只接受 JSON"})
-            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit"}.get(self.path)
+            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit",
+                   "/api/pause": "pause", "/api/resume": "resume"}.get(self.path)
             if not act:
                 return self.reply(404, {"ok": False, "out": "没有这个操作"})
             try:
