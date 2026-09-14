@@ -519,6 +519,17 @@ grep -qF 'data-act="resume" data-p="eta/repo"' "${TMP}/live.html" && fail 'no re
 rm -f "${TMP}/eta/review/paused"
 echo 'PASS review-board serve: pause / resume from the page via review-task, refused when the page was stale'
 
+# ---- 页面上放弃没编号的任务：放弃按钮带队列位置，和调整顺序一样带着指纹
+curl -s "${U}/" > "${TMP}/live.html"
+[ "$(epending)" = "普通任务|修一下登录页的超时（改）|导出支持按月分文件" ] || fail "eta pending before dropping by position: $(epending)"
+grep -qF 'data-act="drop" data-p="eta/repo" data-id="" data-pos="2"' "${TMP}/live.html" || fail 'drop button on an unnumbered pending task'
+QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").read()).hexdigest()[:12])' "${TMP}/eta/review/queue.md")
+[ "$(post /api/drop '{"project":"eta/repo","pos":2,"reason":"不做了","expect":"000000000000"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'a stale fingerprint refuses the drop'
+[ "$(post /api/drop '{"project":"eta/repo","pos":2,"reason":"不做了","expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'drop an unnumbered task from the page'; }
+[ "$(epending)" = "普通任务|导出支持按月分文件" ] || fail "dropped by position: $(epending)"
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"key": "修一下登录页的超时（改）".*不做了' || fail 'the page drop goes through review-task drop --pos'
+echo 'PASS review-board serve: drop unnumbered pending tasks from the page by position, guarded by the queue fingerprint'
+
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'

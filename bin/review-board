@@ -1168,7 +1168,7 @@ JS = """
       if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
       cur=b.dataset;
       var go=cur.act==='go',drop=cur.act==='drop',pz=cur.act==='pause';
-      t.textContent=drop||go?(go?'放行 ':'放弃 ')+cur.id+' · '+cur.title:(pz?'暂停发新任务':'恢复发新任务')+' · '+cur.p;
+      t.textContent=drop||go?(go?'放行 ':'放弃 ')+(cur.id?cur.id+' · ':'（未编号）')+cur.title:(pz?'暂停发新任务':'恢复发新任务')+' · '+cur.p;
       m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。'
         :drop?'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。'
         :pz?'暂停后写手运行 review-task next 领不到新任务；正在做的任务照常做完。'
@@ -1178,7 +1178,7 @@ JS = """
     f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       ok.disabled=true;
       fetch('/api/'+cur.act,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify({project:cur.p,id:cur.id,reason:rs.value})})
+        body:JSON.stringify(cur.act==='drop'?{project:cur.p,pos:+cur.pos,reason:rs.value,expect:qvOf(cur.p)}:{project:cur.p,id:cur.id,reason:rs.value})})
         .then(function(r){return r.json()}).then(function(j){
           out.hidden=false;out.textContent=j.out||'';out.className='rbd-out'+(j.ok?' ok':' bad');
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
@@ -1540,7 +1540,7 @@ def render_tasks(p, live=None):
                     + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
                     + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
                     + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
-                    + (f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-title="{esc(b["title"])}">放弃</button>' if b["id"] else "")
+                    + f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-pos="{pos}" data-title="{esc(b["title"])}">放弃</button>'
                     + '</span>')
             drag = f' draggable="true" data-pos="{pos}"'
         q.append(f'<li data-td="{esc(key)}"{drag}><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{acts}</li>')
@@ -2009,14 +2009,17 @@ def live_action(list_path, act, body):
             return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
         cmd = [task_bin, "go"]
     else:
-        tid = str(body.get("id") or "")
-        if tid not in [b["id"] for b in tv["todo"] if b["id"]]:
-            return 409, {"ok": False, "out": f"{tid or '这个任务'} 不在队列里还没开始的任务中：页面上只能放弃还没开始、有编号的任务"}
         reason = " ".join(str(body.get("reason") or "").split())[:300]
-        cmd = [task_bin, "drop", tid, reason]
+        if body.get("pos"):                                          # 按队列位置（没编号的也行），带指纹防冲突
+            cmd = [task_bin, "drop", "--pos", str(body.get("pos")), reason, *expect]
+        else:
+            tid = str(body.get("id") or "")
+            if tid not in [b["id"] for b in tv["todo"] if b["id"]]:
+                return 409, {"ok": False, "out": f"{tid or '这个任务'} 不在队列里还没开始的任务中：页面上只能放弃还没开始的任务"}
+            cmd = [task_bin, "drop", tid, reason]
     r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
     out = (r.stdout + r.stderr).strip()
-    if r.returncode == 2 and act in ("move", "edit"):
+    if r.returncode == 2 and (act in ("move", "edit") or body.get("pos")):
         return 400, {"ok": False, "code": 2, "out": out.split("\n\n")[0]}
     return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": out}
 

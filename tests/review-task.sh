@@ -203,6 +203,20 @@ rt edit 1 "丁" --expect 000000000000; code 10 'a stale --expect refuses the edi
 [ "$(cat "${D}/queue.md")" = "${QB}" ] || fail 'refused edits write nothing'
 rt edit 1 "手写丁（改）" "丁的新说明"; code 0 'edit an unnumbered task by position'
 grep -qx '## 手写丁（改）' "${D}/queue.md" || fail 'an unnumbered task stays unnumbered'
+# ---- 按位置放弃还没开始的任务：没编号的也行（编号记进 tasks.state、按标题认），有编号的照原来的放弃；--expect 同样防冲突
+printf '\n## 手写戊\n戊的说明\n' >> "${D}/queue.md"
+[ "$(pending)" = "手写丁（改）|排序乙（改）|排序丙|排序甲|手写戊" ] || fail "pending before dropping by position: $(pending)"
+rt drop --pos 5 "不要了" --expect 000000000000; code 10 'a stale --expect refuses the drop'
+[ "$(pending)" = "手写丁（改）|排序乙（改）|排序丙|排序甲|手写戊" ] || fail 'a refused drop changes nothing'
+rt drop --pos 5 "不要了" --expect "$(qv)"; code 0 'drop an unnumbered task by position'; has '手写戊' 'says which task was dropped'
+[ "$(pending)" = "手写丁（改）|排序乙（改）|排序丙|排序甲" ] || fail "the unnumbered task is no longer pending: $(pending)"
+tail -1 "${D}/tasks.state" | grep -q '"ev": "drop".*"key": "手写戊".*"reason": "不要了"' || fail 'the drop is recorded with its title as key'
+grep -qx '## 手写戊' "${D}/queue.md" || fail 'the queue text is left as it was'
+rt drop --pos 3 "丙也不要"; code 0 'drop a numbered task by position'
+tail -1 "${D}/tasks.state" | grep -q '"ev": "drop", "id": "T14"' || fail 'a numbered task is dropped under its own ID'
+[ "$(pending)" = "手写丁（改）|排序乙（改）|排序甲" ] || fail "after dropping T14: $(pending)"
+rt drop --pos 9 "x"; code 2 'a position past the queue'
+rt list; has '手写戊' 'list shows the dropped unnumbered task'
 rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues the task now at the front'
 
 # ---- docs/queue-example.md 本身是合法的队列：四个任务，流程依次是 正常 / 正常 / 修好再审 / 不评审 ----

@@ -19,10 +19,11 @@
   review-task done T5                 写手：核对是否真的收尾；通过后停下等放行，或直接发下一个
   review-task go                      人：放行（放行模式）
   review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
+  review-task drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
   review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
-                                      --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写
+                                      --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
 退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足；
         10 队列在这期间被改过（--expect 对不上），什么都没写。
 .review.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
@@ -397,6 +398,20 @@ def cmd_drop(tid, reason):
     return 0
 
 
+def cmd_drop_pos(pos, reason, expect):
+    """按队列位置放弃还没开始的任务。有编号走 cmd_drop；没编号的在 tasks.state 里给个编号、以标题为 key 记下，
+    task_pending 按标题认出它已放弃（和 next 发没编号的任务同一个办法）；queue.md 原文不动。"""
+    _, raw, slots = pending_slots(expect)
+    b = B.task_blocks(raw[slots[slot(pos, slots)]])[0]
+    if b["id"]:
+        return cmd_drop(b["id"], reason)
+    tid = f"T{next_num()}"
+    append({"ev": "drop", "id": tid, "title": b["title"], "key": b["title"], "reason": reason})
+    print(f"已放弃 {tid}：{b['title']}" + (f"（{reason}）" if reason else "")
+          + "。queue.md 里这块没编号，按标题认：之后再手写同名的没编号任务也会被当成已放弃，换个标题或加上编号。")
+    return 0
+
+
 def cmd_pause(on):
     if on:
         open(PAUSED, "a").close()
@@ -451,8 +466,8 @@ def main(argv):
         if k + 1 >= len(rest):
             die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
         expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
-        if cmd not in ("move", "edit"):
-            die(2, "ERROR: --expect 只用于 move / edit")
+        if cmd not in ("move", "edit", "drop"):
+            die(2, "ERROR: --expect 只用于 move / edit / drop --pos")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and not rest:
@@ -463,7 +478,9 @@ def main(argv):
         return cmd_done(rest[0].upper())
     if cmd == "go" and not rest:
         return cmd_go()
-    if cmd == "drop" and rest:
+    if cmd == "drop" and len(rest) >= 2 and rest[0] == "--pos":
+        return cmd_drop_pos(rest[1], " ".join(rest[2:]), expect)
+    if cmd == "drop" and rest and not expect:
         return cmd_drop(rest[0].upper(), " ".join(rest[1:]))
     if cmd == "move" and len(rest) == 2:
         return cmd_move(rest[0], rest[1], expect)
