@@ -61,6 +61,7 @@ templates/
 docs/
   QUICKSTART.md       纯步骤
   HANDBOOK.md         完整手册
+  ROADMAP.md          路线图：要改机制的大事，各带止损点
 install.sh
 ```
 
