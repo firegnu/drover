@@ -6,12 +6,12 @@
 
 | 编号 | 事项 | 状态 | 前置 |
 |---|---|---|---|
-| R1 | 用 corral 完全替代 herdr | 未开始 | 无；第 1 步是试验，决定做不做 |
+| R1 | corral：herdsman 的第二种底层（与 herdr 并存，默认 herdr） | 试验中 | 无；第 1 步是试验，决定做不做 |
 | R2 | 引入 RSI（流程的递归自我改进） | 未开始 | 无；R2 第一步建议先做，见文末「顺序」 |
 
 ---
 
-## R1 用 corral 完全替代 herdr
+## R1 corral：herdsman 的第二种底层（与 herdr 并存，默认 herdr）
 
 ### 名字
 
@@ -20,7 +20,12 @@
 
 ### 目标
 
-自己写 corral，**完全替代 herdr**：herdsman 的写手、规划者、评审方都跑在 corral 里。终点是**删掉 herdsman 里的 herdr 路径**，不再依赖任何现成的终端工具（herdr、tmux 都不用）。
+自己写 corral，作为 herdsman 托管 agent 的**第二种底层**：打开开关的项目，写手、规划者、评审方都跑在 corral 里，不依赖任何现成的终端工具（herdr、tmux 都不用）。
+
+**终点（2026-09-15 改定）：两套并存，默认 herdr。** herdsman 同时支持 herdr 和 corral，每个项目在 `.review.conf` 里选，不选就是 herdr；jb-finetune 默认留在 herdr。
+**要不要去掉 herdr 路径，等 corral 在真实项目里用过一段时间再定**（见分步第 5 步）。原先写的是「完全替代、删掉 herdr 路径」，改的原因：换到 corral 的项目会失去一些 herdr 的体验（见下面「换到 corral 会失去什么」），在没有实际用过之前不定死。
+
+「herdsman 不用 herdr」不等于「人不用 herdr」：人照样可以把 herdr 当日常终端工作区，换掉的只是这三个 agent 由谁托管。
 corral 只用 Python 标准库，不引入新依赖。**交互方式保持不变**：agent 仍是交互式的，你随时能看、能点对话框、能插话。
 
 思路：AI 时代的三样东西里，agent（Claude Code、Codex）是租来的；harness（herdsman 的协议、轮次、证据门槛、队列、看板）是自己的、值得精雕；
@@ -28,7 +33,7 @@ corral 只用 Python 标准库，不引入新依赖。**交互方式保持不变
 
 ### 隔离：corral 和 herdsman 是两个项目
 
-corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。两者的关系和今天 herdr 与 herdsman 一样：herdr 不知道评审是什么，herdsman 只通过 herdr 的命令用它。corral 占的正是 herdr 这个位置，只不过是自己写的。
+corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。两者的关系和今天 herdr 与 herdsman 一样：herdr 不知道评审是什么，herdsman 只通过 herdr 的命令用它。corral 和 herdr 占同一个位置（托管 agent 的底层），每个项目二选一，只不过 corral 是自己写的。
 
 **两条判断标准**
 1. **corral 不认识 herdsman**：corral 可以原样拿去给别的 harness 用；它的代码、文档、测试里没有「评审」「写手」「规划者」「项目」「队列」这类词。
@@ -42,7 +47,7 @@ corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。
 | | corral | herdsman |
 |---|---|---|
 | 仓库 | 独立仓库 | 现有仓库 |
-| 安装 | corral 自己的安装脚本 | `install.sh` 只检查 corral 装了没有（和今天检查 herdr 一样），不安装、不管理它 |
+| 安装 | corral 自己的安装脚本 | `install.sh` 只检查依赖装了没有（herdr、corral 至少一个），不安装、不管理 corral |
 | 升级 | 自己决定怎么处理正在跑的栏位 | 不知道栏位存在 |
 | 测试 | 测自己，不依赖 herdsman | 用假的 `corral` 命令模拟（和今天模拟 herdr 一样），不依赖真的 corral |
 | 版本 | 自己的版本号 | 声明需要的 corral 契约版本 |
@@ -67,6 +72,19 @@ corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。
 ### 同类工具调研
 
 已搬到 corral 仓库：`corral/docs/DESIGN.md` 第 4 节（abduco、herdr、subagent-cli、agent-yes、ACP 的对比，结论是只参考不采用）。
+
+### 换到 corral 会失去什么（2026-09-15）
+
+对打开开关、改用 corral 的项目：
+
+| 今天在 herdr 里的体验 | 换成 corral 以后 |
+|---|---|
+| herdr 侧边栏能看到写手、评审方在干活、空闲还是卡住 | **看不到**：在 herdr 窗格里运行 `corral attach`，herdr 只看到一个 corral 进程，认不出里面的 agent。状态要看看板或 `corral status` |
+| 评审方自动在写手右边切出窗格 | 人预先开一个分屏挂 `corral attach --wait`，效果接近，但要自己摆好 |
+| herdr 自带的 agent 完成 / 卡住提醒 | 靠看板的「等你」和系统通知 |
+| herdr 的窗格布局、会话恢复 | 对这三个 agent 不起作用 |
+
+这张表是「默认 herdr、是否去掉 herdr 路径以后再定」的主要原因。试验和实际使用时要特别留意：少了 herdr 侧边栏之后，盯 agent 状态是否明显变难。
 
 ### 现状：herdsman 里 herdr 用在哪
 
@@ -149,14 +167,14 @@ corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。
 
 | 位置 | 要改什么 | 工作量 |
 |---|---|---|
-| `request-review` 传输层 | herdr 调用换成 corral 命令；按窗格编号缓存评审方、规划者的两个文件（`.pane`、`.plan-pane`）不再需要，名字是固定的；「等 shell 就绪」那段删掉 | 中 |
+| `request-review` 传输层 | 在现有 herdr 实现旁边加一套 corral 实现，按 `.review.conf` 选；corral 实现里按窗格编号缓存评审方、规划者的两个文件（`.pane`、`.plan-pane`）不再需要，名字是固定的；「等 shell 就绪」那段删掉 | 中 |
 | 已发送记录、叫醒标记、循环等待标记 | 里面记的窗格编号、终端编号、会话编号换成名字 + 实例编号；看板读这些文件的地方跟着改 | 小 |
 | 规划者自己跑 request-review 送审 | 叫醒对象从「调用者的窗格变量」换成「调用者的 corral 名字」；「自己等自己」的防护改为比对名字 | 小 |
 | `review-board` | 状态、健康检查、「等你」里的「去看 pane 某某」改成接入命令；认角色从按工作目录猜改为按名字 | 小 |
 | `review-task` | 写手身份变量、「你不在 herdr 里」的提示 | 小 |
 | 给 agent 的常驻指令（`templates/agents-section.md`） | 「不要关别人的 pane、不要停 herdr 服务」改为 corral 说法；**新增一条：不许用 corral 直接给评审方或规划者送话来绕过流程**（今天用 herdr 也能绕，只是没写明） | 小 |
-| `install.sh`、QUICKSTART、手册 | 依赖检查改为 corral；写手用 `corral start` 启动；手册第 11 部分 herdr 实测移入历史 | 小 |
-| 测试 | 所有模拟 herdr 的地方改为模拟 corral 命令 | 大，但都是机械改动 |
+| `install.sh`、QUICKSTART、手册 | 依赖检查改为「herdr、corral 至少一个」，request-review 按项目配置检查实际用的那个；补「用 corral 时写手用 `corral start` 启动」的说明；手册第 11 部分 herdr 实测保留 | 小 |
+| 测试 | 模拟 herdr 的测试保留；另加一套模拟 corral 命令的测试，两种底层都要覆盖 | 大，但都是机械改动 |
 
 复核时新发现的一个风险是「启动者的环境会被继承」，已写进 corral 设计第 9 节「沙箱与环境继承」，结论是在当前用法下没问题。
 
@@ -164,7 +182,7 @@ corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。
 
 ### 第二部分：herdsman 这边怎么接
 
-- **传输层换实现**：`request-review` 保留今天那段传输层，里面的 herdr 调用换成 `corral` 命令。`review-board`（状态、健康检查、外层循环叫醒）、`review-task` 同理。协议文件一个不改。
+- **传输层两套实现**：`request-review` 保留今天那段传输层的 herdr 实现，旁边加一套 corral 实现，按 `.review.conf` 的开关选，默认 herdr。`review-board`（状态、健康检查、外层循环叫醒）、`review-task` 同理。协议文件一个不改。
 - **起名**：herdsman 按「项目/角色」给 agent 起名，比如 `jbfine/writer`、`jbfine/planner`、`jbfine/reviewer`。这是 herdsman 的约定，corral 不知道。
 - **叫醒写手防认错**：发起评审时记下写手的实例编号（从 `corral status` 拿），叫醒前再查一次，对不上不注入。取代今天比对终端编号和会话编号的做法。
 - **写手身份**：`review-task` 从 `HERDR_PANE_ID` 换成通过 `corral` 命令查到的写手实例。
@@ -204,8 +222,12 @@ corral 是**基础设施**，给 harness 提供支持，但不属于 herdsman。
    第 1–7 条或第 12 条任何一条过不了，R1 结束；第 8–11 条过不了，按「止损点」里的规则处理。
 2. **corral 正式版**：栏位、`corral` 命令、契约文档、corral 自己的安装脚本和测试（不依赖真 agent）。测试专门覆盖：同名并发打开只成功一个、栏位死后残留被识别、送达确认超时、升级 corral 不影响正在跑的栏位。
 3. **herdsman：评审方、规划者改走 corral**：传输层加 corral 实现，`.review.conf` 里一个开关，默认仍是 herdr；herdsman 测试用假的 `corral` 命令。在 jb-finetune 上打开开关跑真实周期。
-4. **herdsman：写手改走 corral**：叫醒写手、外层循环、`review-task` 的写手身份一起切换。从这一步起整个流程不再需要 herdr。
-5. **herdsman：删掉 herdr 路径**：第 3、4 步都达到成功标准后，删除传输层里的 herdr 实现和开关，`install.sh` 改为检查 corral，手册第 11 部分「herdr 事实核对」移入历史。
+4. **herdsman：写手改走 corral**：叫醒写手、外层循环、`review-task` 的写手身份一起切换。从这一步起，打开开关的项目整个流程不再需要 herdr；没打开的项目照旧用 herdr。
+5. **herdsman：决定 herdr 路径的去留（可选，不急）**：第 3、4 步都达到成功标准、并且 corral 在真实项目里用过一段时间之后，再在三种做法里选：
+   - **长期并存**：两套都维护，每个项目自己选。代价是两套托管代码、两套测试，为 herdr 写的兜底代码也要一直留着。
+   - **冻结 herdr 路径**：不再主动维护，坏了不修，但暂时不删，留过渡期。
+   - **删掉 herdr 路径**：只保留 corral，`install.sh` 改为只检查 corral，手册第 11 部分移入历史。
+   决定时重点看「换到 corral 会失去什么」那张表在实际使用中是否可以接受。
 
 ### 怎么算成功
 
