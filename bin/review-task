@@ -146,16 +146,14 @@ def issue(t, again=False):
 
 
 # ============================================================ 「做完了」的核对（只读）
-def own_record(paths, map_diff):
-    """去掉脚本自己写的：docs/reviews/ 下全部；.review-map 只新增了「# 自动升级」行时也算。同 request-review 的 drop_own。"""
-    ch = [l for l in map_diff.splitlines() if re.match(r'^[-+][^-+]', l)]
-    map_auto = all(re.match(r'^\+.*# 自动升级', l) for l in ch)
-    return [p for p in paths if not p.startswith("docs/reviews/") and not (p == ".review-map" and map_auto)]
+def own_record(paths):
+    """去掉脚本自己写的：docs/reviews/ 下全部。同 request-review 的 drop_own。"""
+    return [p for p in paths if not p.startswith("docs/reviews/")]
 
 
 def tree_dirty():
     paths = [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
-    return own_record(paths, git("diff", "HEAD", "--", ".review-map"))
+    return own_record(paths)
 
 
 def skipped_shas():
@@ -178,7 +176,7 @@ def unreviewed(base, h, skipped):
         if git("rev-parse", "--short", c).strip() in skipped:
             continue
         paths = git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", c).split()
-        if own_record(paths, git("show", "--format=", c, "--", ".review-map")):
+        if own_record(paths):
             out.append(c)
     return out
 
