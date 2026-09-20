@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""review-board —— 评审流程的只读看板。
+"""review-board —— 外层循环的只读看板。
 
-扫所有配了 .drover.conf 的仓库，从交接目录（REVIEW_DIR）和归档（docs/reviews）生成一个
-静态 HTML，写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
+扫所有配了 .drover.conf 的仓库，从交接目录（REVIEW_DIR）生成一个静态 HTML，
+写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
 
 用法:
   review-board            生成
   review-board --open     生成后用浏览器打开
-  review-board --quiet    生成，不打印路径（request-review 退出时调用）
+  review-board --quiet    生成，不打印路径
   review-board --out P    写到 P
   review-board --projects F   只看 F 里列出的仓库（一行一个），不做默认发现；测试用
 
@@ -31,9 +31,6 @@ PROJ_GLOB = os.path.expanduser("~/Developer/personal_projs/*/.drover.conf")
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 PROJ_LIST = os.path.expanduser("~/.drover/projects")
 DEFAULT_OUT = os.path.expanduser("~/.drover/board.html")
-STAT_FILES = {"precision.md", "self-closed.md", "timing.md", "skipped.md", "escapes.md"}
-DIFF_MAX_LINES = 2000
-ARCHIVES_SHOWN = 5
 NOW = time.time()
 
 
@@ -62,25 +59,6 @@ def git(repo, *args):
 
 def esc(s):
     return html.escape(s or "", quote=True)
-
-
-def dur(seconds):
-    if seconds is None or seconds < 0:
-        return ""
-    seconds = int(seconds)
-    return f"{seconds // 60}m{seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
-
-
-def reviewer_status(pane):
-    """问 herdr 评审方 pane 的 agent_status；herdr 不在、pane 不存在都返回 unknown。"""
-    if not pane:
-        return "unknown"
-    try:
-        out = subprocess.run([HERDR, "agent", "get", pane], capture_output=True, text=True, timeout=5).stdout
-        m = re.search(r'"agent_status"\s*:\s*"([a-z]+)"', out)
-        return m.group(1) if m else "unknown"
-    except Exception:
-        return "unknown"
 
 
 _AGENTS = None
@@ -112,22 +90,16 @@ def pane_activity(pane):
     return ""
 
 
-def agents_of(repo, wt, reviewer_pane):
-    """{"writer": info, "reviewer": info}：写手 = cwd 是仓库的 agent；评审方 = 派发时记下的 pane，或 cwd 是评审 worktree。
-    info = {status, title, activity}；找不到的角色不出现。"""
+def agents_of(repo):
+    """{"writer": info}：主控 = cwd 是仓库的 agent。info = {status, title, activity}；找不到就不出现。"""
     def real(x):
         return os.path.realpath(x) if x else ""
     out = {}
     for a in herdr_agents():
-        cwd = real(a.get("cwd"))
-        role = None
-        if (a.get("name") or "").startswith("pl-") and cwd == real(repo):
-            role = "planner"
-        elif reviewer_pane and a.get("pane_id") == reviewer_pane or (wt and cwd == real(wt)):
-            role = "reviewer"
-        elif cwd == real(repo):
-            role = "writer"
-        if not role or role in out:
+        if real(a.get("cwd")) != real(repo):
+            continue
+        role = "writer"
+        if role in out:
             continue
         st = a.get("agent_status") or "unknown"
         title = (a.get("terminal_title_stripped") or "").strip()
@@ -151,13 +123,6 @@ def ago(ts):
     return f"{d // 86400}d"
 
 
-def sentinel_ok(text, word="REVIEW-COMPLETE"):
-    if text is None:
-        return False
-    lines = [l for l in text.splitlines() if l.strip()]
-    return bool(lines) and lines[-1].strip() == word
-
-
 # ============================================================ 解析交接文件
 def parse_conf(path):
     conf = {}
@@ -168,220 +133,15 @@ def parse_conf(path):
     return conf
 
 
-def parse_request(text):
-    req = {}
-    for line in (text or "").splitlines():
-        m = re.match(r'^([a-z ]+?):\s*(.*)$', line)
-        if m:
-            req[m.group(1).strip()] = m.group(2).strip()
-    m = re.match(r'(\d+)\s*/\s*(\d+)', req.get("round", ""))
-    req["_round"] = int(m.group(1)) if m else 1
-    req["_cap"] = int(m.group(2)) if m else 0
-    return req
-
-
-FINDING_RE = re.compile(r'^[\s#*_-]*F(\d+)[\s*_]*[|:—-]+\s*(.*)$')
-RESP_RE = re.compile(r'^\s*F(\d+)\s+(accept|defer|reject)\b\s*[—-]*\s*(.*)$', re.I)
-DEC_RE = re.compile(r'^\s*F(\d+)\s+(uphold|overrule)\b\s*[—-]*\s*(.*)$', re.I)
-SEVS = ("blocking", "should", "nit")
-STATUSES = ("resolved", "not-resolved", "regressed", "upheld", "deferred", "disputed", "overruled")
-FIELDS = {"claim": "claim", "evidence": "evidence", "fix-hint": "hint", "status": "status", "verdict": "status"}
-
-
-def parse_findings(text):
-    """{id: {sev, status, claim, evidence, hint}}，按出现顺序。
-    头行 `F<n> | blocking`（第 2 轮起还有 `| resolved` 等），字段行 `claim: …`；
-    旧格式把字段值写在标签下一行且可能多行，空行结束。"""
-    out = {}
-    cur = field = None
-    for line in (text or "").splitlines():
-        m = FINDING_RE.match(line)
-        if m and not line.lstrip().startswith(("-", "*")):
-            fid = "F" + m.group(1)
-            cells = [c.strip().strip("*_ ") for c in re.split(r'\s*(?:[|]|→|->)\s*', m.group(2).replace("*", "")) if c.strip()]
-            sev = status = ""
-            for c in cells:
-                cl = c.lower()
-                if cl in SEVS:
-                    sev = cl
-                elif cl in STATUSES:
-                    status = cl
-                elif not sev and not status:
-                    status = c
-            cur = out.setdefault(fid, {"sev": sev, "status": status, "claim": "", "evidence": "", "hint": ""})
-            if sev:
-                cur["sev"] = sev
-            if status:
-                cur["status"] = status
-            field = None
-            continue
-        if not cur:
-            continue
-        m2 = re.match(r'^\s*(claim|evidence|fix-hint|status|verdict)\s*:\s*(.*)$', line, re.I)
-        if m2:
-            field = FIELDS[m2.group(1).lower()]
-            cur[field] = m2.group(2).strip()
-        elif re.match(r'^#{1,6}\s', line) or re.match(r'^\s*F\d+\s*[|:]', line):
-            cur = field = None
-        elif field and line.strip():
-            cur[field] = (cur[field] + " " + line.strip()).strip()
-        elif line.strip() and not cur["claim"] and field is None:
-            # 第 2 轮起评审方常写 `F1 — resolved` 后直接跟自由文本（作者接受：… 核实：…），没有标签；当 claim 收
-            field = "claim"
-            cur["claim"] = line.strip()
-        elif not line.strip():
-            field = None
-    return out
-
-
-def parse_lines(text, rx):
-    out = {}
-    for line in (text or "").splitlines():
-        m = rx.match(line)
-        if m:
-            out["F" + m.group(1)] = (m.group(2).lower(), m.group(3).strip())
-    return out
-
-
-def parse_sent(text):
-    ls = (text or "").splitlines()
-    try:
-        return {"start": int(ls[0]), "target": ls[1].strip(), "pane": ls[2].strip() if len(ls) > 2 else ""}
-    except (IndexError, ValueError):
-        return None
-
-
-def parse_process(text):
-    """findings 里评审方写的「过程」一节（读了什么、跑了什么、没查什么）：从 `## 过程` / `## Process` 到下一个标题或哨兵。"""
-    lines, keep = [], False
-    for line in (text or "").splitlines():
-        if re.match(r'^#{1,6}\s*(过程|process|how i looked)\b', line.strip(), re.I):
-            keep = True
-            continue
-        if keep and (re.match(r'^#{1,6}\s', line) or line.strip() == "REVIEW-COMPLETE"):
-            break
-        if keep:
-            lines.append(line.rstrip())
-    return "\n".join(lines).strip()
-
-
-def load_rounds(d):
-    rounds = []
-    for n in range(1, 6):
-        ft = read(f"{d}/r{n}-findings.md")
-        rt = read(f"{d}/r{n}-responses.md")
-        dt = read(f"{d}/r{n}-decision.md")
-        st = parse_sent(read(f"{d}/.r{n}.sent"))
-        if ft is None and rt is None and st is None:
-            continue
-        rounds.append({
-            "n": n, "findings": parse_findings(ft), "done": sentinel_ok(ft), "process": parse_process(ft),
-            "responses": parse_lines(rt, RESP_RE) if rt is not None else None,
-            "decisions": parse_lines(dt, DEC_RE) if dt is not None else None,
-            "sent": st, "t_findings": mtime(f"{d}/r{n}-findings.md"), "t_responses": mtime(f"{d}/r{n}-responses.md"),
-        })
-    return rounds
-
-
-def pending_decisions(rnd):
-    """上一轮 reject 与 blocking defer 里尚无裁决的 → [(fid, verb, sev, reason)]。与 request-review 的判据一致。"""
-    out = []
-    if not rnd or rnd["responses"] is None:
-        return out
-    dec = rnd["decisions"] or {}
-    for fid, (verb, reason) in rnd["responses"].items():
-        sev = rnd["findings"].get(fid, {}).get("sev", "")
-        if (verb == "reject" or (verb == "defer" and sev == "blocking")) and fid not in dec:
-            out.append((fid, verb, sev, reason))
-    return out
-
 
 # ============================================================ 项目状态
-def watch_reviewer(p, pane, expecting, who="评审方"):
-    """评审中 / triage 中 / 规划中时问一下对方在干什么。blocked 和 idle 都是它停了而没交付，等人去看 pane。"""
-    st = reviewer_status(pane)
-    p["reviewer"] = st
-    if st == "blocked":
-        p.update(needs_me=True, waiting="等你", state=p["state"] + f" · {who} blocked")
-        p["human"].append(("stop", "", "blocked", "", f"{who}停在审批或提问对话框，去看 pane {pane}"))
-    elif st in ("idle", "done"):
-        p.update(needs_me=True, waiting="等你", state=p["state"] + f" · {who} idle")
-        p["human"].append(("stop", "", "idle", "", f"{who}已空闲但 {expecting} 没交付，去看 pane {pane}"))
-    elif st == "working":
-        p["cycle_note"] += f"；{who} working"
-
-
-EV_LOC_RE = re.compile(r'((?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+):(\d+)')
-
-
-def linkify(text, repo):
-    """evidence 里的 path:line 变成 zed://file/… 链接，点了直接到那一行。文本先转义，链接后拼。"""
-    out, pos = [], 0
-    for m in EV_LOC_RE.finditer(text or ""):
-        out.append(esc(text[pos:m.start()]))
-        out.append(f'<a class="loc" href="zed://file{esc(os.path.join(repo, m.group(1)))}:{m.group(2)}">{esc(m.group(0))}</a>')
-        pos = m.end()
-    out.append(esc((text or "")[pos:]))
-    return "".join(out)
-
-
-def last_run(d):
-    """写手上次运行 request-review 的结果：.last 是「退出码 时间」，.last.out 是全部输出。
-    只有停下的那几种退出码（2/4/5/7）值得显示；写手之后跑成功一次就自然消失。"""
-    raw = (read(f"{d}/.last") or "").split()
-    if len(raw) < 2 or raw[0] not in ("2", "4", "5", "7"):
-        return None
-    out = (read(f"{d}/.last.out") or "").strip()
-    head = next((l for l in out.splitlines() if l.startswith(("ERROR", "STOP"))), out.splitlines()[0] if out else "")
-    return {"code": raw[0], "ts": int(raw[1]), "head": head, "out": out}
-
-
-
-def wake_status(d):
-    """唤醒标记还在、它自报的进程却已经不在：写手不会被自动叫醒，要人去推一下。
-    还没报到（不足 8 行）、测试占位 '-'、进程仍在（包括属于别的用户）都不算。标记坏了只当没有 —— 不能把整页弄崩。"""
-    try:
-        lines = (read(f"{d}/.wake") or "").splitlines()
-        if len(lines) < 8 or not re.fullmatch(r"[1-9]\d*", lines[7].strip()):
-            return None
-        pid = int(lines[7].strip())
-        try:
-            os.kill(pid, 0)
-            return None
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            return None
-        why = ""
-        for line in reversed((read(f"{d}/.wake.log") or "").splitlines()):
-            if f"[{pid}]" in line and not line.rstrip().endswith("没叫醒，标记留给人"):
-                why = line.split("] ", 1)[-1].strip()
-                break
-        return {"sentinel": os.path.basename(lines[0].strip()), "writer": lines[3].strip(),
-                "done": sentinel_ok(read(lines[0].strip()), lines[1].strip()), "why": why}
-    except Exception:
-        return None
-
 
 def add_waits(p):
-    """把「等你」补全。上面只收了待裁决、以及正被等着的一方卡住；这里补上写手停下、叫醒失败、任何一方卡在对话框。
-    exit 5 已由待裁决解释、exit 4 已由被等的一方卡住解释的，不再重复列；exit 7 是写手自己重写简报，不等你。"""
-    has_dec = any(k == "decision" for k, *_ in p["human"])
-    has_stop = any(k == "stop" for k, *_ in p["human"])
+    """把「等你」补全：主控卡在对话框、以及队列做完等放行。"""
     new = []
-    for role, label in (("writer", "写手"), ("planner", "规划者"), ("reviewer", "评审方")):
-        a = (p.get("agents") or {}).get(role)
-        if a and a["status"] == "blocked" and not (a["pane"] and any(a["pane"] in r for k, _, _, _, r in p["human"] if k == "stop")):
-            new.append(("stop", "", "blocked", "", f"{label}停在审批或提问对话框，去看 pane {a['pane']}"))
-    lr = p.get("last_run")
-    if lr and lr["code"] != "7" and not (lr["code"] == "5" and has_dec) and not (lr["code"] == "4" and has_stop):
-        new.append(("stop", "", "exit", "", f"写手停下 · exit {lr['code']} · {lr['head']}"))
-    w = wake_status(p["dir"])
-    if w:
-        cmd = "request-review plan" if w["sentinel"] == "plan.md" else "request-review"
-        text = (f"{w['sentinel']} 已经交了，但叫醒进程已不在，写手 {w['writer']} 没被叫醒——对它说「跑 {cmd}」" if w["done"] else
-                f"叫醒进程已不在：{w['sentinel']} 交出来后写手 {w['writer']} 不会被自动叫醒，到时对它说「跑 {cmd}」")
-        new.append(("stop", "", "wake", "", text + (f"（日志最后一句：{w['why']}）" if w["why"] else "（没留下日志）")))
+    a = (p.get("agents") or {}).get("writer")
+    if a and a["status"] == "blocked":
+        new.append(("stop", "", "blocked", "", f"主控停在审批或提问对话框，去看 pane {a['pane']}"))
     tv = p.get("tasks")
     if tv and tv["awaiting"] and tv["card"]:
         new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} 做完了，核对已通过。运行 review-task go 放行，"
@@ -412,16 +172,6 @@ def task_blocks(text):
     for b in blocks:
         b["body"] = "\n".join(b["body"]).strip("\n")
     return blocks
-
-
-TASK_FLOW = re.compile(r'^\s*流程\s*[:：]\s*(不评审|修好再审)\s*$', re.M)
-
-
-def task_flow(body):
-    """正文里「流程：…」那一行 → "不评审" / "修好再审"，没有就是 ""（正常流程）。
-    不评审：不找规划者、不送审，done 时把它的提交登记为豁免。修好再审：中间提交不送审，修好后整体送审一次。"""
-    m = TASK_FLOW.search(body or "")
-    return m.group(1) if m else ""
 
 
 TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
@@ -484,24 +234,8 @@ def task_pending(blocks, tasks):
     return [b for b in blocks if not (b["id"] in tasks if b["id"] else b["title"] in keys)]
 
 
-def timing_rounds(repo):
-    """timing.md → [(短 sha, kind)]，每完成一轮一行；旧行没有 kind 当作 code。"""
-    out = []
-    for line in (read(f"{repo}/docs/reviews/timing.md") or "").splitlines():
-        m = re.match(r'\S+ \| (\w+) \| round \d+/\d+ \| \d+s(?: \| (\w+))?', line)
-        if m:
-            out.append((m.group(1), m.group(2) or "code"))
-    return out
-
-
 def task_commits(repo, a, b):
     return git(repo, "rev-list", f"{a}..{b}").split() if a and b and a != b else []
-
-
-def task_rounds(commits, timing):
-    """这个任务的提交里，各有几轮计划评审、几轮代码评审（按每一轮的 target sha 落在不落在里面算）。"""
-    hit = lambda s: any(c.startswith(s) for c in commits)
-    return sum(1 for s, k in timing if k == "plan" and hit(s)), sum(1 for s, k in timing if k != "plan" and hit(s))
 
 
 def task_span(a, b):
@@ -512,49 +246,23 @@ def task_span(a, b):
 
 
 def task_view(repo, conf, p):
-    """任务区要显示的东西。项目没有 queue.md（没用队列）就返回 None，页面上不出现任务区。
-    阶段条靠现有的交接文件推：规划者的派发晚于任务开始才算它的规划；两种评审的轮数取 timing.md 里 target 落在
-    这个任务的提交中的那些；当前在哪一格看交接目录里正开着的周期是计划还是代码。"""
+    """任务区要显示的东西。项目没有 queue.md（没用队列）就返回 None，页面上不出现任务区。"""
     d = conf["REVIEW_DIR"]
     qtext = read(f"{d}/queue.md")
     if qtext is None:
         return None
     tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
-    timing = timing_rounds(repo)
     t = current or tasks.get(awaiting)
     card = None
     if t:
         commits = task_commits(repo, t["start"], t.get("end") or p["head"])
-        plan_n, code_n = task_rounds(commits, timing)
-        psent = parse_sent(read(f"{d}/.plan.sent"))
-        pmd = read(f"{d}/plan.md")
-        mine = bool(psent and t.get("t0") and psent["start"] >= t["t0"])
-        planning = mine and not sentinel_ok(pmd, "PLAN-COMPLETE")
-        decision = ((pmd or "").splitlines() or [""])[0].split(":")[0].strip() if mine and not planning else ""
-        kind = (p.get("cycle_req") or p["req"]).get("kind", "code")
-        cur = p["req"].get("_round", 1)
-        if t["id"] == awaiting:
-            now = "收尾"
-        elif planning:
-            now = "规划"
-        elif p.get("explicit") and not p["closed"]:
-            now = "计划评审" if kind == "plan" else "代码评审"
-        else:
-            now = "实施"
+        now = "收尾" if t["id"] == awaiting else "实施"
         n = len(commits)
-        flow = task_flow(t.get("body"))
-        nr = flow == "不评审"
         steps = [
-            ("规划", "now" if now == "规划" else ("ok" if decision or plan_n else ""),
-             "规划中" if now == "规划" else (decision or ("PLAN" if plan_n else ("跳过" if nr else "—")))),
-            ("计划评审", "now" if now == "计划评审" else ("ok" if plan_n else ""),
-             f"第 {cur} 轮" if now == "计划评审" else (f"{plan_n} 轮" if plan_n else ("跳过" if decision == "DIRECT" or nr else "—"))),
-            ("实施", "now" if now == "实施" else ("ok" if n else ""), f"{n} 个提交" if n else "—"),
-            ("代码评审", "now" if now == "代码评审" else ("ok" if code_n else ""),
-             f"第 {cur} 轮" if now == "代码评审" else (f"{code_n} 轮" if code_n else ("不评审" if nr else "修好后审" if flow else "—"))),
+            ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "flow": flow, "body": t.get("body", ""),
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "body": t.get("body", ""),
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
@@ -562,9 +270,8 @@ def task_view(repo, conf, p):
         if f["status"] == "dropped":
             finished.append({"id": f["id"], "title": f["title"], "dropped": True, "reason": f.get("reason", ""), "body": f.get("body", "")})
             continue
-        plan_n, code_n = task_rounds(task_commits(repo, f["start"], f.get("end")), timing)
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
-                         "plan_n": plan_n, "code_n": code_n, "noreview": task_flow(f.get("body")) == "不评审", "body": f.get("body", ""),
+                         "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     try:
         loop_wait = json.loads(read(f"{d}/.loop-wait") or "null")
@@ -579,12 +286,11 @@ def task_view(repo, conf, p):
 
 
 def task_history(repo, conf):
-    """全部做完 / 放弃的任务，最新的在前，外加汇总；看板「查看全部」点开时才算（评审轮数要逐个查 git）。
+    """全部做完 / 放弃的任务，最新的在前，外加汇总；看板「查看全部」点开时才算。
     正在做的不算。没发出过就被放弃的，tasks.state 里没有正文，取 queue.md 里还在的原文。"""
     d = conf["REVIEW_DIR"]
     tasks, _, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
     blocks = task_blocks(read(f"{d}/queue.md"))
-    timing = timing_rounds(repo)
     items = []
     for t in tasks.values():
         if t["status"] == "doing":
@@ -595,198 +301,29 @@ def task_history(repo, conf):
         elif not body:
             b = next((b for b in blocks if (b["id"] == t["id"]) or (not b["id"] and b["title"] == t.get("key"))), None)
             body, source = (b["body"], "queue.md 里的原文（没发出过）") if b else ("", "没有正文：没发出过，queue.md 里也已经删掉")
-        plan_n = code_n = 0
-        if t["status"] == "done":
-            plan_n, code_n = task_rounds(task_commits(repo, t["start"], t.get("end")), timing)
-        flow = task_flow(body)
         items.append({"id": t["id"], "title": t["title"], "status": t["status"], "reason": t.get("reason", ""),
-                      "flow": flow, "noreview": flow == "不评审" and t["status"] == "done", "body": body, "source": source,
+                      "body": body, "source": source,
                       "t0": t.get("t0"), "t1": t.get("t1") or 0, "span": task_span(t.get("t0"), t.get("t1")),
                       "date": datetime.fromtimestamp(t["t1"]).strftime("%Y-%m-%d %H:%M") if t.get("t1") else "",
                       "range": f"{t['start'][:7]}..{t['end'][:7]}" if t.get("end") and t["end"] != t.get("start") else "",
-                      "plan_n": plan_n, "code_n": code_n, "awaiting": t["id"] == awaiting})
+                      "awaiting": t["id"] == awaiting})
     items.sort(key=lambda i: i["t1"], reverse=True)
     done = [i for i in items if i["status"] == "done"]
     spans = [i["t1"] - i["t0"] for i in done if i["t0"] and i["t1"]]
     return {"items": items, "summary": {"done": len(done), "dropped": len(items) - len(done),
-            "noreview": sum(i["noreview"] for i in items),
             "avg": task_span(1, 1 + sum(spans) / len(spans)) if spans else ""}}
 
 
 def project_state(repo, conf):
     d = conf["REVIEW_DIR"]
-    head = git(repo, "rev-parse", "HEAD").strip()
-    req = parse_request(read(f"{d}/request.md"))
-    cyc_req = parse_request(read(f"{d}/.cycle-request.md")) if os.path.exists(f"{d}/.cycle-request.md") else req
-    rounds = load_rounds(d)
-    p = {"name": os.path.basename(repo), "repo": repo, "dir": d, "head": head, "req": req, "cycle_req": cyc_req,
-         "kind": conf.get("REVIEW_KIND", "claude"), "review_args": conf.get("REVIEW_AGENT_ARGS", ""),
-         "plan_kind": conf.get("PLAN_KIND", ""), "plan_args": conf.get("PLAN_AGENT_ARGS", ""),
-         "rounds": rounds, "state": "空闲", "since": None, "waiting": "", "needs_me": False,
-         "human": [], "cycle_note": "", "closed": False, "reviewer": ""}
-    cur = req.get("_round", 1)
-    explicit = bool(req) and (req.get("target sha") == head or (cur > 1 and not os.path.exists(f"{d}/r{cur}-responses.md")))
-    p["explicit"] = explicit
-    prev = next((r for r in rounds if r["n"] == cur - 1), None)
-    this = next((r for r in rounds if r["n"] == cur), None)
-
-    latest = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
-    p["last_activity"] = latest
-    if explicit:
-        pend = pending_decisions(prev)
-        if this and this["sent"]:
-            if this["done"]:
-                if this["responses"] is None:
-                    p.update(state="待写手回应", waiting="等写手", since=mtime(f"{d}/r{cur}-findings.md"),
-                             cycle_note="findings 已完成，等写手写 responses")
-                else:
-                    accepted = any(v[0] == "accept" for v in this["responses"].values())
-                    p.update(state="本轮已回应" if accepted else "已闭合", closed=True, since=mtime(f"{d}/r{cur}-responses.md"),
-                             cycle_note="写手已回应，有 accepted 改动，等写手改完开下一轮" if accepted else "写手已回应，无 accepted 改动，周期到此结束")
-            else:
-                p.update(state="评审中", waiting="等评审方", since=this["sent"]["start"],
-                         cycle_note="prompt 已送达，等评审方写 findings")
-                watch_reviewer(p, this["sent"].get("pane"), f"r{cur}-findings.md")
-        elif pend:
-            p.update(state="待人裁决", waiting="等你", needs_me=True, since=mtime(f"{d}/r{cur - 1}-responses.md"),
-                     human=[("decision", fid, verb, sev, reason) for fid, verb, sev, reason in pend],
-                     cycle_note="写手" + "、".join(f"{ZH.get(v, v)}了 {f}" for f, v, _, _ in pend) + "，等人裁决")
-        else:
-            p.update(state="待派发", waiting="等写手", since=mtime(f"{d}/request.md"),
-                     cycle_note=f"request 已写（round {req.get('round', '')}），等写手运行 request-review")
-    else:
-        tri = (read(f"{d}/.triage") or "").splitlines()
-        tsent = parse_sent(read(f"{d}/.triage.sent"))
-        tout = read(f"{d}/triage.md")
-        if tri and tri[0].strip() == head:
-            verdict = tri[1].strip() if len(tri) > 1 else "?"
-            p.update(state=f"triage 已判 {verdict}", since=mtime(f"{d}/.triage"),
-                     waiting="等写手" if verdict == "REVIEW" else "",
-                     triage_reason=tri[2].strip() if len(tri) > 2 else "")
-        elif tsent and tsent["target"] == head and not sentinel_ok(tout, "TRIAGE-COMPLETE"):
-            p.update(state="triage 中", waiting="等评审方", since=tsent["start"])
-            watch_reviewer(p, tsent.get("pane"), "triage.md")
-        if rounds:
-            p["closed"] = True
-            p["cycle_note"] = "已闭合；下面的 Round 是它的最终结果"
-    # 规划者：plan-request 已发出、plan.md 还没写完 → 规划中。规划者自己走的计划评审会以 explicit 周期出现在上面，
-    # 这一行让人知道那个周期是规划的一部分。
-    psent = parse_sent(read(f"{d}/.plan.sent"))
-    if psent and not sentinel_ok(read(f"{d}/plan.md"), "PLAN-COMPLETE"):
-        task = next((l.strip() for l in (read(f"{d}/plan-request.md") or "").splitlines() if l.strip()), "")
-        p["planning"] = {"task": task, "since": psent["start"], "pane": psent.get("pane")}
-        if not explicit:
-            p.update(state="规划中", waiting="等规划者", since=psent["start"], cycle_note="任务已交规划者，等它决定要不要计划")
-            watch_reviewer(p, psent.get("pane"), "plan.md", "规划者")
-    pane = ((this or {}).get("sent") or {}).get("pane") if explicit else (parse_sent(read(f"{d}/.triage.sent")) or {}).get("pane")
-    p["agents"] = agents_of(repo, conf.get("REVIEW_WT"), pane)
-    p["last_run"] = last_run(d)
+    p = {"name": os.path.basename(repo), "repo": repo, "dir": d,
+         "head": git(repo, "rev-parse", "HEAD").strip(),
+         "state": "空闲", "since": None, "waiting": "", "needs_me": False, "human": []}
+    p["last_activity"] = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
+    p["agents"] = agents_of(repo)
     p["tasks"] = task_view(repo, conf, p)
     add_waits(p)
     return p
-
-
-# ============================================================ 归档
-def load_archives(repo):
-    adir = f"{repo}/docs/reviews"
-    timing = {}
-    for line in (read(f"{adir}/timing.md") or "").splitlines():
-        m = re.match(r'\S+ \| (\w+) \| round \d+/\d+ \| (\d+)s', line)
-        if m:
-            timing[m.group(1)] = timing.get(m.group(1), 0) + int(m.group(2))
-    out = []
-    for f in sorted(glob.glob(f"{adir}/*.md"), key=os.path.getmtime, reverse=True):
-        if os.path.basename(f) in STAT_FILES:
-            continue
-        text = read(f) or ""
-        m = re.match(r'# Review cycle @ (\S+)', text)
-        if not m:
-            continue
-        sha = m.group(1)
-        when = re.search(r'归档于 (\S+)', text)
-        secs = dict(re.findall(r'^## (r\d+-\w+\.md)\n(.*?)(?=^## r\d+-\w+\.md\n|\Z)', text, re.S | re.M))
-        reqm = re.search(r'^## Request\n(.*?)(?=^## )', text, re.S | re.M)
-        req = parse_request(reqm.group(1) if reqm else "")
-        rounds = []
-        for n in range(1, 6):
-            if f"r{n}-findings.md" in secs:
-                rounds.append({"n": n, "findings": parse_findings(secs[f"r{n}-findings.md"]),
-                               "responses": parse_lines(secs.get(f"r{n}-responses.md", ""), RESP_RE),
-                               "decisions": parse_lines(secs.get(f"r{n}-decision.md", ""), DEC_RE)})
-        r1 = rounds[0]["findings"] if rounds else {}
-        deferred, seen = [], set()
-        for r in rounds:
-            for fid, (verb, reason) in r["responses"].items():
-                if verb == "defer" and fid not in seen:
-                    seen.add(fid)
-                    deferred.append((fid, r1.get(fid, {}).get("sev", ""), r1.get(fid, {}).get("claim", ""), reason))
-        ending = "正常"
-        if any(r["decisions"] for r in rounds):
-            ending = "有裁决"
-        if rounds and any(v[0] == "reject" for v in rounds[-1]["responses"].values()) and not rounds[-1]["decisions"]:
-            ending = "reject 未裁决"
-        if req.get("_cap") and rounds and rounds[-1]["n"] >= req["_cap"]:
-            ending += "，到顶"
-        out.append({"sha": sha, "when": (when.group(1) if when else "")[:10], "kind": req.get("kind", ""),
-                    "rounds": len(rounds), "blocking": sum(1 for v in r1.values() if v["sev"] == "blocking"),
-                    "secs": timing.get(sha, 0), "deferred": deferred, "ending": ending,
-                    "artifact": req.get("artifact", ""), "text": text})
-    return out
-
-
-# ============================================================ 最小 markdown（归档原文）
-def md(text):
-    out, para, table, in_code = [], [], [], False
-
-    def inline(s):
-        s = esc(s)
-        s = re.sub(r'`([^`]+)`', r'<code>\1</code>', s)
-        return re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', s)
-
-    def flush_para():
-        if para:
-            out.append("<p>" + inline(" ".join(para)) + "</p>")
-            para.clear()
-
-    def flush_table():
-        if table:
-            rows = [r for r in table if not re.match(r'^\s*\|?\s*:?-{2,}', r)]
-            out.append("<table>" + "".join(
-                "<tr>" + "".join(f"<td>{inline(c.strip())}</td>" for c in r.strip().strip("|").split("|")) + "</tr>"
-                for r in rows) + "</table>")
-            table.clear()
-
-    for line in text.splitlines():
-        if line.startswith("```"):
-            flush_para(); flush_table()
-            out.append("</pre>" if in_code else "<pre>")
-            in_code = not in_code
-            continue
-        if in_code:
-            out.append(esc(line))
-            continue
-        if line.lstrip().startswith("|"):
-            flush_para(); table.append(line)
-            continue
-        flush_table()
-        m = re.match(r'^(#{1,6})\s+(.*)', line)
-        if m:
-            flush_para()
-            lvl = min(len(m.group(1)) + 2, 6)
-            out.append(f"<h{lvl}>{inline(m.group(2))}</h{lvl}>")
-            continue
-        m = re.match(r'^\s*[-*]\s+(.*)', line)
-        if m:
-            flush_para(); out.append(f"<li>{inline(m.group(1))}</li>")
-            continue
-        if not line.strip():
-            flush_para()
-            continue
-        para.append(line)
-    flush_para(); flush_table()
-    if in_code:
-        out.append("</pre>")
-    return "\n".join(out)
 
 
 # ============================================================ 渲染
@@ -1052,7 +589,6 @@ LIVE_DIALOG = ('<dialog class="rbd"><form method="dialog"><div class="rbd-t"></d
 LIVE_EDITOR = ('<dialog class="rbe"><form method="dialog"><div class="rbe-h"><span class="rbe-t">加任务</span><span class="rbe-p"></span>'
                '<span class="rbe-hint">加到队列末尾，自动编号 · 小标题用 ###，别用 ##</span></div>'
                '<div class="rbe-g"><div class="rbe-l"><input class="rbe-title" type="text" maxlength="200" placeholder="标题（一行）">'
-               '<select class="rbe-flow"><option value="">流程：正常</option><option value="修好再审">流程：修好再审</option><option value="不评审">流程：不评审</option></select>'
                '<textarea class="rbe-body" spellcheck="false" placeholder="目标 / 范围（尤其不做什么）/ 怎么算做完\n### 小标题\n- 列表"></textarea></div>'
                '<div class="rbe-r"><div class="rbe-cap">预览 · 写手收到的样子</div><div class="rbe-pv"></div></div></div>'
                '<pre class="rbe-out" hidden></pre><div class="rbd-b"><button value="cancel" class="rbe-no">关闭</button><button value="ok" class="rbe-ok">加入队列</button></div></form></dialog>')
@@ -1200,8 +736,8 @@ JS = """
       if(to!==dragFrom)li.classList.add(to<dragFrom?'drop-before':'drop-after')});
     document.addEventListener('drop',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
       e.preventDefault();var from=dragFrom,to=+li.dataset.pos;dragFrom=null;moveTask(dragProj,from,to)});
-    // 加任务：标题 + 流程 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
-    var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),eF=ed.querySelector('.rbe-flow'),
+    // 加任务：标题 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
+    var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),
         eB=ed.querySelector('.rbe-body'),ePv=ed.querySelector('.rbe-pv'),eOut=ed.querySelector('.rbe-out'),
         eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null,eEdit=null;
     function dkey(){return 'rb.draft.'+eProj}
@@ -1217,22 +753,20 @@ JS = """
       if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));return body}
     function preview(){ePv.innerHTML='';
       var head=document.createElement('div');head.className='dtt';head.textContent=eT.value.trim()||'（标题）';ePv.appendChild(head);
-      if(eF.value){var c=document.createElement('span');c.className='flow'+(eF.value==='不评审'?'':' later');c.textContent=eF.value;
-        var sub=document.createElement('div');sub.className='dsub';sub.appendChild(c);ePv.appendChild(sub)}
       ePv.appendChild(bodyNode(eB.value,true));
-      if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,f:eF.value,b:eB.value}))}catch(x){}}
+      if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,b:eB.value}))}catch(x){}}
     function openEditor(proj,raw,pos){eProj=proj;var d={};
-      if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,f:raw.flow,b:raw.body}}
+      if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,b:raw.body}}
       else{eEdit=null;try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}}
-      eT.value=d.t||'';eF.value=d.f||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
+      eT.value=d.t||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
       ed.querySelector('.rbe-t').textContent=raw?'改任务 '+(raw.id||'（未编号）'):'加任务';
       ed.querySelector('.rbe-hint').textContent=raw?'整块改写队列第 '+pos+' 个，编号不变 · 小标题用 ###，别用 ##':'加到队列末尾，自动编号 · 小标题用 ###，别用 ##';
       eOk.textContent=raw?'保存修改':'加入队列';
       ed.querySelector('.rbe-p').textContent=proj;preview();ed.showModal();eT.focus()}
-    [eT,eF,eB].forEach(function(x){x.addEventListener('input',preview)});
+    [eT,eB].forEach(function(x){x.addEventListener('input',preview)});
     ed.querySelector('form').addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
       eOk.disabled=true;
-      var payload={project:eProj,title:eT.value,flow:eF.value,body:eB.value};
+      var payload={project:eProj,title:eT.value,body:eB.value};
       if(eEdit){payload.pos=eEdit.pos;payload.expect=eEdit.qv}
       fetch(eEdit?'/api/edit':'/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
         body:JSON.stringify(payload)})
@@ -1244,7 +778,6 @@ JS = """
     // 已完成「查看全部」：点开时向服务取全部历史；列表可搜可筛，点一行看它的正文，「← 返回列表」保留搜索和筛选
     var hist={p:null,data:null,q:'',f:'all',d:null};
     function chip(cls,txt){var c=document.createElement('span');c.className=cls;c.textContent=txt;return c}
-    function rounds(it){return ((it.plan_n?'计划评审 '+it.plan_n+' 轮 ':'')+(it.code_n?'代码评审 '+it.code_n+' 轮':'')).trim()||'无评审'}
     function histRender(){var box=dr.querySelector('.dct'),h=hist.data;box.innerHTML='';
       if(!h){box.appendChild(el('empty','正在读取…'));return}
       if(hist.d){var it=h.items.filter(function(x){return x.id===hist.d})[0];
@@ -1254,12 +787,11 @@ JS = """
         var tt=document.createElement('div');tt.className='dtt';tt.appendChild(chip('tid',it.id));tt.appendChild(document.createTextNode(it.title));box.appendChild(tt);
         var sub=document.createElement('div');sub.className='dsub';
         sub.appendChild(chip('dst',it.status==='done'?'已完成':'放弃'));
-        if(it.flow)sub.appendChild(chip('flow'+(it.flow==='不评审'?'':' later'),it.flow));
-        [it.date,it.span&&'用时 '+it.span,it.range,it.status==='done'?rounds(it):'',it.reason&&'原因：'+it.reason].forEach(function(x){if(x)sub.appendChild(chip('',x))});
+        [it.date,it.span&&'用时 '+it.span,it.range,it.reason&&'原因：'+it.reason].forEach(function(x){if(x)sub.appendChild(chip('',x))});
         box.appendChild(sub);box.appendChild(el('dsrc',it.source));box.appendChild(bodyNode(it.body,false));return}
       var head=document.createElement('div');head.className='dtt';head.textContent='已完成的任务 · '+hist.p;box.appendChild(head);
       var sm=h.summary,sub2=document.createElement('div');sub2.className='dsub';
-      ['完成 '+sm.done,'放弃 '+sm.dropped,sm.avg&&'平均用时 '+sm.avg,'未评审 '+sm.noreview].forEach(function(x){if(x)sub2.appendChild(chip('',x))});
+      ['完成 '+sm.done,'放弃 '+sm.dropped,sm.avg&&'平均用时 '+sm.avg].forEach(function(x){if(x)sub2.appendChild(chip('',x))});
       box.appendChild(sub2);
       var bar=document.createElement('div');bar.className='hbar';
       var q=document.createElement('input');q.type='search';q.className='filter';q.placeholder='按编号或标题过滤…';q.value=hist.q;bar.appendChild(q);
@@ -1273,8 +805,7 @@ JS = """
           var row=document.createElement('div');row.className='drow'+(it.status==='dropped'?' dropped':'');
           row.appendChild(chip('tid',it.id));row.appendChild(chip('t',it.title));row.appendChild(chip('r',it.status==='done'?(it.span||''):'放弃'));
           var s2=document.createElement('span');s2.className='s';
-          if(it.status==='done'){if(it.noreview)s2.appendChild(chip('kind noreview','未评审'));else if(it.flow)s2.appendChild(chip('flow later',it.flow));s2.appendChild(chip('',rounds(it)))}
-          else if(it.reason)s2.appendChild(chip('',it.reason));
+          if(it.status!=='done'&&it.reason)s2.appendChild(chip('',it.reason));
           if(it.date)s2.appendChild(chip('',it.date));if(it.range)s2.appendChild(chip('code',it.range));
           row.appendChild(s2);row.addEventListener('click',function(){hist.d=it.id;histRender();dr.querySelector('.dct').scrollTop=0});list.appendChild(row)});
         if(!n)list.appendChild(el('empty','没有符合条件的任务'))}
@@ -1283,7 +814,7 @@ JS = """
       if(!keep||hist.p!==proj){hist={p:proj,data:null,q:'',f:'all',d:null}}
       dr.querySelector('.dhd span').textContent='已完成的任务 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@history';histRender();
       fetch('/history?project='+encodeURIComponent(proj),{cache:'no-store'}).then(function(r){return r.json()})
-        .then(function(j){hist.data=j.items?j:{items:[],summary:{done:0,dropped:0,noreview:0,avg:''}};histRender()})
+        .then(function(j){hist.data=j.items?j:{items:[],summary:{done:0,dropped:0,avg:''}};histRender()})
         .catch(function(){var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(el('empty','读取失败：review-board serve 还在运行吗？'))})}
     window.rbHist=function(){return {p:hist.p,q:hist.q,f:hist.f,d:hist.d}};
     if(st.td==='@history'&&st.hs){hist={p:st.hs.p,data:null,q:st.hs.q||'',f:st.hs.f||'all',d:st.hs.d||null};openHistory(hist.p,true)}
@@ -1292,233 +823,16 @@ JS = """
 """
 
 
-def cycle_subject(p):
-    """这次送审做的是什么：target 提交的标题与正文、base..target 的提交列表、plan 的文档标题。
-    这些是写手本来就写的，不是 request 里的自述。"""
-    req, cr = p["req"], p["cycle_req"]
-    sent1 = (p["rounds"][0].get("sent") or {}) if p["rounds"] else {}
-    target = cr.get("target sha") or req.get("target sha") or sent1.get("target") or ""
-    base = cr.get("base sha") or ""
-    out = {"subject": "", "body": "", "commits": [], "plan_title": ""}
-    if not target:
-        return out
-    msg = git(p["repo"], "log", "-1", "--format=%s%n%b", target)
-    lines = msg.splitlines()
-    out["subject"] = lines[0].strip() if lines else ""
-    out["body"] = "\n".join(l for l in lines[1:] if not re.match(r'^(Co-Authored-By|Claude-Session|Signed-off-by):', l)).strip()
-    if base:
-        out["commits"] = [l for l in git(p["repo"], "log", "--format=%h %s", f"{base}..{target}").splitlines() if l.strip()]
-    if cr.get("kind") == "plan":
-        for path in cr.get("artifact", "").split():
-            if path.endswith((".md", ".markdown")):
-                for l in git(p["repo"], "show", f"{target}:{path}").splitlines()[:30]:
-                    m = re.match(r'^#\s+(.*)', l)
-                    if m:
-                        out["plan_title"] = m.group(1).strip(); break
-            if out["plan_title"]:
-                break
-    return out
-
-
-def agents_line(kind, writer_kind, review_args="", plan_kind="", plan_args=""):
-    """三个角色各是哪个 agent、什么 model、什么 effort。写手是谁看 herdr 在仓库里见到的 agent；
-    规划者和评审方看 .drover.conf。model 只能读配置文件：herdr 不报 model，会话里临时切换的看不到，
-    所以页面上标"按配置文件"；拉起参数里指定的 model / effort 覆盖配置文件。"""
-    def override(base, args):
-        model, eff = base
-        m = re.search(r'(?:--model[= ]|\bmodel=)"?([^\s"]+)', args or "")
-        e = re.search(r'model_reasoning_effort=\\?"?([A-Za-z]+)', args or "")
-        return (m.group(1) if m else model, e.group(1) if e else eff)
-    def codex():
-        t = read(os.path.expanduser("~/.codex/config.toml")) or ""
-        m = re.search(r'^model\s*=\s*"([^"]+)"', t, re.M); e = re.search(r'^model_reasoning_effort\s*=\s*"([^"]+)"', t, re.M)
-        return (m.group(1) if m else "?", e.group(1) if e else "?")
-    def claude():
-        try:
-            d = json.loads(read(os.path.expanduser("~/.claude/settings.json")) or "{}")
-        except ValueError:
-            d = {}
-        model = str(d.get("model", "?"))
-        base = re.sub(r'\[.*\]$', '', model)
-        eff = (d.get("modelSettings", {}).get(base, {}) or {}).get("effortLevel") or d.get("effortLevel", "?")
-        return (model, eff)
-    readers = {"codex": codex, "claude": claude}
-    r = override(readers.get(kind, lambda: ("?", "?"))(), review_args)
-    if not writer_kind:
-        wtxt = "未在运行"
-    else:
-        w = readers.get(writer_kind, lambda: ("?", "?"))()
-        wtxt = f"{esc(writer_kind)} · {esc(w[0])} · {esc(w[1])}"
-    if plan_kind:
-        pl = override(readers.get(plan_kind, lambda: ("?", "?"))(), plan_args)
-        ptxt = f"{esc(plan_kind)} · {esc(pl[0])} · {esc(pl[1])}"
-    else:
-        ptxt = '<span class="off">未配置</span>'
-    return (f'<span class="ag wr"><b>写手</b> {wtxt}</span>'
-            f'<span class="ag pl"><b>规划者</b> {ptxt}</span>'
-            f'<span class="ag rv"><b>评审方</b> {esc(kind)} · {esc(r[0])} · {esc(r[1])}</span><span class="mute">按配置文件</span>')
-
-
 def state_badge(p):
-    """状态标签按"谁在等"配色：红 = 等你，蓝 = 等评审方，琥珀 = 等写手，灰 = 没人在等。"""
-    cls = "me" if p["needs_me"] else {"等评审方": "rv", "等写手": "wr", "等规划者": "pl"}.get(p["waiting"], "none")
+    """状态标签按「谁在等」配色：红 = 等你，琥珀 = 等主控，灰 = 没人在等。"""
+    cls = "me" if p["needs_me"] else ("wr" if p["waiting"] else "none")
     return f'<span class="badge {cls}">{esc(p["state"])}</span>'
-
-
-# 页面用词：文件与协议里仍是英文（脚本靠它们解析），页面翻成中文，悬停显示原词。
-ZH = {"accept": "接受", "defer": "暂缓", "reject": "拒绝",
-      "blocking": "阻断", "should": "应改", "nit": "细节",
-      "resolved": "已修复", "not-resolved": "未修复", "regressed": "有回退",
-      "upheld": "维持原判", "overruled": "已改判", "deferred": "已暂缓", "disputed": "有争议",
-      "uphold": "维持原判", "overrule": "改判"}
-
-
-def zh(word, cls=""):
-    w = (word or "").lower()
-    if w not in ZH:
-        return esc(word)
-    return f'<span class="{cls}" title="{esc(w)}">{ZH[w]}</span>' if cls else f'<span title="{esc(w)}">{ZH[w]}</span>'
-
-
-def sev_tag(sev):
-    return f'<span class="sev {esc(sev)}" title="{esc(sev)}">{ZH.get(sev, esc(sev))}</span>' if sev else ""
-
-
-def render_round(p, rnd):
-    f, r, dcs = rnd["findings"], rnd.get("responses") or {}, rnd.get("decisions") or {}
-    ids = list(f.keys()) + [k for k in r if k not in f]
-    pend_ids = {fid for _, fid, _, _, _ in p["human"]} if rnd["n"] == p["req"].get("_round", 1) - 1 else set()
-    nsev = {s: sum(1 for v in f.values() if v["sev"] == s) for s in SEVS}
-    summary = f"{len(ids)} 条" + "".join(f" · {nsev[s]} {ZH[s]}" for s in SEVS if nsev[s])
-    if pend_ids:
-        summary += f" · {len(pend_ids)} 条待裁决"
-    if not rnd["done"]:
-        summary += " · 评审未完成"
-    t0 = (rnd.get("sent") or {}).get("start")
-    tf, tr = rnd.get("t_findings"), rnd.get("t_responses")
-    timing = []
-    if t0 and tf and rnd["done"]:
-        timing.append(f"评审 {dur(tf - t0)}")
-    if tf and tr:
-        timing.append(f"回应 {dur(tr - tf)}")
-    if timing:
-        summary += " · " + " · ".join(timing)
-    rows = []
-    for fid in ids:
-        v = f.get(fid, {})
-        resp, dec = r.get(fid), dcs.get(fid)
-        anchor = f"f-{p['name']}-{fid}"
-        pend = fid in pend_ids
-        st = (v.get("status") or "").lower()
-        stc = {"resolved": "ok", "not-resolved": "bad", "regressed": "bad", "deferred": "wait"}.get(st, "")
-        sev_cell = sev_tag(v.get("sev", "")) + (f'<div class="fstat {stc}">{zh(v["status"])}</div>' if st else "")
-        if v.get("claim"):
-            ev = v.get("evidence", "")
-            teaser = ev if len(ev) <= 60 else ev[:60] + "…"
-            claim_cell = f'<div class="claim">{esc(v["claim"])}</div>' + (
-                f'<details class="ev"><summary><span class="evbtn">evidence</span><code class="evteaser">{esc(teaser)}</code></summary>'
-                f'<code class="evid">{linkify(ev, p["repo"])}</code></details>' if ev else "")
-        else:  # 第 2 轮常只有 evidence（核实叙述），没有 claim：直接当正文
-            claim_cell = f'<div class="claim">{linkify(v.get("evidence", ""), p["repo"])}</div>'
-        if resp:
-            resp_cell = zh(resp[0], f"verb {resp[0]}") + f'<span class="claim">{esc(resp[1])}</span>'
-        elif rnd["responses"] is None:
-            resp_cell = '<span class="mute">—</span>'
-        else:
-            resp_cell = '<span class="mute">未回应</span>'
-        if pend:
-            dec_cell = '<div class="pending"><span class="dot"></span>等你裁决</div><div class="pending-hint">维持原判 uphold / 改判 overrule · 记入 r%d-decision.md</div>' % rnd["n"]
-        elif dec:
-            dec_cell = zh(dec[0], "dec") + f'<span>{esc(dec[1])}</span>'
-        else:
-            dec_cell = '<span class="mute">—</span>'
-        rows.append(f'<div class="frow{" pend" if pend else ""}" id="{esc(anchor)}"><div><code>{fid}</code></div>'
-                    f'<div>{sev_cell}</div><div>{claim_cell}</div><div>{resp_cell}</div><div>{dec_cell}</div></div>')
-    if not rows and not rnd["done"]:
-        return (f'<div class="round"><div class="rh"><h2>Round {rnd["n"]}</h2>'
-                f'<span class="mute" style="font-size:12px">评审中，findings 尚未完成</span></div></div>')
-    if not rows:
-        rows.append('<div class="empty">没有可解析的 finding 行</div>')
-    proc = ""
-    if rnd.get("process"):
-        proc = (f'<details class="proc"><summary><span class="tri">▶</span>评审方怎么看的</summary>'
-                f'<pre>{esc(rnd["process"])}</pre></details>')
-    return (f'<div class="round"><div class="rh"><h2>Round {rnd["n"]}</h2><span class="mute" style="font-size:12px">{esc(summary)}</span></div>'
-            f'<div class="ftab"><div class="fcols"><div>编号</div><div>严重度 · 状态</div><div>评审方 claim</div>'
-            f'<div>写手回应</div><div>裁决</div></div>{"".join(rows)}</div>{proc}</div>')
-
-
-def render_cycle(p):
-    req, cr = p["req"], p["cycle_req"]
-    sent1 = (p["rounds"][0].get("sent") or {}) if p["rounds"] else {}
-    target = (cr.get("target sha") or req.get("target sha") or sent1.get("target") or "")[:7]
-    base = (cr.get("base sha") or "")[:7]
-    stale = bool(p["rounds"]) and p["closed"] and not p["waiting"]
-    lvl = (req.get("level") or cr.get("level") or "").lower()
-    lvl_html = f'<span class="lvl {esc(lvl)}" title="level">{ {"deep": "深审", "review": "常规", "light": "轻审"}.get(lvl, esc(lvl)) }</span>' if lvl else ""
-    top = (f'<span class="lab">{"周期" if stale else "当前周期"}</span><span><code style="font-weight:600">@ {esc(target)}</code></span>'
-           f'<span>{esc(cr.get("kind", ""))}</span>{lvl_html}<span>round {esc(req.get("round", cr.get("round", "")))}</span>'
-           f'<span class="dim">{esc(p["cycle_note"])}</span>')
-    sub = cycle_subject(p)
-    title = ""
-    if sub["subject"] and not stale:   # 折叠的上一周期在 summary 行里已经有标题
-        title = f'<div class="title">{esc(sub["subject"])}</div>'
-        if sub["plan_title"]:
-            title += f'<div class="subtitle">计划：{esc(sub["plan_title"])}</div>'
-        if sub["body"]:
-            title += f'<div class="body-msg">{esc(sub["body"])}</div>'
-        if len(sub["commits"]) > 1:
-            title += '<div class="commits">' + "".join(f'<div><code>{esc(c[:7])}</code> {esc(c[8:])}</div>' for c in sub["commits"]) + "</div>"
-    kv = []
-    art = cr.get("artifact", "")
-    if art:
-        kv.append('<div class="k">artifact</div><div class="chips">' + "".join(f'<code class="chip">{esc(a)}</code>' for a in art.split()) + "</div>")
-    if cr.get("checks"):
-        kv.append(f'<div class="k">checks</div><div><code>{esc(cr["checks"])}</code></div>')
-    # 写手的自述（不是事实）默认折起，需要对照时再看
-    self_desc = [(k, cr[k]) for k in ("out of scope", "risk areas", "test paths") if cr.get(k)]
-    if self_desc:
-        kv.append('<div class="k">写手自述</div><div><details class="desc"><summary><span class="tri">▶</span>'
-                  + esc(" · ".join(k for k, _ in self_desc)) + '</summary><div class="kv" style="margin-top:6px">'
-                  + "".join(f'<div class="k">{k}</div><div class="v">{esc(v)}</div>' for k, v in self_desc)
-                  + '</div></details></div>')
-    if base and target:
-        stat = git(p["repo"], "diff", "--stat", f"{base}..{target}")
-        full = git(p["repo"], "diff", f"{base}..{target}").splitlines()
-        trunc = ""
-        if len(full) > DIFF_MAX_LINES:
-            full = full[:DIFF_MAX_LINES]
-            trunc = f"\n\n… 已截断，完整 diff：git -C {p['repo']} diff {base}..{target}"
-        last = stat.strip().splitlines()[-1].strip() if stat.strip() else "空"
-        body = []
-        for ln in full:
-            if ln.startswith("+++") or ln.startswith("---"):
-                body.append(f'<span class="d-file">{esc(ln)}</span>')
-            elif ln.startswith("diff --git"):
-                body.append(f'<span class="d-hdr">{esc(ln)}</span>')
-            elif ln.startswith("@@"):
-                body.append(f'<span class="d-hunk">{esc(ln)}</span>')
-            elif ln.startswith("+"):
-                body.append(f'<span class="d-add">{esc(ln)}</span>')
-            elif ln.startswith("-"):
-                body.append(f'<span class="d-del">{esc(ln)}</span>')
-            else:
-                body.append(f'<span class="d-ctx">{esc(ln)}</span>')
-        kv.append(f'<div class="k">diff</div><div><details class="diff"><summary><span class="tri">▶</span><code>{esc(last)}</code>'
-                  f'<span class="mute" style="font-size:11.5px">展开完整 diff</span></summary>'
-                  f'<pre class="block">{esc(stat)}\n{"".join(body)}{esc(trunc)}</pre></details></div>')
-    scls = "s-me" if p["needs_me"] else {"等评审方": "s-rv", "等写手": "s-wr", "等规划者": "s-pl"}.get(p["waiting"], "")
-    return f'<div class="cycle {scls}">{title}<div class="top">{top}</div><div class="kv">{"".join(kv)}</div></div>'
 
 
 def tilde(path):
     """家目录下的路径显示成 ~/…，路径本身不变。"""
     home = os.path.expanduser("~")
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
-
-
-def flow_chip(flow):
-    return f'<span class="flow{"" if flow == "不评审" else " later"}">{esc(flow)}</span>'
 
 
 def task_body_html(body):
@@ -1541,9 +855,8 @@ def task_body_html(body):
 
 def task_desc(key, tid, title, status, meta, body, source):
     """一个任务的完整描述，嵌成 <template>；点任务时 JS 把它放进右侧抽屉，不占看板的地方。"""
-    flow = task_flow(body)
     return (f'<template id="td-{esc(key)}"><div class="dtt"><span class="tid">{esc(tid)}</span>{esc(title)}</div>'
-            f'<div class="dsub"><span class="dst">{esc(status)}</span>{flow_chip(flow) if flow else ""}{meta}</div>'
+            f'<div class="dsub"><span class="dst">{esc(status)}</span>{meta}</div>'
             f'<div class="dsrc">{esc(source)}</div><div class="dbody">{task_body_html(body)}</div></template>')
 
 
@@ -1569,13 +882,11 @@ def render_tasks(p, live=None):
                          '<span class="next hold">下一个 · 暂停中</span>' if tv["paused"] else '<span class="next">下一个</span>')
         if not b["id"]:
             chips.append('<span class="hand">手写 · 发出时编号</span>')
-        if task_flow(b["body"]):
-            chips.append(flow_chip(task_flow(b["body"])))
-        looping = tv["loop"] or not tv["gate"]          # 放行模式下每个任务做完本来就停，「做完停」没有意义，不显示
+        looping =tv["loop"] or not tv["gate"]          # 放行模式下每个任务做完本来就停，「做完停」没有意义，不显示
         held = task_held(b, tv["holds"])
         if looping and held:
             chips.append('<span class="hold-tag">做完停</span>')
-        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not task_flow(l) and not TASK_HOLD_LINE.match(l)), "")
+        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not TASK_HOLD_LINE.match(l)), "")
         if note:
             chips.append(f'<span class="note">{esc(note)}</span>')
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
@@ -1583,9 +894,7 @@ def render_tasks(p, live=None):
         if live:
             # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（review-task drop），正在做的在终端里停
             pn, pos = esc(p["name"]), i + 1
-            flow_b = task_flow(b["body"])
-            raw = json.dumps({"id": b["id"] or "", "title": b["title"], "flow": flow_b,
-                              "body": "\n".join(l for l in b["body"].splitlines() if not TASK_FLOW.match(l)) if flow_b else b["body"]}, ensure_ascii=False)
+            raw = json.dumps({"id": b["id"] or "", "title": b["title"], "body": b["body"]}, ensure_ascii=False)
             acts = ('<span class="qa">'
                     + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
                     + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
@@ -1612,7 +921,7 @@ def render_tasks(p, live=None):
         else:
             line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
         label = "用时" if c["waiting"] else "已进行"
-        flow = (flow_chip(c["flow"]) if c["flow"] else "") + ('<span class="hold-tag">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else "")
+        flow = '<span class="hold-tag">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else ""
         key = f'{p["name"]}:{c["id"]}'
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
@@ -1635,13 +944,10 @@ def render_tasks(p, live=None):
             descs.append(task_desc(key, f["id"], f["title"], "放弃", f'<span>原因：{esc(f["reason"] or "没写原因")}</span>',
                                    f["body"], src_snap if f["body"] else "没发出过，队列里的原文已不在快照中"))
             continue
-        rounds = " · ".join(x for x in (f'计划评审 {f["plan_n"]}' if f["plan_n"] else "", f'代码评审 {f["code_n"]}' if f["code_n"] else "") if x) or "无评审"
-        kind = ('<span class="kind noreview">未评审</span>' if f["noreview"] else
-                '<span class="kind">PLAN</span>' if f["plan_n"] else '<span class="kind direct">DIRECT</span>')
         rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
         fin.append(f'<div class="drow" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
-                   f'<span class="r">{esc(f["span"])}</span><span class="s">{kind}<span>{rounds}</span>{rng}</span></div>')
-        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span><span>{rounds}</span>{rng}', f["body"], src_snap))
+                   f'<span class="r">{esc(f["span"])}</span><span class="s">{rng}</span></div>')
+        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span>{rng}', f["body"], src_snap))
     fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
     add = (f'<button class="act lp{" on" if tv["loop"] else ""}" type="button" data-act="loop" data-p="{esc(p["name"])}" data-on="{1 if tv["loop"] else 0}">'
            f'{"关闭循环" if tv["loop"] else "开启循环"}</button>'
@@ -1662,10 +968,10 @@ def render_tasks(p, live=None):
 
 
 def crew_chips(p):
-    """写手 / 规划者 / 评审方的状态块（herdr 里的状态、标题、正在做什么）；静态页、本机服务页和 /crew 共用。"""
+    """主控的状态块（herdr 里的状态、标题、正在做什么）；静态页、本机服务页和 /crew 共用。"""
     ag = p.get("agents") or {}
     chips = []
-    for role, label in (("writer", "写手"), ("planner", "规划者"), ("reviewer", "评审方")):
+    for role, label in (("writer", "写手"),):
         a = ag.get(role)
         if not a:
             continue
@@ -1679,7 +985,7 @@ def crew_chips(p):
     return "".join(chips)
 
 
-def render_panel(p, archives, live=None):
+def render_panel(p, live=None):
     parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
     badge = state_badge(p)
     parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
@@ -1688,91 +994,12 @@ def render_panel(p, archives, live=None):
     if chips or live:          # 本机服务页总留一个位置，agent 状态随轮询换上（空的时候不占地方）
         slot = f' data-crew="{esc(p["name"])}"' if live else ""
         parts.append(f'<div class="crew"{slot}>{chips}</div>')
-    # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。风险图建议放「不急」档。
+    # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。
     if p["human"]:
-        items = []
-        for kind, fid, verb, sev, reason in p["human"]:
-            if kind != "decision":
-                items.append(f'<li>{esc(reason)}</li>')
-                continue
-            what = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
-            a = f"f-{p['name']}-{fid}"
-            items.append(f'<li><a href="#{esc(a)}" onclick="return rbGo(\'{esc(p["name"])}\',\'{esc(a)}\')">{esc(what)}</a>'
-                         + (f'<span class="dim"> · {esc(reason)}</span>' if reason else "") + '</li>')
+        items = [f'<li>{esc(reason)}</li>' for _, _, _, _, reason in p["human"]]
         body = f'<div class="wh">等你 · {len(items)}</div><ul>{"".join(items)}</ul>' if items else ""
         parts.append(f'<div class="wait{"" if items else " calm"}" id="w-{esc(p["name"])}">{body}</div>')
     parts.append(render_tasks(p, live))
-    pl = p.get("planning")
-    if pl:
-        parts.append(f'<div class="planning"><b>规划中</b><span class="age">{ago(pl["since"])}</span>'
-                     f'<span class="task">{esc(pl["task"])}</span><span class="dim">规划者决定要不要计划；它提交的计划会作为一个评审周期出现在下面</span></div>')
-    lr = p.get("last_run")
-    if lr:
-        parts.append(f'<details class="lastrun"><summary><span class="tri">▶</span><b>上次运行 request-review：exit {esc(lr["code"])}</b>'
-                     f'<span class="age">{ago(lr["ts"])} 前</span><span class="msg">{esc(lr["head"])}</span></summary>'
-                     f'<pre>{esc(lr["out"])}</pre></details>')
-    if p.get("triage_reason"):
-        parts.append(f'<div class="idle" style="padding:14px 0">{esc(p["triage_reason"])}</div>')
-    stale = bool(p["rounds"]) and p["closed"] and not p["waiting"]
-    if stale:
-        # 闭合但还没归档：收成一行，点开才看 request 与 Round。下个周期派发时它进"最近归档"。
-        req, cr = p["req"], p["cycle_req"]
-        last = p["rounds"][-1]
-        resp = last.get("responses") or {}
-        counts = " / ".join(f"{sum(1 for v in resp.values() if v[0] == k)} {ZH[k]}" for k in ("accept", "defer", "reject") if any(v[0] == k for v in resp.values())) or "无回应"
-        t0 = (p["rounds"][0].get("sent") or {}).get("start"); t1 = last.get("t_responses") or last.get("t_findings")
-        sent1 = p["rounds"][0].get("sent") or {}
-        target = (cr.get("target sha") or req.get("target sha") or sent1.get("target") or "")[:7]
-        subj = cycle_subject(p)["subject"]
-        parts.append(f'<details class="prev"><summary><span class="tri">▶</span><span class="lab">上一周期</span>'
-                     + (f'<span class="title-sm">{esc(subj)}</span>' if subj else "")
-                     + f'<code style="font-weight:600">@ {esc(target)}</code><span>{esc(cr.get("kind", ""))}</span>'
-                     f'<span>{len(p["rounds"])} 轮</span><span>{esc(counts)}</span><span class="tab">{dur((t1 - t0) if t0 and t1 else None)}</span>'
-                     f'<span class="dim">已闭合，等下个周期派发时归档</span></summary>')
-        parts.append(render_cycle(p))
-        for rnd in p["rounds"]:
-            parts.append(render_round(p, rnd))
-        parts.append('</details>')
-    # 有评审轮次，或 request.md 真写了 target：才算有在途周期。等你放行、规划中这类状态本身不是评审周期，不画空卡片
-    elif p["rounds"] or (p["req"].get("target sha") and p["state"] not in ("空闲",) and not p["state"].startswith("triage")):
-        parts.append(render_cycle(p))
-        for rnd in p["rounds"]:
-            parts.append(render_round(p, rnd))
-    elif not p.get("triage_reason"):
-        parts.append('<div class="idle">无在途周期。最近一次周期见下方归档。</div>')
-
-    groups = [a for a in archives if a["deferred"]]
-    total = sum(len(a["deferred"]) for a in groups)
-    parts.append(f'<div class="sec"><h2>暂缓清单<span class="sub">评审方指出、写手承认但没改的 · {total} 条 · {len(groups)} 个周期</span></h2>'
-                 f'<input class="filter" type="search" placeholder="过滤暂缓清单…" oninput="rbFilter(this)"><div class="list blist">')
-    for i, a in enumerate(groups):
-        parts.append(f'<details class="bgrp"><summary class="bhead" title="{esc(a["artifact"])}">'
-                     f'<span class="tri">▶</span><code>{esc(a["sha"])}</code>'
-                     f'<span class="dim tab">{esc(a["when"])}</span><span>{esc(a["kind"])}</span>'
-                     f'<span class="dim">{len(a["deferred"])} 条</span></summary>')
-        for fid, sev, claim, reason in a["deferred"]:
-            said = esc(claim) if claim else '<span class="mute">评审方用了别的编号，见归档原文</span>'
-            parts.append(f'<div class="bitem"><div class="bid"><code>{fid}</code>{sev_tag(sev)}</div>'
-                         f'<div class="bl"><span class="who">评审方</span><span class="claim">{said}</span></div>'
-                         f'<div class="bl dim"><span class="who">写手</span><span class="claim">{esc(reason)}</span></div></div>')
-        parts.append('</details>')
-    if not groups:
-        parts.append('<div class="empty">没有暂缓的 finding</div>')
-    parts.append("</div></div>")
-
-    parts.append('<div class="sec"><h2>最近归档</h2><div class="list blist"><div class="acols"><span></span><span>sha</span><span>日期</span>'
-                 '<span>kind</span><span>轮数</span><span title="blocking">阻断</span><span>总耗时</span><span>结束方式</span></div>')
-    for a in archives[:ARCHIVES_SHOWN]:
-        took = dur(a["secs"]) if a["secs"] else "—"
-        bw = "700" if a["blocking"] else "400"
-        parts.append(f'<details class="arch"><summary class="arow"><span class="tri">▶</span><code>{esc(a["sha"])}</code>'
-                     f'<span class="dim tab">{esc(a["when"])}</span><span>{esc(a["kind"])}</span><span>{a["rounds"]} 轮</span>'
-                     f'<span style="font-weight:{bw}">{a["blocking"]}</span><span class="tab">{took}</span><span>{esc(a["ending"])}</span></summary>'
-                     f'<div class="body">{md(a["text"])}</div></details>')
-    if not archives:
-        parts.append('<div class="empty">无归档</div>')
-    parts.append("</div></div>")
-
     parts.append("</div>")
     return "".join(parts)
 
@@ -1781,12 +1008,8 @@ def wait_items(p):
     """「等你」里卡住了那一档的条目 → [(key, 文字, 跳转锚点)]。横幅和通知共用，两边说的是同一件事。"""
     out = []
     for kind, fid, verb, sev, reason in p["human"]:
-        if kind != "decision":
-            text, anchor = (f"STOP · {reason}" if kind == "stop" else reason), f"w-{p['name']}"
-        else:
-            text = f"{fid} {ZH.get(sev, sev)} · 写手{ZH.get(verb, verb)}" if sev else f"{fid} · 写手{ZH.get(verb, verb)}"
-            anchor = f"f-{p['name']}-{fid}"
-        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text, anchor))
+        text = f"STOP · {reason}" if kind == "stop" else reason
+        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text, f"w-{p['name']}"))
     return out
 
 
@@ -1800,7 +1023,7 @@ def applescript_str(s):
 def notify_new(projects, state_path):
     """新出现的「等你」条目弹 macOS 通知：一个项目一条，写有几条新的和第一条的内容。
     已通知过的 key 记在 state_path；条目解决后从记录里消失，再出现会重新通知。这是看板唯一自己存的东西，
-    删掉只会把还开着的条目再通知一次。只由 launchd 那次刷新（--notify）调用 —— request-review 退出时的刷新不发，
+    删掉只会把还开着的条目再通知一次。只由 launchd 那次刷新（--notify）调用 —— 别的刷新不发，
     两边同时刷新也不会重复弹。通知发不出去就跳过，不影响看板。"""
     try:
         seen = set(json.loads(read(state_path) or "[]"))
@@ -1829,7 +1052,7 @@ def notify_new(projects, state_path):
             os.remove(tmp)
 
 
-def render(projects, archives, live=None):
+def render(projects, live=None):
     """live：本机服务打开时的 {"token": …}，页面多出令牌、放行 / 放弃按钮和确认框；静态文件为 None，和原来一样。"""
     waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
     if waits:
@@ -1843,25 +1066,18 @@ def render(projects, archives, live=None):
         status = state_badge(p)
         side.append(f'<div class="proj{" needs" if p["needs_me"] else ""}" data-p="{esc(p["name"])}"><div class="row"><span class="nm">{esc(p["name"])}</span>'
                     f'<span class="age">{ago(p["since"])}</span></div><div class="st">{status}<span class="who">{esc(p["waiting"])}</span></div></div>')
-    panels = "".join(render_panel(p, archives[p["name"]], live) for p in projects)
+    panels = "".join(render_panel(p, live) for p in projects)
     gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    kinds = sorted({p["kind"] for p in projects}) or ["claude"]
-    writer_kinds = [((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects]
-    # 评审参数和规划者参数一样，取第一个配了覆盖的项目。原先取排序后第一个项目，而需要你的项目排在前面，
-    # 顶栏就会随「谁在等你」来回变。
-    p0 = next((p for p in projects if p["kind"] == kinds[0] and p.get("review_args")),
-              next((p for p in projects if p["kind"] == kinds[0]), projects[0] if projects else {}))
-    agents = agents_line(kinds[0], next((k for k in writer_kinds if k), ""), p0.get("review_args", ""),
-                         next((p["plan_kind"] for p in projects if p.get("plan_kind")), ""),
-                         next((p["plan_args"] for p in projects if p.get("plan_kind")), ""))
-    gen_html = ('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
+    kind = next((k for k in (((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects) if k), "")
+    agents = f'<span class="ag wr"><b>主控</b> {esc(kind) if kind else "未在运行"}</span>'
+    gen_html =('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
                 if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("REVIEW_BOARD_PORT", "10086"))}/">'
                              f'带按钮的版本 ↗</a></span>')
     mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
-            f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .drover.conf 指向的交接目录与 docs/reviews</div></div>'
+            f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .drover.conf 指向的交接目录</div></div>'
             + (DRAWER if 'data-td="' in panels or live else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
             f'<script>{JS}</script></body></html>')
 
@@ -1882,26 +1098,23 @@ def discover(list_path):
 
 
 def collect(list_path):
-    """各项目的当前状态 → (projects, archives)；生成静态页和本机服务共用。
+    """各项目的当前状态；生成静态页和本机服务共用。
     NOW 每次重取：本机服务是常驻进程，停在启动那刻的 NOW 会让页面上「几分钟前」「已进行多久」越来越偏。"""
     global NOW, _AGENTS
     NOW, _AGENTS = time.time(), None                 # herdr 的 agent 列表同理：每页重查
-    projects, archives = [], {}
+    projects = []
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
         if "REVIEW_DIR" not in conf:
             continue
-        p = project_state(repo, conf)
-        projects.append(p)
-        archives[repo] = load_archives(repo)
+        projects.append(project_state(repo, conf))
     # 同名仓库（不同目录下的同名 checkout）用上一级目录区分，name 是页面里的唯一键
     names = [p["name"] for p in projects]
     for p in projects:
         if names.count(p["name"]) > 1:
             p["name"] = os.path.basename(os.path.dirname(p["repo"])) + "/" + p["name"]
-    archives = {p["name"]: archives[p["repo"]] for p in projects}
     projects.sort(key=lambda p: (not p["needs_me"], -(p["since"] or p["last_activity"] or 0), p["name"]))
-    return projects, archives
+    return projects
 
 
 # ============================================================ 本机服务（review-board serve）
@@ -1909,11 +1122,11 @@ def collect(list_path):
 # 写入权仍只在 review-task（它的核对一条不绕过）。防别的网页伪造请求：Host / Origin 只认本机这个端口，
 # 请求必须带启动时随机生成、嵌在页面里的令牌，而且是 JSON（跨源的 JSON POST 要先预检，这里不应答预检）。
 def live_version(list_path):
-    """交接目录、docs/reviews、git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
+    """交接目录和 git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
     h = hashlib.sha1()
     for repo in discover(list_path):
         d = parse_conf(f"{repo}/.drover.conf").get("REVIEW_DIR")
-        for base in (d, f"{repo}/docs/reviews"):
+        for base in (d,):
             try:
                 for e in sorted(os.scandir(base), key=lambda e: e.name):
                     h.update(f"{e.path}:{e.stat().st_mtime_ns}\n".encode())
@@ -1996,13 +1209,13 @@ def health(started, port):
         hok = subprocess.run([HERDR, "agent", "list"], capture_output=True, timeout=3).returncode == 0
     except Exception:
         hok = False
-    add("herdr", hok, "能连上" if hok else "连不上：写手、规划者、评审方的状态显示不出来（herdr 没在运行？）")
+    add("herdr", hok, "能连上" if hok else "连不上：主控的状态显示不出来（herdr 没在运行？）")
     return {"level": "ok" if all(i["ok"] for i in items) else "warn", "items": items, "checked": int(now)}
 
 
 def live_action(list_path, act, body):
     """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 review-task。"""
-    projects, _ = collect(list_path)
+    projects = collect(list_path)
     p = next((x for x in projects if x["name"] == body.get("project")), None)
     if not p:
         return 404, {"ok": False, "out": "找不到这个项目"}
@@ -2013,20 +1226,15 @@ def live_action(list_path, act, body):
     expect = ["--expect", str(body.get("expect") or "")]
     if act in ("add", "edit"):
         title = str(body.get("title") or "").strip()
-        flow = str(body.get("flow") or "").strip()
         lines = str(body.get("body") or "").replace("\r\n", "\n").rstrip().split("\n") if str(body.get("body") or "").strip() else []
         if not title or "\n" in title or len(title) > 200:
             return 400, {"ok": False, "out": "标题要是一行非空的文字（200 字以内）"}
-        if flow not in ("", "修好再审", "不评审"):
-            return 400, {"ok": False, "out": f"流程只能是 正常 / 修好再审 / 不评审，现在是 {flow}"}
         bad = [l for l in lines if TASK_HDR.match(l)]
         if bad:
             return 400, {"ok": False, "out": f"正文里顶格的「## 」会被当成另一个任务：{bad[0][:40]}…；小标题请用 ###"}
         if len("\n".join(lines)) > 20000:
             return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
-        if flow:                                                      # 选了流程就以下拉框为准，正文里手写的那行不重复
-            lines = [l for l in lines if not TASK_FLOW.match(l)]
-        text = [title, *([f"流程：{flow}"] if flow else []), *lines]
+        text = [title, *lines]
         cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
     elif act == "hold":
         cmd = [task_bin, "hold", str(body.get("pos") or ""), "on" if body.get("on") else "off", *expect]
@@ -2155,17 +1363,17 @@ def serve(args):
                 return self.reply(403, {"ok": False, "out": "只接受本机访问"})
             path = self.path.split("?", 1)[0]
             if path in ("/", "/index.html"):
-                return self.reply(200, render(*collect(list_path), live={"token": token}), "text/html; charset=utf-8")
+                return self.reply(200, render(collect(list_path), live={"token": token}), "text/html; charset=utf-8")
             if path == "/v":
                 return self.reply(200, {"v": live_version(list_path)})
             if path == "/health":
                 return self.reply(200, health(started, port))
             if path == "/crew":
-                return self.reply(200, {x["name"]: crew_chips(x) for x in collect(list_path)[0]})
+                return self.reply(200, {x["name"]: crew_chips(x) for x in collect(list_path)})
             if path == "/history":
                 from urllib.parse import parse_qs, urlsplit
                 name = (parse_qs(urlsplit(self.path).query).get("project") or [""])[0]
-                p = next((x for x in collect(list_path)[0] if x["name"] == name), None)
+                p = next((x for x in collect(list_path) if x["name"] == name), None)
                 if not p or not p.get("tasks"):
                     return self.reply(404, {"ok": False, "out": "找不到这个项目，或它没有接任务队列"})
                 return self.reply(200, task_history(p["repo"], parse_conf(f"{p['repo']}/.drover.conf")))
@@ -2216,14 +1424,14 @@ def main():
         return serve(args[1:])
     out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
     list_path = args[args.index("--projects") + 1] if "--projects" in args else None
-    projects, archives = collect(list_path)
+    projects = collect(list_path)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     # 先写临时文件再改名：浏览器 30 秒一刷，直接覆盖会有一瞬读到空文件。临时文件名带进程号：launchd 的定时刷新
-    # 和 request-review 退出时的刷新会同时跑，共用一个名字时后到的那个改名会扑空。写失败就删掉自己的，不留残留。
+    # 和别的刷新会同时跑，共用一个名字时后到的那个改名会扑空。写失败就删掉自己的，不留残留。
     tmp = f"{out_path}.{os.getpid()}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            f.write(render(projects, archives))
+            f.write(render(projects))
         os.replace(tmp, out_path)
     finally:
         if os.path.exists(tmp):

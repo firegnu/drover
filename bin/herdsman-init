@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# 在当前 git 仓库里初始化有界对抗评审。
+# 在当前 git 仓库里接入 drover。
 # 用法： herdsman-init <短名>
 #
 # 幂等：已存在的东西不覆盖，只报告。
+# 只写两个东西：仓库里的 .drover.conf（加进 .gitignore）和 ~/.drover/ 下的交接目录与项目清单。
+# 不建 worktree、不开 agent、不碰目标仓库的任何源码——那些都是内循环和人的事。
 set -uo pipefail
 
 SHORT="${1:-}"
@@ -15,46 +17,20 @@ command -v git >/dev/null || { echo "ERROR: 缺 git"; exit 2; }
 REPO=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "ERROR: 不在 git 仓库中"; exit 2; }
 cd "${REPO}"
 
-WT="${HOME}/wt/${SHORT}-review"
 RDIR="${HOME}/.drover/${SHORT}"
 
-echo "仓库:   ${REPO}"
-echo "worktree: ${WT}"
+echo "仓库:     ${REPO}"
 echo "交接目录: ${RDIR}"
 echo
 
-# ---- 1. 评审 worktree ----
-if [ -d "${WT}" ]; then
-  echo "  = worktree 已存在，跳过"
-else
-  if git show-ref --verify --quiet refs/heads/review-wt; then
-    git worktree add "${WT}" review-wt >/dev/null \
-      || { echo "  ✗ worktree 创建失败"; exit 1; }
-  else
-    git worktree add "${WT}" -b review-wt >/dev/null \
-      || { echo "  ✗ worktree 创建失败"; exit 1; }
-  fi
-  echo "  ✓ 建好 worktree"
-fi
-
-# ---- 2. .drover.conf ----
+# ---- 1. .drover.conf ----
 if [ -f .drover.conf ]; then
   echo "  = .drover.conf 已存在，跳过（如需改动请手动编辑）"
 else
   cat > .drover.conf <<EOF
-REVIEW_KIND=claude
-REVIEW_WT=${WT}
 REVIEW_DIR=${RDIR}
-REVIEW_WAIT=600
-# 计划/设计文档的路径模式，空格分隔，按 shell case 匹配（* 可跨 /）。
-# 触及这些路径的提交直接要求评审（kind: plan）；不配的话 .md 计划文档会被当成纯文本跳过。
-# REVIEW_PLAN_PATHS="docs/plans/*"
-# 拉起评审方时透传给 agent 的参数，如换模型：
-# REVIEW_AGENT_ARGS="--model claude-opus-5"
-# 规划者：配了 PLAN_KIND，写手收到没有计划覆盖的任务时会请它决定要不要计划并起草（request-review plan）。
-# 不配就没有规划者，写手自己写计划。
-# PLAN_KIND=codex
-# PLAN_AGENT_ARGS='--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"'
+# TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
+# TASK_GATE=1
 EOF
   echo "  ✓ 写好 .drover.conf"
 fi
@@ -62,75 +38,15 @@ fi
 touch .gitignore
 grep -qxF '.drover.conf' .gitignore || { echo '.drover.conf' >> .gitignore; echo "  ✓ .drover.conf 加入 .gitignore"; }
 
-# ---- 2b. 登记给看板：仓库不在 ~/Developer/personal_projs 下也能被 review-board 扫到 ----
+# ---- 2. 登记给看板：仓库不在 ~/Developer/personal_projs 下也能被 review-board 扫到 ----
 mkdir -p "${HOME}/.drover"
 grep -qxF "${REPO}" "${HOME}/.drover/projects" 2>/dev/null \
   || { echo "${REPO}" >> "${HOME}/.drover/projects"; echo "  ✓ 登记到 ~/.drover/projects（看板项目清单）"; }
 
-# ---- 3. 度量文件 ----
-mkdir -p docs/reviews
-if [ -f docs/reviews/escapes.md ]; then
-  echo "  = escapes.md 已存在"
-else
-  printf '# 逃逸记录\n\n日后发现的、本该被某次评审抓到的问题。\n\n日期 | 问题 | 哪次周期漏的 | 原因分类（证据不足 / 被范围冻结挡掉 / rubric 未覆盖 / 被豁免）\n' > docs/reviews/escapes.md
-  echo "  ✓ 建好 docs/reviews/escapes.md"
-fi
-if [ -f docs/reviews/precision.md ]; then
-  echo "  = precision.md 已存在"
-else
-  printf '# 误报记录\n\n脚本自动追加前三项，最后的「误报 ?」由你读完 findings 后填。\n\n日期 | sha | blocking 数 | 其中误报数\n' > docs/reviews/precision.md
-  echo "  ✓ 建好 docs/reviews/precision.md"
-fi
-if [ -f docs/reviews/self-closed.md ]; then
-  echo "  = self-closed.md 已存在"
-else
-  printf '# 未送审记录\n\n脚本判定不需评审的提交。escapes.md 出现漏网时回来查它是按什么放过去的。\n\n日期 | sha | 依据 | 理由\n' > docs/reviews/self-closed.md
-  echo "  ✓ 建好 docs/reviews/self-closed.md"
-fi
-
-# ---- 4. 交接目录 ----
+# ---- 3. 交接目录 ----
 mkdir -p "${RDIR}"
 echo "  ✓ 交接目录就绪"
 
-# ---- 5. 常驻指令 ----
-TPL="${HOME}/.config/review/agents-section.md"
-for f in AGENTS.md CLAUDE.md; do
-  [ -f "${f}" ] || continue
-  if grep -q 'Applies to the implementing agent only' "${f}"; then
-    echo "  = ${f} 已含常驻指令"
-  else
-    echo "  ! ${f} 缺常驻指令 —— 见下"
-    NEED_AGENTS=1
-  fi
-done
-if [ ! -f AGENTS.md ] && [ ! -f CLAUDE.md ]; then
-  echo "  ! 未找到 AGENTS.md / CLAUDE.md —— 见下"
-  NEED_AGENTS=1
-fi
-
 echo
-echo "自动部分完成。剩下两件事必须你手动做："
-echo
-echo "  [1] 常驻指令"
-if [ "${NEED_AGENTS:-0}" = "1" ]; then
-  if [ -f "${TPL}" ]; then
-    echo "      cat ${TPL} >> AGENTS.md"
-  else
-    echo "      把 templates/agents-section.md 的内容追加到 AGENTS.md 或 CLAUDE.md"
-  fi
-  echo "      模板对所有项目一样，不需要改；项目知识在 [2] 的简报里"
-else
-  echo "      已就绪"
-fi
-echo "      若有计划/设计文档目录，在 .drover.conf 里配 REVIEW_PLAN_PATHS，否则 .md 计划会被当纯文本跳过"
-echo
-echo "  [2] 项目简报 docs/reviewer-brief.md"
-if [ -f docs/reviewer-brief.md ]; then
-  echo "      已存在。改架构后记得更新头部 verified at 的 sha。"
-else
-  echo "      用 templates/brief-prompt.md 里的提示词让写手生成，"
-  echo "      生成后你亲自过一遍「不变量」那节。"
-  echo "      不写简报的话，评审方每轮从零爬全仓库，成本可能超过实施本身。"
-fi
-echo
-echo "两件都做完后，跑一个你已经审过的真实提交验证一遍（见 docs/QUICKSTART.md 最后一节）。"
+echo "接好了。往 ${RDIR}/queue.md 里写任务（格式见 docs/queue-example.md），"
+echo "或者直接跑：review-task add \"标题\" [说明行 …]"

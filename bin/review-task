@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """review-task —— 任务队列：人往 queue.md 里写任务，写手用 next / done 一个接一个地做。
 
-和评审流程并行、互不相碰：不改 request-review，不启动也不注入任何 agent。
+不启动、不关闭、也不接入任何 agent。**对目标仓库完全只读**——一个字节都不写。
   queue.md    交接目录里，只归人。「## T7 标题」或「## 标题」开一块，下面随意写约束和验收；
               编号可省（发出时补上），文件里的先后就是执行顺序。
   tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
-「做完了」由本工具只读核对 git 和交接目录，不听写手一句话。交接文件的解析复用看板（review-board）里的
-函数，和看板、request-review 用同一套判据。
-正文里的「流程：…」一行按任务改流程（没有就是正常流程）：
-  流程：不评审    不找规划者、不送审；done 时把起点以来该审的提交登记进 docs/reviews/skipped.md
-                  （和人设 SKIP_REVIEW 效果相同）——这是本工具唯一写仓库的地方。
-  流程：修好再审  中间提交不送审，修好后运行一次 request-review 整体送审；done 照常核对。
+「做完了」由本工具只读核对 git 和交接目录，不听主控一句话。交接文件的解析复用看板（review-board）里的
+函数，两边用同一套判据。
 
 在仓库目录里运行：
   review-task add "标题" [说明行 …]   人：加到队列末尾，自动编号
@@ -77,7 +73,7 @@ def setup():
     REPO = r.stdout.strip()
     conf = B.parse_conf(f"{REPO}/.drover.conf")
     if not conf.get("REVIEW_DIR"):
-        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入评审流程。")
+        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入 drover。")
     D = conf["REVIEW_DIR"]
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
@@ -128,111 +124,23 @@ def issue(t, again=False):
     out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
     if B.task_held(t, B.task_holds(B.task_events(B.read(S)))):
         out += ["人标了「做完停」：这个任务做完后会停下等人放行（review-task done 核对通过之后），那时照输出停下即可，不是出了问题。"]
-    flow = B.task_flow(t.get("body"))
-    if flow == "不评审":
-        out += ["人已指定本任务不评审：不找规划者，提交后不运行 request-review，AGENTS.md 里这两条对本任务不适用；",
-                "其余照 AGENTS.md 做（该跑的检查照跑，改动照常提交）。",
-                f"做完后运行：review-task done {t['id']}  —— 它会核对是否收尾，把本任务的提交登记为豁免，并告诉你下一步。"]
-    elif flow == "修好再审":
-        out += ["人已指定本任务修好再审：修好之前，每次提交后都不运行 request-review（AGENTS.md「每次提交后运行」这条对本任务暂不适用），",
-                "该跑的检查照跑，改动照常提交。确认修好后运行一次 request-review，它会把开始以来的全部改动当作一个整体，",
-                "按它的输出走完评审（和平时一样）。其余照 AGENTS.md 做。",
-                f"评审走完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
-    else:
-        out += ["按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
-                f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
+    out += ["按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
+            f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
     print("\n".join(out))
     return 0
 
 
 # ============================================================ 「做完了」的核对（只读）
-def own_record(paths):
-    """去掉脚本自己写的：docs/reviews/ 下全部。同 request-review 的 drop_own。"""
-    return [p for p in paths if not p.startswith("docs/reviews/")]
-
-
 def tree_dirty():
-    paths = [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
-    return own_record(paths)
-
-
-def skipped_shas():
-    out = set()
-    for line in (B.read(f"{REPO}/docs/reviews/skipped.md") or "").splitlines():
-        parts = [x.strip() for x in line.split("|")]
-        if len(parts) >= 2 and re.fullmatch(r"[0-9a-f]{7,40}", parts[1]):
-            out.add(parts[1])
-    return out
-
-
-def unreviewed(base, h, skipped):
-    """base..h 里真正该评审的提交：去掉人用 SKIP_REVIEW 放过的、只动了评审记录的。base 不在 HEAD 历史里返回 None。"""
-    if base == h:
-        return []
-    if sh("merge-base", "--is-ancestor", base, h).returncode:
-        return None
-    out = []
-    for c in git("rev-list", f"{base}..{h}").split():
-        if git("rev-parse", "--short", c).strip() in skipped:
-            continue
-        paths = git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", c).split()
-        if own_record(paths):
-            out.append(c)
-    return out
-
-
-def cycle_state(h):
-    """评审周期结束了没有。→ (问题列表, 闭合时那一轮的 target sha)。
-    最近一轮的回应里有拒绝、暂缓的阻断、或接受，流程都还要再走一轮（手册第 ⑨ 步），不管人裁决了没有。"""
-    probs = []
-    req = B.parse_request(B.read(f"{D}/request.md"))
-    cur = req.get("_round", 1)
-    if req.get("target sha") == h and not os.path.exists(f"{D}/.r{cur}.sent"):
-        probs.append(f"request.md 已写好第 {cur} 轮，但还没运行 request-review 派发")
-    rounds = [r for r in B.load_rounds(D) if r["sent"]]
-    if not rounds:
-        return probs, None
-    last = rounds[-1]
-    n = last["n"]
-    if last["responses"] is None:
-        probs.append(f"第 {n} 轮评审还没结束：" + ("评审方还在审" if not last["done"] else "findings 还没回应"))
-        return probs, None
-    sev = lambda fid: last["findings"].get(fid, {}).get("sev", "")
-    resp = last["responses"].items()
-    if any(v == "reject" or (v == "defer" and sev(f) == "blocking") for f, (v, _) in resp):
-        probs.append(f"第 {n} 轮有被拒绝、或暂缓的阻断 finding："
-                     + ("要等人裁决，再走一轮" if B.pending_decisions(last) else "人已裁决，还要再走一轮"))
-    # 接受评审方已判 resolved 的条目只是确认、不用改东西；手册第 ⑨ 步是「有 accept 且改了 artifact」才再走一轮
-    elif any(v == "accept" and last["findings"].get(f, {}).get("status") != "resolved" for f, (v, _) in resp):
-        probs.append(f"第 {n} 轮有接受的 finding，改完要再开一轮验证")
-    return probs, (None if probs else last["sent"]["target"])
+    return [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
 
 
 def check_done(task):
-    """→ (问题列表, 要登记为豁免的提交)。人指定不评审的任务不看路由，改为把起点以来该审的提交交给 cmd_done 登记。"""
-    h = head()
-    probs, waive = [], []
+    """→ 问题列表。只读核对 git，不听主控一句话。
+    完成判据的正式版（main 前进 / 里程碑分支已合入 / 验收命令退出码 0）是 ROADMAP D1 第 2 步的事，
+    这里暂时只保留「工作区干净」这一条——它和评审协议无关，砍掉评审后仍然成立。"""
     dirty = tree_dirty()
-    if dirty:
-        probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
-    psent = B.parse_sent(B.read(f"{D}/.plan.sent"))
-    if psent and not B.sentinel_ok(B.read(f"{D}/plan.md"), "PLAN-COMPLETE"):
-        probs.append("规划者还没交付计划：plan.md 还没写完")
-    cp, cycle_end = cycle_state(h)
-    probs += cp
-    if not cp and B.task_flow(task.get("body")) == "不评审":
-        waive = unreviewed(task["start"], h, skipped_shas())
-        if waive is None:
-            probs.append(f"任务起点 {task['start'][:7]} 不在 HEAD 的历史里，没法确定要豁免哪些提交：把输出报告给人")
-            waive = []
-    elif not cp:
-        # 起点之一到 HEAD 之间没有该审而没审的提交，就算过了路由：这个任务的起点、triage 判 SKIP 的那个 HEAD、刚闭合的那一轮
-        tri = (B.read(f"{D}/.triage") or "").splitlines()
-        bases = [task["start"], tri[0].strip() if len(tri) > 1 and tri[1].strip() == "SKIP" else "", cycle_end or ""]
-        skipped = skipped_shas()
-        if not any(b and unreviewed(b, h, skipped) == [] for b in bases):
-            probs.append("开始以来的改动还没过路由：运行 request-review，让它评审完或判 SKIP")
-    return probs, waive
+    return ["工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else "")] if dirty else []
 
 
 # ============================================================ 命令
@@ -378,21 +286,14 @@ def cmd_done(tid):
     tasks, current, awaiting = fold()
     if not current or current["id"] != tid:
         die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
-    probs, waive = check_done(current)
+    probs = check_done(current)
     if probs:
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
             print(f"  - {p}")
         print(f"处理完再运行 review-task done {tid}。")
         return 9
-    if waive:
-        # 和 SKIP_REVIEW 写同一个文件、同一种行：request-review 算范围时跳过这些提交
-        os.makedirs(f"{REPO}/docs/reviews", exist_ok=True)
-        with open(f"{REPO}/docs/reviews/skipped.md", "a", encoding="utf-8") as f:
-            for c in reversed(waive):
-                f.write(f"{time.strftime('%Y-%m-%d')} | {git('rev-parse', '--short', c).strip()} | 任务 {tid} 人指定不评审\n")
-        print(f"人指定 {tid} 不评审：{len(waive)} 个提交已登记进 docs/reviews/skipped.md（和评审记录一起提交即可）。")
-    held = B.task_held(current, B.task_holds(B.task_events(B.read(S))))
+    held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
     gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
     if gate and loop_on():
