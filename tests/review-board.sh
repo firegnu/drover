@@ -29,13 +29,17 @@ now=$(date +%s)
 # alpha 的主控在 working（带 last_tool / turn_started），zeta 的 blocked，theta 的状态由文件控制。
 cat > "${TMP}/corral" <<'MOCK'
 #!/usr/bin/env bash
-st() {   # <name> <state> [title]
-  printf '{"ok":true,"name":"%s","instance":1,"kind":"claude","state":"%s","title":"%s","last_tool":"Edit","turn_started":%s,"last_input_source":"send","idle_for":3}\n' \
-    "$1" "$2" "${3:-}" "$(( $(date +%s) - 723 ))"
+st() {   # <name> <state> [idle_for] [last_input_source]
+  printf '{"ok":true,"name":"%s","instance":1,"kind":"claude","state":"%s","title":"","last_tool":"Edit","turn_started":%s,"last_input_source":"%s","idle_for":%s}\n' \
+    "$1" "$2" "$(( $(date +%s) - 723 ))" "${4:-send}" "${3:-600}"
 }
 case "$1 $2" in
   'status alpha/main') st alpha/main working;;
   'status zeta/main')  st zeta/main blocked;;
+  # eta 的主控空闲着，但判据没满足 → 它停在某处等人。三个旋钮各自试一遍。
+  'status eta/main')   st eta/main "$(cat "${MOCK_DIR}/eta.state" 2>/dev/null || echo idle)" \
+                          "$(cat "${MOCK_DIR}/eta.idle_for" 2>/dev/null || echo 600)" \
+                          "$(cat "${MOCK_DIR}/eta.src" 2>/dev/null || echo send)";;
   'status theta/main') st theta/main "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)";;
   'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"}]}\n' "${MOCK_ALPHA}";;
   'send theta/main') printf '%s\n' "$3" >> "${MOCK_DIR}/prompts.log"
@@ -49,6 +53,7 @@ export DROVER_CORRAL_BIN="${TMP}/corral"
 # 谁的 MAIN_AGENT 配了什么：看板按名字问 corral status
 printf 'MAIN_AGENT=alpha/main\n' >> "${TMP}/alpha/repo/.drover.conf"
 printf 'MAIN_AGENT=zeta/main\n'  >> "${TMP}/zeta/repo/.drover.conf"
+printf 'MAIN_AGENT=eta/main\n'   >> "${TMP}/eta/repo/.drover.conf"
 printf 'MAIN_AGENT=theta/main\n' >> "${TMP}/theta/repo/.drover.conf"
 # zeta：主控卡在审批对话框（假 corral 里 blocked）→「等你」里出现一条 STOP
 
@@ -61,7 +66,7 @@ printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## �
   printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T7", "sha": "%s", "gate": false}\n' "$((now - 7750))" "$EH"
   printf '{"t": %s, "ev": "drop", "id": "T6", "title": "迁移到新日志库", "key": "迁移到新日志库", "reason": "和 T2 冲突"}\n' "$((now - 7700))"
-  printf '{"t": %s, "ev": "start", "id": "T8", "title": "把 CSV 导入改成流式", "body": "约束：内存不超过 200MB", "key": "把 CSV 导入改成流式", "sha": "%s"}\n' "$((now - 3600))" "$EB"
+  printf '{"t": %s, "ev": "start", "id": "T8", "title": "把 CSV 导入改成流式", "body": "约束：内存不超过 200MB", "key": "把 CSV 导入改成流式", "sha": "%s", "main": "%s"}\n' "$((now - 3600))" "$EB" "$EH"
 } > "$E/review/tasks.state"
 TH="${TMP}/theta"; THB=$(git -C "$TH/repo" rev-parse HEAD~1)
 printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\n' > "$TH/review/queue.md"
@@ -86,12 +91,33 @@ has '<span class="dot st-working"></span><b>写手</b><span class="st st-working
 # 按钮的样式名是 act、默认隐藏；agent 正在做什么的那段文字不能用同一个名字，否则被一起藏掉
 lacks '<span class="act">' 'crew activity text is not styled as a hidden button'
 
-# 横幅：zeta 的主控 blocked 一条 + theta 做完等放行一条
-has '等你 · 2' 'banner count: zeta 1 + theta 1'
+# 「等人」的识别：eta 的主控空闲着，但 T8 的判据没满足（main 还停在发任务那一刻）
+# —— 它停在某处等人拍板。判据第 1、2 条是纯 git，渲染时照算；第 3 条可能是整套测试，不在这里跑。
+has '主控空闲着，但这件活的判据还没满足' 'an idle 主控 with unmet criteria is flagged as waiting on you'
+has 'T8' 'the 等人 item names the task'
+has '送任务之后没有前进' 'it says which criterion is unmet'
+
+# 横幅：zeta blocked 一条 + eta 等人一条 + theta 做完等放行一条
+has '等你 · 3' 'banner count: zeta 1 + eta 1 + theta 1'
 seen_plain=0
 for c in $(grep -o 'class="proj[^"]*" data-p' "${OUT}" | sed 's/class="proj needs" data-p/needs/;s/class="proj" data-p/plain/'); do
   if [ "$c" = plain ]; then seen_plain=1; elif [ "${seen_plain}" = 1 ]; then fail 'a project that needs you sorted after a quiet one'; fi
 done
+
+# 「等人」不许误报。三种情况都不算停下等人，契约和 ROADMAP 各写了一半：
+#   a) last_input_source 是 agent —— 这一轮是主控自己开的（后台命令跑完自注入），不是在等人
+#   b) idle 的时间还不够 —— 每一轮结束都会短暂 idle，得留一次观察间隔再下结论
+#   c) state 是 unknown —— 不认识的 agent 没有钩子，状态无从得知，那就不猜
+regen() { python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null; }
+for probe in 'eta.src agent' 'eta.idle_for 5' 'eta.state unknown'; do
+  set -- ${probe}; printf '%s\n' "$2" > "${TMP}/$1"; regen
+  lacks '主控空闲着，但这件活的判据还没满足' "no 等人 item when $1 is $2"
+  rm -f "${TMP}/$1"
+done
+# 主控在干活时当然不算等人
+printf 'working\n' > "${TMP}/eta.state"; regen
+lacks '主控空闲着，但这件活的判据还没满足' 'no 等人 item while the 主控 is working'
+rm -f "${TMP}/eta.state"; regen
 
 # 评审协议的东西一律不该再出现
 lacks 'Round 1' 'no review rounds'
@@ -216,17 +242,17 @@ nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr 
 board "${TMP}/notifier"
 [ "$(nlines)" = 0 ] || fail 'the board must not notify without --notify'
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 2 ] || fail "first --notify run: one per project waiting on you (zeta blocked, theta awaiting release), got $(nlines)"
+[ "$(nlines)" = 3 ] || fail "first --notify run: one per project waiting on you (zeta blocked, eta 等人, theta awaiting release), got $(nlines)"
 grep -q 'zeta/repo' "${TMP}/notify.log" || fail 'the blocked 主控 is notified'
 grep -q '做完了' "${TMP}/notify.log" || fail 'waiting for release is notified'
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 2 ] || fail 'an unchanged board must not notify again'
+[ "$(nlines)" = 3 ] || fail 'an unchanged board must not notify again'
 mv "${TMP}/theta/review/tasks.state" "${TMP}/theta/state.bak"
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 2 ] || fail 'an item going away sends nothing'
+[ "$(nlines)" = 3 ] || fail 'an item going away sends nothing'
 mv "${TMP}/theta/state.bak" "${TMP}/theta/review/tasks.state"
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 3 ] || fail 'an item that comes back is notified again'
+[ "$(nlines)" = 4 ] || fail 'an item that comes back is notified again'
 tail -1 "${TMP}/notify.log" | grep -q '做完了' || fail 'the renewed notification carries the item text'
 tail -1 "${TMP}/notify.log" | grep -qF '\"引号\"' || fail 'double quotes are escaped for AppleScript'
 rm -f "${TMP}/board-notified.json"

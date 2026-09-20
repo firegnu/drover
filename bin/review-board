@@ -122,7 +122,9 @@ def agents_of(repo, main_agent=""):
         title = ""
     return {"writer": {"status": st.get("state") or "unknown", "title": title,
                        "name": st.get("name", ""), "instance": st.get("instance", ""),
-                       "kind": st.get("kind", ""), "activity": activity_of(st)}}
+                       "kind": st.get("kind", ""), "activity": activity_of(st),
+                       # 下面两个只给「等人」的识别用，见 wants_human
+                       "idle_for": st.get("idle_for") or 0, "src": st.get("last_input_source", "")}}
 
 
 def ago(ts):
@@ -155,12 +157,42 @@ def parse_conf(path):
 
 # ============================================================ 项目状态
 
+IDLE_SETTLE = 120       # idle 多久才算「停下了」。每一轮结束都会短暂 idle，得留一次观察间隔
+
+
+def wants_human(p):
+    """「它在等人」：主控 idle 了，但这件活的判据还没满足——它停在某处等人拍板
+    （审查复核没过、和审查者有分歧、要推送、要花钱、发现设计对不上）。→ 没满足的那几条，或 []。
+
+    三种情况不算，都会误报：
+      - corral 契约：`idle` **只表示这一轮结束，不代表 agent 不会再动**，它可能自己开新一轮
+        （后台命令跑完自注入），契约提示看 `last_input_source`。是 `agent` 就不是在等人。
+      - 每一轮结束都会短暂 idle，所以要 idle 够久（IDLE_SETTLE）才下结论。
+      - `state` 是 `unknown`（不认识的 agent，没有钩子）时状态无从得知：**不猜**，
+        让它照常显示，人自己去看。
+    判据第 3 条不在这里跑（可能是整套测试，页面 30 秒一刷），只看纯 git 的前两条。"""
+    a = (p.get("agents") or {}).get("writer")
+    tv = p.get("tasks")
+    if not a or not tv or not tv.get("card") or tv.get("awaiting"):
+        return []
+    if a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
+        return []
+    rows = criteria(p["repo"], tv["card"].get("main", ""), p.get("branch_glob", ""),
+                    task_check_cmd(tv["card"].get("body"), p.get("check_cmd", "")), do_check=False)
+    return [r for r in rows if r["ok"] is False]
+
+
 def add_waits(p):
-    """把「等你」补全：主控卡在对话框、以及队列做完等放行。"""
+    """把「等你」补全：主控卡在对话框、主控停下等人、以及队列做完等放行。"""
     new = []
     a = (p.get("agents") or {}).get("writer")
     if a and a["status"] == "blocked":
         new.append(("stop", "", "blocked", "", f"主控 {a['name'] or ''} 停在审批或提问对话框，去接入看看"))
+    unmet = wants_human(p)
+    if unmet:
+        card = p["tasks"]["card"]
+        why = "；".join(f'{r["name"]}：{r["why"]}' for r in unmet)
+        new.append(("stop", "", "idle", "", f'{card["id"]} {card["title"]}：主控空闲着，但这件活的判据还没满足（{why}）。去看看它停在哪一步'))
     tv = p.get("tasks")
     if tv and tv["awaiting"] and tv["card"]:
         new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} 做完了，核对已通过。"
@@ -290,14 +322,14 @@ def run_check(repo, cmd):
     return r.returncode, tail
 
 
-def criteria(repo, base_sha, glob_pat, check_cmd):
+def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     """三条完成判据的只读核对 → [{n, name, ok, why}]。
     ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
     全程只读：只跑 rev-parse / branch --list / merge-base，外加人自己配的验收命令。
 
-    **别在渲染页面时调它。** 第 3 条会真的跑验收命令（可能是整套测试）；页面 30 秒刷一次、
-    每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。D1 第 4 步要在看板上显示
-    「完成判据过了几条」时，得先想清楚在哪算、多久算一次、结果存哪，不能直接在 render 里调。"""
+    `do_check=False` 时第 3 条不跑命令、直接标「没查」。**渲染页面时必须用这个**：第 3 条
+    可能是整套测试，页面 30 秒刷一次、每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。
+    前两条是纯 git，便宜，渲染时照算——「等人」的识别靠的就是它们（见 wants_human）。"""
     rows = []
 
     head = git(repo, "rev-parse", MAIN_BRANCH).strip()
@@ -332,6 +364,8 @@ def criteria(repo, base_sha, glob_pat, check_cmd):
     name3 = "验收命令过了"
     if not check_cmd:
         rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
+    elif not do_check:
+        rows.append({"n": 3, "name": name3, "ok": None, "why": f"没查：`{check_cmd}` 不在渲染页面时跑"})
     else:
         code, tail = run_check(repo, check_cmd)
         rows.append({"n": 3, "name": name3, "ok": code == 0,
@@ -365,7 +399,8 @@ def task_view(repo, conf, p):
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "commits": n, "steps": steps, "body": t.get("body", ""),
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "main": t.get("main", ""),
+                "commits": n, "steps": steps, "body": t.get("body", ""),
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
     finished = []
@@ -424,6 +459,8 @@ def project_state(repo, conf):
          "state": "空闲", "since": None, "waiting": "", "needs_me": False, "human": []}
     p["last_activity"] = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
     p["main_agent"] = conf.get("MAIN_AGENT", "")
+    p["branch_glob"] = conf.get("BRANCH_GLOB", "")
+    p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
     p["tasks"] = task_view(repo, conf, p)
     add_waits(p)
