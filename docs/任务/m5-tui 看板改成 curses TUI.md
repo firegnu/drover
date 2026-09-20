@@ -166,6 +166,14 @@ history / hold / health 那几块整块删掉；并发写临时文件那块删�
   文件不在本任务的改动范围内（而且 `drover/dev-install` 可能也要动 README），**没动**。
 - `docs/ROADMAP.md` D1 第 5 步第 3 项「看板改 TUI」还没标做完——改 ROADMAP 要先问人，留给主控。
 
+- 头一版测试漏了一处隔离：`drover loop --once` 现在每跳都发通知，而通知记录写
+  `~/.drover/board-notified.json`、通知命令默认是 `osascript`——几个不带 `HOME` / 
+  `DROVER_NOTIFY_BIN` 的调用因此写到了真的家目录、真的弹了几条 macOS 通知。已经修掉
+  （所有 `drover loop` 调用统一走 `loop()` 这个辅助函数，两个变量都指进临时目录，
+  并加了「跑完 mtime 不变」的核对）。**留下的痕迹**：真实家目录里多出一个
+  `~/.drover/`，里面只有一个 `board-notified.json`，内容是合成仓库的条目。
+  没删——AGENTS.md 里删东西要先问人。下次真的循环一跑就会被覆盖掉，留着也无害。
+
 ### 没做的事
 
 - 详情区不滚动：内容超出窗口时截断，最后一行显示「… 还有 N 行，窗口再高些」。任务书的按键表

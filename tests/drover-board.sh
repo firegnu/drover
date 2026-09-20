@@ -68,6 +68,15 @@ git -C "${TMP}/eta/wt-m1" add a.py; git -C "${TMP}/eta/wt-m1" commit -qm 'm1 wip
 printf 'BRANCH_GLOB=m[0-9]*\nCHECK_CMD=pytest -q\n' >> "${TMP}/eta/repo/.drover.conf"
 export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_ETA="${TMP}/eta/repo" MOCK_ETA_WT="${TMP}/eta/wt-m1" MOCK_DIR="${TMP}"
 export DROVER_CORRAL_BIN="${TMP}/corral"
+# 引擎每跳都会发「等你」通知：记录写 ~/.drover/board-notified.json、命令默认是 osascript。
+# 两样都得关进临时目录，不然测试会写到真的家目录、真的弹通知。所有 drover loop 的调用都带上。
+NH="${TMP}/nhome"; mkdir -p "${NH}/.drover"
+cat > "${TMP}/notifier" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TMP}/notify.log"
+EOF
+chmod +x "${TMP}/notifier"
+loop() { HOME="${NH}" DROVER_NOTIFY_BIN="${1:-${TMP}/notifier}" python3 "${DROVER}" loop "${@:2}"; }
 # 谁的 MAIN_AGENT 配了什么：看板按名字问 corral status
 printf 'MAIN_AGENT=alpha/main\n' >> "${TMP}/alpha/repo/.drover.conf"
 printf 'MAIN_AGENT=zeta/main\n'  >> "${TMP}/zeta/repo/.drover.conf"
@@ -309,13 +318,7 @@ echo 'PASS draw(): 40x10 到 12x3 都不崩、不越界'
 # 通知现在由循环引擎（drover loop）每跳发一次，看板一点不管——开不开看板都照发。
 # 一个项目新出现的条目合成一条；没变化不重发；条目消失后再出现会重发；AppleScript 字符串要转义；
 # 通知发不出去也不能把循环带走。用假的通知命令，不真弹。
-cat > "${TMP}/notifier" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${TMP}/notify.log"
-EOF
-chmod +x "${TMP}/notifier"
-NH="${TMP}/nhome"; mkdir -p "${NH}/.drover"      # 通知记录住 ~/.drover/board-notified.json
-tick() { HOME="${NH}" DROVER_NOTIFY_BIN="$1" python3 "${DROVER}" loop --once --projects "${TMP}/projects"; }
+tick() { loop "$1" --once --projects "${TMP}/projects"; }
 nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr -d ' '; else echo 0; fi; }
 tick "${TMP}/notifier"
 [ "$(nlines)" = 2 ] || fail "first tick: one per project waiting on you (eta 等人, theta awaiting release), got $(nlines)"
@@ -341,7 +344,7 @@ echo 'PASS 等你 notifications ride the loop engine: once per project, again wh
 # 内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
 dv() { (cd "${TMP}/theta/repo" && python3 "${DROVER}" "$@" >/dev/null); }
 mark() { printf '{"reason": "empty", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
-engine() { python3 "${DROVER}" loop --once --projects "${TMP}/projects"; }
+engine() { loop "" --once --projects "${TMP}/projects"; }
 dv loop on
 [ -f "${TMP}/theta/review/loop" ] || fail 'drover loop on turns this project on'
 dv resume                                          # fixture 里 theta 是暂停的
@@ -381,7 +384,7 @@ printf '{"t": %s, "ev": "start", "id": "T1", "title": "头一件", "body": "", "
 : > "${IO}/review/loop"
 printf '%s/iota/repo\n' "${TMP}" > "${TMP}/projects-iota"
 # 走真入口：drover loop --once。引擎不需要待在某个仓库里，所以不走 setup()。
-tick2() { python3 "${DROVER}" loop --once --projects "${TMP}/projects-iota"; }
+tick2() { loop "" --once --projects "${TMP}/projects-iota"; }
 done_ev() { grep -c '"ev": "done", "id": "T1"' "${IO}/review/tasks.state" 2>/dev/null | head -1; }
 
 # 主控在忙：一次都不许核对——第 3 条可能是整套测试，不能因为它在干活就反复跑
