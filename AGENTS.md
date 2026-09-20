@@ -67,31 +67,18 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 | `~/.local/bin/{herdsman-init,review-board,review-map,review-task,request-review,review-archive}` | 老 herdsman **装出去的副本**，真实项目正在用的就是这几个 |
 | `~/.config/review/` | 老 herdsman 的全局配置 |
 
-### `install.sh` 已经被锁死，不要绕过
+### 装的路子已经整个删掉了
 
-本仓库的 `install.sh` 是从 herdsman 原样继承的。跑一次就会覆盖上面那几个装出去的命令、覆盖 `~/.config/review/`，并 `launchctl bootout` 再 `bootstrap` 掉两个正在运行的 launchd 任务——**一条命令拆掉整套正在用的东西**。
+本仓库原来从 herdsman 继承了 `install.sh` 和两个 launchd plist。**它们已经删除**，因为跑一次就会覆盖上面那几个装出去的命令、覆盖 `~/.config/review/`，并顶掉两个正在运行的 `dev.herdsman.*` 任务（那两个 plist 的 Label 就是它们的名字）——一条命令拆掉整套。
 
-所以脚本开头加了守卫，直接 `exit 2`。**不要设 `DROVER_INSTALL_REWRITTEN=1` 绕过它，也不要手工照着它的步骤装。** drover 装到哪、叫什么、用不用 launchd 是 D1 第 1 步和第 5 步要定的事；重写完那个脚本，再删掉守卫。
+所以现在**没有任何安装路径**，这是故意的：
 
-同理：不要 `launchctl load / unload / bootstrap / bootout` 任何东西，不要往 `~/.local/bin` 拷任何文件，不要改 PATH。想在开发中跑这些脚本，直接用仓库里的相对路径（`./bin/review-task …`）。
-| `~/Developer/personal_projs/owlet`、`corral` | 别人的项目，只读；要改先问 |
+- 不要重新写一个 `install.sh` 然后跑它。drover 装到哪、叫什么、用不用 launchd，是 D1 第 1 步和第 5 步要定的事，定完再说。
+- 不要 `launchctl load / unload / bootstrap / bootout` 任何东西。
+- 不要往 `~/.local/bin` 拷任何文件，不要改 PATH。
+- 开发中要跑这些脚本，用仓库里的相对路径：`./bin/review-task …`。
 
-### 测试看板的时候尤其小心
-
-`bin/review-board` 是从老 herdsman 原样继承的，**它的默认路径全指向上面那些活的东西**：
-
-- 输出默认写 `~/.review/board.html` —— launchd 定时任务也在写它，人正看着
-- 项目清单默认读 `~/.review/projects`
-- 项目发现默认扫 `~/Developer/personal_projs/*/.review.conf` —— 会扫到真的 jb-finetune
-- **`review-board serve` 会起 `loop_tick`**，读真 jb-finetune 的 `.loop-wait`，然后往 herdr 里真的写手窗格注入文字
-
-所以在默认路径改掉之前：
-
-- 跑看板**一律加 `--out <临时路径> --projects <临时清单>`**，两个都加，不许用默认；
-- **不许跑 `review-board serve`**，也不许 `loop_tick` 连到真环境；
-- 临时清单里只放靶场和合成仓库，不放任何真项目。
-
-把默认路径改成 drover 自己的（不再是 `~/.review/`）是 D1 第 1 步「配置文件」要解决的事，改完这一节的限制才解除。
+老的那三个文件在 git 历史里（`git log --all -- install.sh`），要参考 launchd 怎么写可以去看，但不要照抄 Label 和路径。
 
 ## 测试靶场
 

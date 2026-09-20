@@ -94,7 +94,7 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 2. **完成判据**：三条的只读核对；队列条目覆盖默认判据的写法；「等人」的识别。配合验证计划第 1 层的合成测试一起写。
 3. **`review-task` 换传输层**：`HERDR_PANE_ID` → corral 名字 + 实例编号；叫醒改送任务正文；`done` 的核对换成新判据。
 4. **看板改造**：按上面的留 / 改 / 删；`loop_tick` 的 `herdr agent get/prompt` → `corral status/send`。
-5. **`install.sh` 和文档重写**：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
+5. **安装方式和文档重写**：`install.sh` 和两个 launchd plist 已经在 `9a48774` 之后删掉了（它们会顶掉正在跑的老 herdsman），要写新的先定第 1 步那些名字和路径，Label 不能再叫 `dev.herdsman.*`。文档方面：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 
 ## D2 验证计划
 
