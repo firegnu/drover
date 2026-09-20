@@ -51,7 +51,41 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 - 给 corral 加任何东西。
 - 推送、建 GitHub 远端、安装到 `~/.local/bin`。
 - 删除东西；关掉不是自己开的 agent。
-- 碰其他仓库：`herdsman`（已冻结）、`jb-finetune`、`owlet`、`corral` 一律只读，要改先问。
+
+## 绝对不许碰（会弄坏正在用的东西）
+
+本机上还跑着**老的 herdsman**，它在推进一个真实项目。下面这些是它的，动了就坏：
+
+| 不许碰 | 是什么 |
+|---|---|
+| `~/Developer/personal_projs/jb-finetune` | **真的**那个项目，还跑在老 herdsman / herdr 上。一个字节都不要改 |
+| `~/Developer/personal_projs/herdsman` | drover 的前身，已冻结 |
+| `~/.review/` | 老 herdsman 的交接目录，**看板的默认输出和项目清单都在这里** |
+| `~/wt/` | 老 herdsman 的评审 worktree |
+| herdr | 不要关窗格、不要 `herdr server stop`、不要往里面的 agent 送任何话 |
+| launchd 任务 `dev.herdsman.*` | 看板的定时生成和常驻服务 |
+| `~/Developer/personal_projs/owlet`、`corral` | 别人的项目，只读；要改先问 |
+
+### 测试看板的时候尤其小心
+
+`bin/review-board` 是从老 herdsman 原样继承的，**它的默认路径全指向上面那些活的东西**：
+
+- 输出默认写 `~/.review/board.html` —— launchd 定时任务也在写它，人正看着
+- 项目清单默认读 `~/.review/projects`
+- 项目发现默认扫 `~/Developer/personal_projs/*/.review.conf` —— 会扫到真的 jb-finetune
+- **`review-board serve` 会起 `loop_tick`**，读真 jb-finetune 的 `.loop-wait`，然后往 herdr 里真的写手窗格注入文字
+
+所以在默认路径改掉之前：
+
+- 跑看板**一律加 `--out <临时路径> --projects <临时清单>`**，两个都加，不许用默认；
+- **不许跑 `review-board serve`**，也不许 `loop_tick` 连到真环境；
+- 临时清单里只放靶场和合成仓库，不放任何真项目。
+
+把默认路径改成 drover 自己的（不再是 `~/.review/`）是 D1 第 1 步「配置文件」要解决的事，改完这一节的限制才解除。
+
+## 测试靶场
+
+要真跑的时候用 **`~/Developer/personal_projs/drover-sandbox`**（从 jb-finetune clone 来的副本，远端已全删，随便折腾）。看它顶上的 `DROVER-SANDBOX.md`。**不要用真的 jb-finetune。**
 
 ## 回复
 
