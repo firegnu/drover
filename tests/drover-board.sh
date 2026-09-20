@@ -574,7 +574,7 @@ rm -f "${TMP}/prompts.log"; mark; sleep 2.5
 rm -f "${TMP}/theta/review/.loop-wait"
 echo 'PASS drover-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
 
-# ---- 外层循环闭合：主控空闲下来时，循环引擎自己核对三条判据，过了就记 done 并发下一件。
+# ---- 外层循环闭合：主控空闲下来、且 main 上出现收尾记号时，循环引擎核对三条门，过了就记 done 并发下一件。
 # 直接调 loop_tick，不等常驻服务，省得看时序。
 IO="${TMP}/iota"; mkdir -p "${IO}/repo" "${IO}/review"
 git -C "${IO}/repo" init -q -b main
@@ -603,11 +603,18 @@ done_ev() { grep -c '"ev": "done", "id": "T1"' "${IO}/review/tasks.state" 2>/dev
 printf 'working\n' > "${TMP}/iota.state"; rm -f "${TMP}/check.log"; tick
 [ ! -f "${TMP}/check.log" ] || { cat "${TMP}/check.log"; fail 'must not run the check command while the 主控 is working'; }
 [ "$(done_ev)" = 0 ] || fail 'nothing is marked done while the 主控 is working'
-# 主控空闲了，但 main 还没前进（判据第 1 条不过）：核对了，但不标做完
+# 主控空闲了，但 main 还没前进（门第 1 条不过，也还没有收尾记号）：核对了，但不标做完
 printf 'idle\n' > "${TMP}/iota.state"; tick
 [ "$(done_ev)" = 0 ] || fail 'a task whose criteria are unmet must not be marked done'
-# main 前进了 → 三条都过 → 自动记 done，并且（自动模式）把下一件送出去
+# main 前进了，三条门都过了，但主控还没打收尾记号 → 依据不成立 → 绝不自动记 done。
+# 这条挡的正是最弱的默认配置：没配 BRANCH_GLOB / CHECK_CMD 时，门只剩「main 前进了」，
+# 主控提一行注释就能骗过去。见 ROADMAP 完成判据那一节。
 printf 'b\n' >> "${IO}/repo/a.py"; git -C "${IO}/repo" add .; git -C "${IO}/repo" commit -qm work
+rm -f "${TMP}/iota.checked" "${IO}/review/.criteria-checked"
+tick
+[ "$(done_ev)" = 0 ] || fail 'the gates alone must never close a task: no wrap-up mark, no done'
+# 打上收尾记号 → 依据成立 → 自动记 done，并且（自动模式）把下一件送出去
+git -C "${IO}/repo" commit -q --allow-empty -m '收尾: 头一件做完了'
 rm -f "${TMP}/iota.checked" "${IO}/review/.criteria-checked"     # 清掉节流记录，立刻再查一次
 : > "${TMP}/sent-iota"; tick
 [ "$(done_ev)" = 1 ] || { cat "${IO}/review/.loop.log" 2>/dev/null || true; fail 'the loop closes the task itself once the criteria are met'; }

@@ -211,8 +211,9 @@ def wants_human(p):
         return []
     if a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
         return []
-    rows = criteria(p["repo"], tv["card"].get("main", ""), p.get("branch_glob", ""),
-                    task_check_cmd(tv["card"].get("body"), p.get("check_cmd", "")), do_check=False)
+    rows = [find_done_mark(p["repo"], tv["card"].get("main", ""), p.get("done_mark", ""))] + \
+        criteria(p["repo"], tv["card"].get("main", ""), p.get("branch_glob", ""),
+                 task_check_cmd(tv["card"].get("body"), p.get("check_cmd", "")), do_check=False)
     return [r for r in rows if r["ok"] is False]
 
 
@@ -410,6 +411,45 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     return rows
 
 
+def find_done_mark(repo, base_sha, mark):
+    """收尾记号 → {n, name, ok, why}，形状和 criteria 的每一条一样。
+
+    这是判「这件活完了」的**唯一依据**，上面三条是门（见 ROADMAP 完成判据那一节）。
+    主控收尾时在 main 上打一条空提交，首行「<前缀>: 一句话」；约定写在项目自己的
+    AGENTS.md 里（来源是 corral 的 项目AGENTS模板.md），drover 只认 git，不去读那份文字。
+
+    四道闸：
+
+      1. 区间  只在 base_sha..MAIN_BRANCH 里找。上一件活的记号进不来。
+      2. 单亲  父提交恰好一个。**这道不是锦上添花**：不给 -m / -c 时 git 对合并提交默认
+               不出 diff，所以合并提交在 diff-tree 眼里输出也是 0 行（验过）。主控哪天
+               在合并摘要里恰好写了前缀开头，光靠「空 + 前缀」就会误判。
+      3. 空    一个文件都没改。
+      4. 前缀  首行 `^<前缀>` 加冒号，全角半角都收（人手敲中文容易出全角）。
+
+    mark 留空 = 这个项目不打收尾记号 → ok=None（不适用）。这时判不出完成，循环开着也
+    不自动记 done，退回等人放行。"""
+    name = "收尾记号"
+    if not mark:
+        return {"n": 0, "name": name, "ok": None,
+                "why": "没配 DONE_MARK：这个项目不打收尾记号，判不出这件活完没完"}
+    if not base_sha:
+        return {"n": 0, "name": name, "ok": False, "why": "没有记下送任务之前的 sha，划不出区间"}
+
+    pat = re.compile(r"^" + re.escape(mark) + r"\s*[:：]")
+    for line in git(repo, "log", "--format=%H%x09%s", f"{base_sha}..{MAIN_BRANCH}").splitlines():
+        sha, _, subject = line.partition("\t")
+        if not pat.match(subject):
+            continue
+        if len(git(repo, "rev-list", "--parents", "-n1", sha).split()) != 2:   # 自己 + 恰好一个父
+            continue
+        if git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).strip():
+            continue
+        return {"n": 0, "name": name, "ok": True, "why": f"{sha[:7]} {subject}"}
+    return {"n": 0, "name": name, "ok": False,
+            "why": f"{base_sha[:7]}..{MAIN_BRANCH} 里没有「{mark}: 」开头的空提交"}
+
+
 def task_span(a, b):
     if not a or not b:
         return ""
@@ -501,6 +541,7 @@ def project_state(repo, conf):
     p["last_activity"] = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
     p["main_agent"] = conf.get("MAIN_AGENT", "")
     p["branch_glob"] = conf.get("BRANCH_GLOB", "")
+    p["done_mark"] = conf.get("DONE_MARK", "收尾").strip()
     p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
     p["crew"] = crew_of(repo, p["main_agent"])
@@ -1074,13 +1115,14 @@ def render_tasks(p, live=None):
                 + (f'<span>最后一次提交 {ago(c["last_at"])} 前</span>' if c["last_at"] else '<span class="mute">还没有提交落地</span>')
                 + '</div>') if c.get("main") else ''
         # 完成判据过了几条。前两条纯 git，实时算；第 3 条可能是整套测试，页面 30 秒一刷，不在这里跑。
-        crit = criteria(p["repo"], c.get("main", ""), p.get("branch_glob", ""),
-                        task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
+        crit = [find_done_mark(p["repo"], c.get("main", ""), p.get("done_mark", ""))] + \
+            criteria(p["repo"], c.get("main", ""), p.get("branch_glob", ""),
+                     task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
         graded = [r for r in crit if r["ok"] is not None]
         bits = []
         for r in crit:
             cls = "ok" if r["ok"] else ("mute" if r["ok"] is None else "bad")
-            bits.append(f'<span class="{cls}" title="{esc(r["why"])}">{"✓" if r["ok"] else ("—" if r["ok"] is None else "✗")} {r["n"]}</span>')
+            bits.append(f'<span class="{cls}" title="{esc(r["why"])}">{"✓" if r["ok"] else ("—" if r["ok"] is None else "✗")} {r["n"] or "依据"}</span>')
         crit_html = (f'<div class="crit"><span class="k">判据 {sum(1 for r in graded if r["ok"])}/{len(graded)}</span>'
                      + "".join(bits) + '</div>')
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
@@ -1459,7 +1501,8 @@ CHECK_EVERY = 300       # 两次完整核对之间至少隔这么久。第 3 条
 
 
 def close_if_done(repo, conf, d, current):
-    """这件活干完没有：主控空闲下来时核对一次三条判据，过了就记 done（自动模式下 done 会顺手发下一件）。
+    """这件活干完没有：主控空闲下来、且 main 上出现了收尾记号时，核对一次三条门，过了就记 done
+    （自动模式下 done 会顺手发下一件；放行模式下停下来等人 drover go）。
     判定交给 `drover done` —— 它本来就是这套判据的唯一实现，这里只决定「什么时候问」：
 
       - 只在主控 idle 时问。它还在干活时这件活当然没完，而第 3 条可能是整套测试，白跑。
@@ -1471,6 +1514,10 @@ def close_if_done(repo, conf, d, current):
     「主控空闲着但判据没满足」挂进「等你」，两边说的是同一件事。"""
     a = agents_of(repo, conf.get("MAIN_AGENT", "")).get("writer")
     if not a or a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
+        return
+    # 依据先于门：没看到收尾记号就不自动记 done。项目没配 DONE_MARK（ok=None）也一样——
+    # 那时判不出完成，退回等人 drover go，绝不让最弱的默认配置把「main 前进了」当成做完了。
+    if find_done_mark(repo, current.get("main", ""), conf.get("DONE_MARK", "收尾").strip())["ok"] is not True:
         return
     stamp = f"{d}/.criteria-checked"
     if NOW - (mtime(stamp) or 0) < CHECK_EVERY:

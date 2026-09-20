@@ -88,6 +88,10 @@ edit login.py 'timeout fix'
 rt done T3; code 8 'done in release mode stops the writer'; has '等人放行' 'release mode says wait for release'
 has '✓ 1 main 前进了' 'the passing criteria are printed'
 has '— 2 里程碑分支都合进去了' 'a skipped criterion is shown as skipped, not as passed'
+# 收尾记号是「依据」，三条判据是「门」。手动 drover done 是人自己的判断，不拦——但要把
+# 没看到记号这件事说出来，免得人以为 drover 认出了完成。循环那条路见 tests/drover-board.sh。
+has '✗ 依据 收尾记号' 'done reports the wrap-up mark as the basis, missing here'
+has '这次算你自己判断的' 'and says plainly that this was the human deciding, not drover detecting'
 rt next; code 8 'next before release'; has '等人放行' 'next refuses until released'
 rt go; code 0 'go'
 has 'drover next' 'go says how to send the next one'

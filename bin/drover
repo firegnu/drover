@@ -198,9 +198,13 @@ def task_check_cmd(body):
 
 def check_done(task):
     """→ 问题列表。只读核对 git，不听主控一句话。
-    三条完成判据见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
+    三条门见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
     「不适用」的那几条（没配 BRANCH_GLOB、没有验收命令）不算不过，但会照原样报出来——
-    3 条里过了几条要看得见，不能让跳过的悄悄混成通过。"""
+    3 条里过了几条要看得见，不能让跳过的悄悄混成通过。
+
+    **收尾记号（依据）不在这里拦。** 手动 `drover done` 是人在说「这件活完了」，drover 只报告
+    自己有没有认出来（见 criteria_report）。自动那条路由 drover-board.close_if_done 卡死：
+    见不到记号就不跑到这里来。"""
     probs = []
     dirty = tree_dirty()
     if dirty:
@@ -211,12 +215,22 @@ def check_done(task):
     return probs
 
 
+def done_mark_row(task):
+    """收尾记号：判「这件活完了」的唯一依据。求值在 drover-board.find_done_mark 里。"""
+    return B.find_done_mark(REPO, task.get("main", ""), DONE_MARK)
+
+
 def criteria_report(task):
-    """三条判据各自什么状态，原样打给人看。跳过的也要出现。"""
+    """依据（收尾记号）+ 三条门各自什么状态，原样打给人看。跳过的也要出现。
+
+    依据不满足时**照样打，不拦**：手动 `drover done` 是人在说「这件活完了」，drover 没资格
+    拦人。它只负责把「我没认出完成」说清楚。自动那条路是另一回事——循环引擎见不到记号就
+    不会走到这里（drover-board.close_if_done）。"""
     out = []
-    for r in B.criteria(REPO, task.get("main", ""), BRANCH_GLOB, task_check_cmd(task.get("body"))):
+    for r in [done_mark_row(task)] + B.criteria(REPO, task.get("main", ""), BRANCH_GLOB,
+                                                task_check_cmd(task.get("body"))):
         mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
-        out.append(f'  {mark} {r["n"]} {r["name"]}：{r["why"]}')
+        out.append(f'  {mark} {r["n"] or "依据"} {r["name"]}：{r["why"]}')
     return out
 
 
@@ -368,6 +382,8 @@ def cmd_done(tid):
     print(f"核对通过 {tid}：")
     for line in criteria_report(current):
         print(line)
+    if done_mark_row(current)["ok"] is not True:
+        print("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。")
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
     gate = GATE or held                          # 循环开不开都听 TASK_GATE；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
