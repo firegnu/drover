@@ -41,14 +41,24 @@ case "$1 $2" in
                           "$(cat "${MOCK_DIR}/eta.idle_for" 2>/dev/null || echo 600)" \
                           "$(cat "${MOCK_DIR}/eta.src" 2>/dev/null || echo send)";;
   'status theta/main') st theta/main "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)";;
-  'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"}]}\n' "${MOCK_ALPHA}";;
+  # ls 里有三个：alpha 的主控、eta 的主控、以及 eta 派出去的那个（cwd 在 eta 的 worktree 里）
+  'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"},{"name":"eta/main","instance":1,"kind":"claude","cwd":"%s"},{"name":"eta/m1-backend","instance":2,"kind":"codex","cwd":"%s"}]}\n' \
+           "${MOCK_ALPHA}" "${MOCK_ETA}" "${MOCK_ETA_WT}";;
+  'status eta/m1-backend') st eta/m1-backend working;;
   'send theta/main') printf '%s\n' "$3" >> "${MOCK_DIR}/prompts.log"
                      printf '{"ok":true,"name":"theta/main","instance":1,"confirmed":true}\n';;
   *) printf '{"ok":false,"error":"not_found"}\n'; exit 2;;
 esac
 MOCK
 chmod +x "${TMP}/corral"
-export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_DIR="${TMP}"
+# eta 派出去的那个 agent 跑在一个 worktree 里（corral-dispatch 就是这么干的）：
+# corral ls 给的 cwd 是 worktree 路径，不是仓库根，看板要用 git worktree list 映射回来
+git -C "${TMP}/eta/repo" worktree add -q -b m1-backend "${TMP}/eta/wt-m1" >/dev/null 2>&1
+# 里程碑分支上有提交、还没合回 main —— 判据第 2 条应当不过
+printf 'wip\n' >> "${TMP}/eta/wt-m1/a.py"
+git -C "${TMP}/eta/wt-m1" add a.py; git -C "${TMP}/eta/wt-m1" commit -qm 'm1 wip'
+printf 'BRANCH_GLOB=m[0-9]*\nCHECK_CMD=pytest -q\n' >> "${TMP}/eta/repo/.drover.conf"
+export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_ETA="${TMP}/eta/repo" MOCK_ETA_WT="${TMP}/eta/wt-m1" MOCK_DIR="${TMP}"
 export DROVER_CORRAL_BIN="${TMP}/corral"
 # 谁的 MAIN_AGENT 配了什么：看板按名字问 corral status
 printf 'MAIN_AGENT=alpha/main\n' >> "${TMP}/alpha/repo/.drover.conf"
@@ -119,6 +129,20 @@ printf 'working\n' > "${TMP}/eta.state"; regen
 lacks '主控空闲着，但这件活的判据还没满足' 'no 等人 item while the 主控 is working'
 rm -f "${TMP}/eta.state"; regen
 
+# ---- 「当前这件活」块（ROADMAP 第 4 步的新页面结构）----
+# 分支进展：从发任务那一刻的 main 算起多了几个提交、最后一次多久前。
+# eta 正是卡住的样子：0 个提交落地——这和「等人」那条说的是同一件事，从两个角度看。
+has 'class="prog"' 'the current-work card has a branch-progress line'
+has 'main</code> 上 <b>0</b> 个提交' 'branch progress counts commits on main since the task went out'
+has '还没有提交落地' 'a stuck task shows nothing landed yet'
+# 完成判据过了几条：前两条实时算（纯 git），第 3 条只写出命令、标明没在页面上跑
+has 'class="crit"' 'the card shows how many criteria are met'
+has '判据 0/2' 'eta: neither cheap criterion is met yet'
+has '没在页面上跑' 'the check command is named but not run while rendering'
+# 派出去的 agent：corral ls 里 cwd 落在这个仓库的 worktree 上的，都算这件活派出去的
+has '<b>派出去</b>' 'dispatched agents get their own chips'
+has 'eta/m1-backend' 'the dispatched agent is named'
+
 # 评审协议的东西一律不该再出现
 lacks 'Round 1' 'no review rounds'
 lacks '暂缓清单' 'no backlog section'
@@ -128,7 +152,9 @@ lacks 'request-review' 'no request-review anywhere on the page'
 
 # 「等你」栏：每个项目一栏，横幅只是汇总
 has 'id="w-zeta/repo"' 'zeta has its own 等你 section'
-has '主控 zeta/main 停在审批或提问对话框' 'blocked 主控 listed by its corral name'
+has '主控停在审批或提问对话框：去看看：corral attach zeta/main' 'blocked 主控 listed with how to attach'
+# 每条「等你」都带接入命令。drover 自己不跑 attach——只用 send / status / ls，这只是给人抄的一句话。
+has 'corral attach eta/main' 'the 等人 item also says how to attach'
 has 'class="proj needs" data-p="zeta/repo"' 'zeta highlighted in the sidebar'
 
 # 任务区：只有接了队列的项目才有；三栏、阶段条、手写未编号、放弃带原因、做完等放行

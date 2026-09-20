@@ -107,6 +107,34 @@ def activity_of(st):
     return " · ".join(x for x in (f"正在调 {tool}" if tool else "", span) if x)[:80]
 
 
+def repo_dirs(repo):
+    """这个仓库「算自己人」的目录：仓库根 + 它所有的 worktree。
+    corral-dispatch 把派出去的 agent 开在 worktree 里，`corral ls` 给的 cwd 是 worktree 路径，
+    不是仓库根——要认出「这个 agent 是这件活派出去的」，得先把 worktree 映射回来。
+    纯 git，只读；不问 corral 要任何它没承诺的东西。"""
+    out = {os.path.realpath(repo)}
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            out.add(os.path.realpath(line[len("worktree "):].strip()))
+    return out
+
+
+def crew_of(repo, main_agent):
+    """派出去的 agent：cwd 落在这个仓库或它的 worktree 里、又不是主控的，都算。
+    → [{name, instance, kind, status, activity}]，按名字排。"""
+    dirs, out = repo_dirs(repo), []
+    for a in corral_agents():
+        name = a.get("name") or ""
+        if not name or name == main_agent or a.get("starting") or a.get("incompatible"):
+            continue
+        if os.path.realpath(a.get("cwd") or "/nonexistent") not in dirs:
+            continue
+        st = corral_status(name) or {}
+        out.append({"name": name, "instance": a.get("instance", ""), "kind": a.get("kind", ""),
+                    "status": st.get("state") or "unknown", "activity": activity_of(st)})
+    return sorted(out, key=lambda x: x["name"])
+
+
 def agents_of(repo, main_agent=""):
     """{"writer": info}：主控。配了 MAIN_AGENT 就按名字问 corral status（权威）；
     没配就退回「cwd 是这个仓库的 agent」——项目还没接上 corral 时看板照样能显示点东西。"""
@@ -160,6 +188,12 @@ def parse_conf(path):
 IDLE_SETTLE = 120       # idle 多久才算「停下了」。每一轮结束都会短暂 idle，得留一次观察间隔
 
 
+def attach_hint(name):
+    """「等你」的每一条都带上怎么去看——人看到横幅，下一步就是接入那个 agent。
+    drover 自己**不跑** attach（只用 send / status / ls），这只是一句给人抄的话。"""
+    return f"去看看：corral attach {name}" if name else "去主控那边看看"
+
+
 def wants_human(p):
     """「它在等人」：主控 idle 了，但这件活的判据还没满足——它停在某处等人拍板
     （审查复核没过、和审查者有分歧、要推送、要花钱、发现设计对不上）。→ 没满足的那几条，或 []。
@@ -187,12 +221,13 @@ def add_waits(p):
     new = []
     a = (p.get("agents") or {}).get("writer")
     if a and a["status"] == "blocked":
-        new.append(("stop", "", "blocked", "", f"主控 {a['name'] or ''} 停在审批或提问对话框，去接入看看"))
+        new.append(("stop", "", "blocked", "", f"主控停在审批或提问对话框：{attach_hint(a['name'])}"))
     unmet = wants_human(p)
     if unmet:
         card = p["tasks"]["card"]
         why = "；".join(f'{r["name"]}：{r["why"]}' for r in unmet)
-        new.append(("stop", "", "idle", "", f'{card["id"]} {card["title"]}：主控空闲着，但这件活的判据还没满足（{why}）。去看看它停在哪一步'))
+        new.append(("stop", "", "idle", "", f'{card["id"]} {card["title"]}：主控空闲着，但这件活的判据还没满足（{why}）。'
+                                            f'{attach_hint((p.get("agents") or {}).get("writer", {}).get("name", ""))}'))
     tv = p.get("tasks")
     if tv and tv["awaiting"] and tv["card"]:
         new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} 做完了，核对已通过。"
@@ -365,7 +400,7 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     if not check_cmd:
         rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
     elif not do_check:
-        rows.append({"n": 3, "name": name3, "ok": None, "why": f"没查：`{check_cmd}` 不在渲染页面时跑"})
+        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在页面上跑（可能是整套测试）；review-task done 时才跑"})
     else:
         code, tail = run_check(repo, check_cmd)
         rows.append({"n": 3, "name": name3, "ok": code == 0,
@@ -399,7 +434,13 @@ def task_view(repo, conf, p):
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
             ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
         ]
-        card = {"id": t["id"], "title": t["title"], "start": t["start"], "main": t.get("main", ""),
+        # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
+        # 纯 git，便宜；判据第 1 条看的也是这个 sha，两处说的是同一件事。
+        base = t.get("main", "")
+        on_main = task_commits(repo, base, MAIN_BRANCH) if base else []
+        last_at = int(git(repo, "log", "-1", "--format=%ct", MAIN_BRANCH).strip() or 0) if on_main else 0
+        card = {"id": t["id"], "title": t["title"], "start": t["start"], "main": base,
+                "on_main": len(on_main), "last_at": last_at,
                 "commits": n, "steps": steps, "body": t.get("body", ""),
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
@@ -462,6 +503,7 @@ def project_state(repo, conf):
     p["branch_glob"] = conf.get("BRANCH_GLOB", "")
     p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
+    p["crew"] = crew_of(repo, p["main_agent"])
     p["tasks"] = task_view(repo, conf, p)
     add_waits(p)
     return p
@@ -617,6 +659,11 @@ ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit
 .head .badge{transform:translateY(1px)}.head>.mute{font-size:var(--fs2);font-variant-numeric:tabular-nums}
 .head .hd{margin-left:auto;color:var(--t4);font-size:var(--fs1);font-family:var(--mono);letter-spacing:.02em;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:var(--r1);padding:0 9px;line-height:22px}.head .hd code{color:var(--t3);font-size:var(--fs2)}
 .crew{display:flex;flex-wrap:wrap;gap:8px 10px;padding:14px 0 2px;font-size:var(--fs3);color:var(--t2)}
+.crew.sub{padding:8px 0 0;font-size:var(--fs2)}.crew.sub .nm{color:var(--t3);font-family:var(--mono)}
+.prog,.crit{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-top:8px;font-size:var(--fs2);color:var(--t3)}
+.prog b{color:var(--t1);font-weight:700}
+.crit .k{color:var(--t2);font-weight:600}
+.crit .ok{color:var(--green-t)}.crit .bad{color:var(--red)}.crit .mute{color:var(--t4)}
 .crew .agent{display:inline-flex;align-items:center;gap:10px;padding:0 14px;line-height:32px;border-radius:var(--r2);background:var(--s1);border:1px solid var(--line)}
 .crew .agent.st-working{border-color:#356243;background:var(--green-bg)}
 .crew .agent.st-blocked{border-color:#803733;background:#352628}
@@ -1064,8 +1111,23 @@ def render_tasks(p, live=None):
         label = "用时" if c["waiting"] else "已进行"
         flow = '<span class="hold-tag">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else ""
         key = f'{p["name"]}:{c["id"]}'
+        # 分支进展：main 上多了几个提交、最后一次多久前。一直是 0 个 + 很久没动，就是它卡住了。
+        prog = (f'<div class="prog"><span><code>{MAIN_BRANCH}</code> 上 <b>{c["on_main"]}</b> 个提交</span>'
+                + (f'<span>最后一次提交 {ago(c["last_at"])} 前</span>' if c["last_at"] else '<span class="mute">还没有提交落地</span>')
+                + '</div>') if c.get("main") else ''
+        # 完成判据过了几条。前两条纯 git，实时算；第 3 条可能是整套测试，页面 30 秒一刷，不在这里跑。
+        crit = criteria(p["repo"], c.get("main", ""), p.get("branch_glob", ""),
+                        task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
+        graded = [r for r in crit if r["ok"] is not None]
+        bits = []
+        for r in crit:
+            cls = "ok" if r["ok"] else ("mute" if r["ok"] is None else "bad")
+            bits.append(f'<span class="{cls}" title="{esc(r["why"])}">{"✓" if r["ok"] else ("—" if r["ok"] is None else "✗")} {r["n"]}</span>')
+        crit_html = (f'<div class="crit"><span class="k">判据 {sum(1 for r in graded if r["ok"])}/{len(graded)}</span>'
+                     + "".join(bits) + '</div>')
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
+                 f'{prog}{crit_html}{crew_html(p)}'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
         descs.append(task_desc(key, c["id"], c["title"], "做完了 · 等你放行" if c["waiting"] else "进行中",
                                f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], src_snap))
@@ -1125,6 +1187,21 @@ def crew_chips(p):
         tip = f'{a["name"]} #{a["instance"]}' if a.get("name") else ""
         chips.append(f'<span class="agent st-{st}" title="{esc(tip)}">{"".join(bits)}</span>')
     return "".join(chips)
+
+
+def crew_html(p):
+    """这件活派出去的 agent，各自一块。没派出去就不占地方。"""
+    cw = p.get("crew") or []
+    if not cw:
+        return ""
+    chips = []
+    for a in cw:
+        st = esc(a["status"])
+        act = f'<span class="activity">{esc(a["activity"])}</span>' if a["activity"] else ""
+        chips.append(f'<span class="agent st-{st}" title="{esc(a["name"])} #{esc(str(a["instance"]))}">'
+                     f'<span class="dot st-{st}"></span><b>派出去</b><span class="nm">{esc(a["name"])}</span>'
+                     f'<span class="st st-{st}">{st}</span>{act}</span>')
+    return f'<div class="crew sub">{"".join(chips)}</div>'
 
 
 def render_panel(p, live=None):

@@ -91,7 +91,7 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 | 队列（含 go / pause / hold / move / edit / drop） | 原样留 |
 | 「等你」横幅 + 系统通知 | 原样留 |
 | 健康检查 | 留，数据源换成 `corral ls` |
-| 写手 / 规划者 / 评审方三个状态块 | 改：主控一个块 + 当前派出去的 agent 若干块 |
+| 写手 / 规划者 / 评审方三个状态块 | 改：主控一个块 + 当前派出去的 agent 若干块（做完了）。派出去的怎么认：`corral ls` 给的 `cwd` 是 worktree 路径，用 `git worktree list` 映射回仓库 |
 | 周期、findings、轮次、severity、待裁决 | 删 |
 | self-closed、简报状态、上次评审以来的提交、风险图建议 | 删（风险图看待定项） |
 | 归档（最近 5 个周期） | 改：最近几件做完的任务，数据取自队列事件 |
@@ -105,7 +105,9 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `review-board.criteria` 里，看板和队列共用；队列条目用正文里一行「验收：`<命令>`」覆盖 `CHECK_CMD`（只认 `queue.md` 里写的，网页表单拒收——那行会被当 shell 命令跑）；「等人」的识别见 `wants_human`。合成测试在 `tests/criteria.sh`。
    **渲染页面时只算前两条。** 第 3 条可能是整套测试，而页面 30 秒一刷、每个项目都渲染，全算一遍等于每半分钟把所有项目的测试跑一遍（`criteria(..., do_check=False)`）。前两条是纯 git，便宜，「等人」的识别靠它们就够——主控停下等人时，main 基本都还没前进。
 3. **`review-task` 换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：`review-task` 现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `review-task` 和 `drover` 这两个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
-4. **看板改造**：按上面的留 / 改 / 删；`loop_tick` 的 `herdr agent get/prompt` → `corral status/send`。
+4. **看板改造**（2026-09-20 做完大半）：按上面的留 / 改 / 删；`loop_tick` 换 corral 在第 3 步一起做了。「当前这件活」块齐了：主控状态 / 正在调什么工具 / 这一轮多久、派出去的 agent 各自状态、分支进展（`main` 上几个提交、最后一次多久前）、完成判据过了几条。「等你」每条带 `corral attach <名字>`（只是给人抄的一句话，drover 自己不跑 attach）。
+   **判据第 3 条在页面上只显示命令、标「没在页面上跑」**，理由见完成判据那一节。要让它也显示结果，得先有循环引擎轮询判据、把结果记进交接目录（像 `.loop-wait` 那样），那件事和「自动 done」是同一件，还没做。
+   **还欠**：「做完的」那一栏要显示「派了几个 agent、返工几轮」，以及最底下的「记账」整块——两者都要先定待定项 3（记账记什么）。
 5. **安装方式和文档重写**：`install.sh` 和两个 launchd plist 已经在 `9a48774` 之后删掉了（它们会顶掉正在跑的老 herdsman），要写新的先定第 1 步那些名字和路径，Label 不能再叫 `dev.herdsman.*`。文档方面：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 
 ## D2 验证计划
