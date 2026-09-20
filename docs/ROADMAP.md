@@ -101,7 +101,7 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 ## D1 分步
 
 0. **收拾半成品**（先做）：`install.sh` 和 `tests/` 里引用已删文件的地方；脚本改名（`herdsman-init` → `drover-init`，`review-task` / `review-board` / `review-map` 的名字一并定；`REVIEW_DIR`、`.review.conf` 这些 herdsman 时代的名字也要定）。改名是机械活，但**名字一旦定下就到处都是**，先定再动。
-1. **配置文件**：叫什么、放哪、字段有哪些（主控的 corral 名字、任务文件目录、分支前缀、默认完成判据、放行模式、项目发现方式）。老的是仓库里的 `.review.conf` + `~/.review/<短名>` 交接目录 + `~/.review/projects`，这套结构可以沿用，只换名字和字段。
+1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_PREFIX`、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
 2. **完成判据**：三条的只读核对；队列条目覆盖默认判据的写法；「等人」的识别。配合验证计划第 1 层的合成测试一起写。
 3. **`review-task` 换传输层**：`HERDR_PANE_ID` → corral 名字 + 实例编号；叫醒改送任务正文；`done` 的核对换成新判据。
 4. **看板改造**：按上面的留 / 改 / 删；`loop_tick` 的 `herdr agent get/prompt` → `corral status/send`。
@@ -187,6 +187,7 @@ jb-finetune 今天跑的是**老内循环**（写手 + 评审方 + `request-revi
 2. **`review-map`（风险图）去留**：它和 corral-dispatch 的 `route.py` 都在判「这次改动要不要审、审多深」，但风险图是**有记忆的**（从归档证据里长出来：哪些路径出过 blocking、扇入多少、有没有测试），`route.py` 每次只拿三五句摘要问模型。三种选择：删掉、留着喂 `route.py`、单独留着当看板的一个提示。
 3. **记账记什么**：老的 `precision.md` / `escapes.md` 是评审口径，没有了。换成耗时、返工轮数、路由判了什么 / 主控推翻没有。记不出数就等于没记（见「从哪来」）。
 4. **要不要读任务文件开头那行「路由：…」**：读它等于依赖内循环的一个书写格式（擦边，但不要求主控多做事）。倾向「读，但降级处理」——解析失败就不显示这一项，绝不参与任何判断。不读的话这个数据只能靠人手工翻任务文件统计。
+   **配套的「任务文件目录」字段跟着这一条走**：第 1 步原本要定它，但它没有别的用处，定了「读」再往 `.drover.conf` 里加（`TASK_FILE_DIR`，值如 `docs/任务`）；定「不读」就不加。
 
 ## 不做
 
