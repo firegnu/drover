@@ -11,10 +11,10 @@ REPO="${TMP}/repo"; D="${TMP}/review"
 mkdir -p "${REPO}" "${D}" "${TMP}/bin"
 git -C "${REPO}" init -q -b main
 git -C "${REPO}" config user.name t; git -C "${REPO}" config user.email t@example.com
-printf '.review.conf\n' > "${REPO}/.gitignore"
+printf '.drover.conf\n' > "${REPO}/.gitignore"
 printf 'a\n' > "${REPO}/a.py"
 git -C "${REPO}" add .; git -C "${REPO}" commit -qm base
-printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "${REPO}" "${D}" > "${REPO}/.review.conf"
+printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "${REPO}" "${D}" > "${REPO}/.drover.conf"
 # 假 herdr：只记录被调用过，好在最后断言 review-task 从没碰过它
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/herdr.log"\nexit 1\n' "${TMP}" > "${TMP}/bin/herdr"; chmod +x "${TMP}/bin/herdr"
 
@@ -53,7 +53,7 @@ rt go; code 2 'go when nothing waits for release'
 rt next; code 0 'next after release'; has 'TASK T1: 给导出加进度条' 'the finished hand-written block is not issued again'
 
 # ---- 以下用自动模式：done 通过就直接发下一个 ----
-printf 'TASK_GATE=0\n' >> "${REPO}/.review.conf"
+printf 'TASK_GATE=0\n' >> "${REPO}/.drover.conf"
 edit a.py 'progress bar'
 rt done T1; code 9 'unrouted commits refuse done'; has 'request-review' 'says the commits have not been routed'
 printf 'x\n' >> "${REPO}/a.py"; printf 'junk\n' > "${REPO}/scratch.txt"
@@ -223,7 +223,7 @@ rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues t
 # 停在队列那一步（队列空 / 暂停）时留下 .loop-wait 唤醒标记（原因 + 写手 pane，由看板服务去叫醒）；review-task 自己不碰 herdr
 [ ! -f "${D}/loop" ] || fail 'the loop is off by default'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
-grep -v '^TASK_GATE=' "${REPO}/.review.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.review.conf"   # 回到放行模式
+grep -v '^TASK_GATE=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"   # 回到放行模式
 rt loop on; code 0 'loop on'; [ -f "${D}/loop" ] || fail 'loop on creates the loop file'
 rt list; has '循环' 'list shows the loop is on'
 rt done "${TID}"; code 0 'with the loop on, done issues the next task even in release mode'; has 'TASK ' 'the next task follows right away'

@@ -13,14 +13,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 has() { grep -qF -e "$1" "${OUT}" || fail "$2 (missing: $1)"; }
 lacks() { grep -qF -e "$1" "${OUT}" && fail "$2 (unexpected: $1)"; return 0; }
 
-mk() {   # <name>：两个提交的仓库 + .review.conf + 交接目录
+mk() {   # <name>：两个提交的仓库 + .drover.conf + 交接目录
   local n="$1" r; r="${TMP}/$1/repo"
   mkdir -p "$r" "${TMP}/$n/review"
   git -C "$r" init -q -b main
   git -C "$r" config user.name t; git -C "$r" config user.email t@example.com
   printf 'a\n' > "$r/a.py"; git -C "$r" add .; git -C "$r" commit -qm base
   printf 'a\nb = 1\n' > "$r/a.py"; git -C "$r" add .; git -C "$r" commit -qm change
-  printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "$r" "${TMP}/$n/review" > "$r/.review.conf"
+  printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "$r" "${TMP}/$n/review" > "$r/.drover.conf"
 }
 mk alpha; mk beta; mk gamma; mk delta; mk epsilon; mk zeta; mk eta; mk theta
 now=$(date +%s)
@@ -45,10 +45,10 @@ MOCK
 chmod +x "${TMP}/herdr"
 export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_GAMMA="${TMP}/gamma/repo" MOCK_EPS="${TMP}/epsilon/repo" MOCK_ZETA="${TMP}/zeta/repo" MOCK_THETA="${TMP}/theta/repo" MOCK_DIR="${TMP}"
 # alpha 的评审 worktree 另在别处，这样 cwd 是仓库的 agent 才算写手
-sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/alpha/wt|" "${TMP}/alpha/repo/.review.conf"
-sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/zeta/wt|" "${TMP}/zeta/repo/.review.conf"
-printf 'REVIEW_AGENT_ARGS="--model claude-opus-5"\n' >> "${TMP}/alpha/repo/.review.conf"
-printf 'PLAN_KIND=codex\nPLAN_AGENT_ARGS='"'"'--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"'"'"'\n' >> "${TMP}/epsilon/repo/.review.conf"
+sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/alpha/wt|" "${TMP}/alpha/repo/.drover.conf"
+sed -i '' "s|^REVIEW_WT=.*|REVIEW_WT=${TMP}/zeta/wt|" "${TMP}/zeta/repo/.drover.conf"
+printf 'REVIEW_AGENT_ARGS="--model claude-opus-5"\n' >> "${TMP}/alpha/repo/.drover.conf"
+printf 'PLAN_KIND=codex\nPLAN_AGENT_ARGS='"'"'--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"'"'"'\n' >> "${TMP}/epsilon/repo/.drover.conf"
 
 # alpha：round 2 的 request 指向 HEAD，r1 里 F2 reject、F3(blocking) defer，无裁决 → 待人裁决
 H=$(git -C "${TMP}/alpha/repo" rev-parse HEAD); B=$(git -C "${TMP}/alpha/repo" rev-parse HEAD~1)
@@ -375,7 +375,7 @@ has '<a class="golive" href="http://127.0.0.1:10086/">' 'the static board points
 lacks 'jb-finetune' 'real project leaked into fixture board'
 lacks '~/Developer' 'default discovery used'
 
-# 默认输出路径：--out 未给时写到 ~/.review/board.html —— 不在测试里跑，避免碰真实目录
+# 默认输出路径：--out 未给时写到 ~/.drover/board.html —— 不在测试里跑，避免碰真实目录
 echo 'PASS review-board renders states, banner, findings, backlog, archives, self-closed'
 
 # 并发刷新：launchd 每 30 秒一次，request-review 退出时也刷一次，两者会同时跑。临时文件共用一个名字时，
@@ -614,15 +614,15 @@ B._AGENTS = []                                                  # 假装上一�
 alpha = next(p for p in B.collect(sys.argv[2])[0] if p["name"] == "alpha/repo")
 assert (alpha["agents"].get("writer") or {}).get("status") == "working", alpha["agents"]
 PY2
-mkdir -p "${TMP}/home/.review" "${TMP}/hbin" "${TMP}/code"
+mkdir -p "${TMP}/home/.drover" "${TMP}/hbin" "${TMP}/code"
 cp "${BOARD}" "${TMP}/code/review-board"; cp "$(dirname "${BOARD}")/review-task" "${TMP}/code/review-task"
 cat > "${TMP}/hbin/launchctl" <<EOF
 #!/usr/bin/env bash
 case "\$2" in
-  */dev.herdsman.review-board-serve) [ -f "${TMP}/serve.unloaded" ] && exit 113
+  */dev.drover.board-serve) [ -f "${TMP}/serve.unloaded" ] && exit 113
     pid=\$PPID; [ -f "${TMP}/serve.other" ] && pid=1
     printf '\tstate = running\n\tpid = %s\n\tlast exit code = 0\n' "\$pid";;
-  */dev.herdsman.review-board) code=0; [ -f "${TMP}/board.never" ] && code='(never exited)'
+  */dev.drover.board) code=0; [ -f "${TMP}/board.never" ] && code='(never exited)'
     printf '\tstate = not running\n\tlast exit code = %s\n' "\$code";;
   *) exit 113;;
 esac
@@ -633,7 +633,7 @@ cat > "${TMP}/hbin/herdr" <<EOF
 exec "${TMP}/herdr" "\$@"
 EOF
 chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/herdr"
-printf '[]\n' > "${TMP}/home/.review/board-notified.json"
+printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
 HP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" HERDR_BIN_PATH="${TMP}/hbin/herdr" REVIEW_LOOP_TICK=1 \
   python3 "${TMP}/code/review-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
@@ -654,13 +654,13 @@ PY2
 health ok 本机服务 true '端口'
 health ok 看板定时生成 true '通知正常'
 : > "${TMP}/board.never"; health ok 看板定时生成 true '通知正常'; rm "${TMP}/board.never"
-printf 'Traceback: boom\n' > "${TMP}/home/.review/board.err"
+printf 'Traceback: boom\n' > "${TMP}/home/.drover/board.err"
 health warn 生成出错记录 false 'boom'
-python3 -c 'import os,sys,time; t=time.time()-3600; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.review/board.err"
+python3 -c 'import os,sys,time; t=time.time()-3600; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.drover/board.err"
 health ok 生成出错记录 true '上次出错'
-python3 -c 'import os,sys,time; t=time.time()-900; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.review/board-notified.json"
+python3 -c 'import os,sys,time; t=time.time()-900; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.drover/board-notified.json"
 health warn 看板定时生成 false '通知可能停了'
-printf '[]\n' > "${TMP}/home/.review/board-notified.json"
+printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
 : > "${TMP}/herdr.down"; health warn herdr false '连不上'; rm "${TMP}/herdr.down"
 : > "${TMP}/serve.unloaded"; health warn '服务守护（launchd）' false '不会自动拉起'; rm "${TMP}/serve.unloaded"
 : > "${TMP}/serve.other"; health warn '服务守护（launchd）' false '另一个进程'; rm "${TMP}/serve.other"

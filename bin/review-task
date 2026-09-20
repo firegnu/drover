@@ -30,7 +30,7 @@
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
 退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足；
         10 队列在这期间被改过（--expect 对不上），什么都没写。
-.review.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
+.drover.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
 """
 import importlib.machinery
 import importlib.util
@@ -75,9 +75,9 @@ def setup():
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
     REPO = r.stdout.strip()
-    conf = B.parse_conf(f"{REPO}/.review.conf")
+    conf = B.parse_conf(f"{REPO}/.drover.conf")
     if not conf.get("REVIEW_DIR"):
-        die(2, f"ERROR: {REPO}/.review.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入评审流程。")
+        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入评审流程。")
     D = conf["REVIEW_DIR"]
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"

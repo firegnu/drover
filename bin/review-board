@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """review-board —— 评审流程的只读看板。
 
-扫所有配了 .review.conf 的仓库，从交接目录（REVIEW_DIR）和归档（docs/reviews）生成一个
-静态 HTML，写到 ~/.review/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
+扫所有配了 .drover.conf 的仓库，从交接目录（REVIEW_DIR）和归档（docs/reviews）生成一个
+静态 HTML，写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
 
 用法:
   review-board            生成
@@ -11,7 +11,7 @@
   review-board --out P    写到 P
   review-board --projects F   只看 F 里列出的仓库（一行一个），不做默认发现；测试用
 
-项目发现: ~/Developer/personal_projs/*/.review.conf；另可在 ~/.review/projects 里一行一个仓库路径。
+项目发现: ~/Developer/personal_projs/*/.drover.conf；另可在 ~/.drover/projects 里一行一个仓库路径。
 """
 import glob
 import hashlib
@@ -27,10 +27,10 @@ import sys
 import time
 from datetime import datetime
 
-PROJ_GLOB = os.path.expanduser("~/Developer/personal_projs/*/.review.conf")
+PROJ_GLOB = os.path.expanduser("~/Developer/personal_projs/*/.drover.conf")
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
-PROJ_LIST = os.path.expanduser("~/.review/projects")
-DEFAULT_OUT = os.path.expanduser("~/.review/board.html")
+PROJ_LIST = os.path.expanduser("~/.drover/projects")
+DEFAULT_OUT = os.path.expanduser("~/.drover/board.html")
 STAT_FILES = {"precision.md", "self-closed.md", "timing.md", "skipped.md", "escapes.md"}
 DIFF_MAX_LINES = 2000
 ARCHIVES_SHOWN = 5
@@ -1234,7 +1234,7 @@ JS = """
     function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
       var h=document.createElement('div');h.className='dtt';h.textContent='服务健康';box.appendChild(h);
       var sub=document.createElement('div');sub.className='dsub';
-      sub.textContent=offline?'连不上本机服务：review-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.herdsman.review-board-serve'
+      sub.textContent=offline?'连不上本机服务：review-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.drover.board-serve'
         :(hdata?(hdata.level==='ok'?'各项正常':'有需要留意的项')+' · 检查于 '+ago2(Date.now()-hdata.checked*1000):'正在检查…');
       box.appendChild(sub);
       var list=document.createElement('div');list.className='hlist';
@@ -1415,7 +1415,7 @@ def cycle_subject(p):
 
 def agents_line(kind, writer_kind, review_args="", plan_kind="", plan_args=""):
     """三个角色各是哪个 agent、什么 model、什么 effort。写手是谁看 herdr 在仓库里见到的 agent；
-    规划者和评审方看 .review.conf。model 只能读配置文件：herdr 不报 model，会话里临时切换的看不到，
+    规划者和评审方看 .drover.conf。model 只能读配置文件：herdr 不报 model，会话里临时切换的看不到，
     所以页面上标"按配置文件"；拉起参数里指定的 model / effort 覆盖配置文件。"""
     def override(base, args):
         model, eff = base
@@ -1993,7 +1993,7 @@ def render(projects, archives, self_closed, live=None):
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
-            f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .review.conf 指向的交接目录与 docs/reviews</div></div>'
+            f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .drover.conf 指向的交接目录与 docs/reviews</div></div>'
             + (DRAWER if 'data-td="' in panels or live else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
             f'<script>{JS}</script></body></html>')
 
@@ -2003,7 +2003,7 @@ def discover(list_path):
     repos = [] if list_path else [os.path.dirname(c) for c in glob.glob(PROJ_GLOB)]
     for line in (read(list_path or PROJ_LIST) or "").splitlines():
         line = os.path.expanduser(line.strip())
-        if line and not line.startswith("#") and os.path.isfile(f"{line}/.review.conf"):
+        if line and not line.startswith("#") and os.path.isfile(f"{line}/.drover.conf"):
             repos.append(line)
     seen, out = set(), []
     for r in sorted(set(repos)):
@@ -2020,7 +2020,7 @@ def collect(list_path):
     NOW, _AGENTS = time.time(), None                 # herdr 的 agent 列表同理：每页重查
     projects, archives, self_closed = [], {}, {}
     for repo in discover(list_path):
-        conf = parse_conf(f"{repo}/.review.conf")
+        conf = parse_conf(f"{repo}/.drover.conf")
         if "REVIEW_DIR" not in conf:
             continue
         p = project_state(repo, conf)
@@ -2046,7 +2046,7 @@ def live_version(list_path):
     """交接目录、docs/reviews、git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
     h = hashlib.sha1()
     for repo in discover(list_path):
-        d = parse_conf(f"{repo}/.review.conf").get("REVIEW_DIR")
+        d = parse_conf(f"{repo}/.drover.conf").get("REVIEW_DIR")
         for base in (d, f"{repo}/docs/reviews"):
             try:
                 for e in sorted(os.scandir(base), key=lambda e: e.name):
@@ -2098,15 +2098,15 @@ def health(started, port):
              if os.path.exists(os.path.join(here, f)) and os.stat(os.path.join(here, f)).st_mtime > started + 1]
     add("本机服务", not stale, f"pid {os.getpid()} · 端口 {port} · 已运行 {span_text(now - started)}"
         + (f"；启动后 {'、'.join(stale)} 被更新过，还在跑旧代码：重新运行 install.sh，"
-           f"或 launchctl kickstart -k gui/{os.getuid()}/dev.herdsman.review-board-serve" if stale else " · 跑的是最新安装的代码"))
-    sj = launchd_job("dev.herdsman.review-board-serve")
+           f"或 launchctl kickstart -k gui/{os.getuid()}/dev.drover.board-serve" if stale else " · 跑的是最新安装的代码"))
+    sj = launchd_job("dev.drover.board-serve")
     if not sj:
         add("服务守护（launchd）", False, "没由 launchd 托管：服务挂了不会自动拉起（手动启动的？运行 install.sh 装上）")
     elif sj["pid"] not in (None, os.getpid()):
         add("服务守护（launchd）", False, f"launchd 托管的是另一个进程（pid {sj['pid']}），不是这个页面连着的服务（pid {os.getpid()}）：这个是手动启动的？")
     else:
         add("服务守护（launchd）", True, "已由 launchd 托管，挂了会自动拉起")
-    bj = launchd_job("dev.herdsman.review-board")
+    bj = launchd_job("dev.drover.board")
     nf = os.path.join(os.path.dirname(DEFAULT_OUT), "board-notified.json")
     age = now - os.stat(nf).st_mtime if os.path.exists(nf) else None
     if not bj:
@@ -2211,7 +2211,7 @@ def loop_tick(list_path):
     且写手空闲时，往它的 pane 输入那句开工的话。第一次看到标记先向 herdr 核对 pane 确实是这个仓库的写手、记下 terminal / session；
     之后身份变了就不叫，标成失败留给人。叫醒失败重试 3 次。"""
     for repo in discover(list_path):
-        d = parse_conf(f"{repo}/.review.conf").get("REVIEW_DIR")
+        d = parse_conf(f"{repo}/.drover.conf").get("REVIEW_DIR")
         if not d or not os.path.exists(f"{d}/loop"):
             continue
         mf = f"{d}/.loop-wait"
@@ -2302,7 +2302,7 @@ def serve(args):
                 p = next((x for x in collect(list_path)[0] if x["name"] == name), None)
                 if not p or not p.get("tasks"):
                     return self.reply(404, {"ok": False, "out": "找不到这个项目，或它没有接任务队列"})
-                return self.reply(200, task_history(p["repo"], parse_conf(f"{p['repo']}/.review.conf")))
+                return self.reply(200, task_history(p["repo"], parse_conf(f"{p['repo']}/.drover.conf")))
             return self.reply(404, {"ok": False, "out": "没有这个地址"})
 
         def do_POST(self):

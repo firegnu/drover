@@ -297,7 +297,7 @@ def main():
              "# 等级：deep 跑测试三轮 / review 正常评审 / light 一轮只找阻断 / plan 计划评审 / skip 直接过",
              "# 匹配：** 可跨目录，* 不跨（src/jbgen/* 只是顶层文件，新子包不在图上、交评审方 triage）；命中多条时最长的模式生效",
              "# 纯文本（.md/.rst/.txt）默认是状态记录、不送审，除非图上把它标为 deep 或 review；light/skip 对纯文本都等于不审",
-             "# plan 行等同 .review.conf 的计划/规则路径：改了就走 plan 评审",
+             "# plan 行等同 .drover.conf 的计划/规则路径：改了就走 plan 评审",
              "# 往严自动、往松要人点头；标 [待点头] 的是脚本建议降级但未生效的行", ""]
     width = max(len(r[0]) for r in rows) + 2
     for g, level, why, human, st in rows:

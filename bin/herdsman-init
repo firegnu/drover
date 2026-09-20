@@ -16,7 +16,7 @@ REPO=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "ERROR: 不在 git �
 cd "${REPO}"
 
 WT="${HOME}/wt/${SHORT}-review"
-RDIR="${HOME}/.review/${SHORT}"
+RDIR="${HOME}/.drover/${SHORT}"
 
 echo "仓库:   ${REPO}"
 echo "worktree: ${WT}"
@@ -37,11 +37,11 @@ else
   echo "  ✓ 建好 worktree"
 fi
 
-# ---- 2. .review.conf ----
-if [ -f .review.conf ]; then
-  echo "  = .review.conf 已存在，跳过（如需改动请手动编辑）"
+# ---- 2. .drover.conf ----
+if [ -f .drover.conf ]; then
+  echo "  = .drover.conf 已存在，跳过（如需改动请手动编辑）"
 else
-  cat > .review.conf <<EOF
+  cat > .drover.conf <<EOF
 REVIEW_KIND=claude
 REVIEW_WT=${WT}
 REVIEW_DIR=${RDIR}
@@ -56,16 +56,16 @@ REVIEW_WAIT=600
 # PLAN_KIND=codex
 # PLAN_AGENT_ARGS='--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"'
 EOF
-  echo "  ✓ 写好 .review.conf"
+  echo "  ✓ 写好 .drover.conf"
 fi
 
 touch .gitignore
-grep -qxF '.review.conf' .gitignore || { echo '.review.conf' >> .gitignore; echo "  ✓ .review.conf 加入 .gitignore"; }
+grep -qxF '.drover.conf' .gitignore || { echo '.drover.conf' >> .gitignore; echo "  ✓ .drover.conf 加入 .gitignore"; }
 
 # ---- 2b. 登记给看板：仓库不在 ~/Developer/personal_projs 下也能被 review-board 扫到 ----
-mkdir -p "${HOME}/.review"
-grep -qxF "${REPO}" "${HOME}/.review/projects" 2>/dev/null \
-  || { echo "${REPO}" >> "${HOME}/.review/projects"; echo "  ✓ 登记到 ~/.review/projects（看板项目清单）"; }
+mkdir -p "${HOME}/.drover"
+grep -qxF "${REPO}" "${HOME}/.drover/projects" 2>/dev/null \
+  || { echo "${REPO}" >> "${HOME}/.drover/projects"; echo "  ✓ 登记到 ~/.drover/projects（看板项目清单）"; }
 
 # ---- 3. 度量文件 ----
 mkdir -p docs/reviews
@@ -122,7 +122,7 @@ if [ "${NEED_AGENTS:-0}" = "1" ]; then
 else
   echo "      已就绪"
 fi
-echo "      若有计划/设计文档目录，在 .review.conf 里配 REVIEW_PLAN_PATHS，否则 .md 计划会被当纯文本跳过"
+echo "      若有计划/设计文档目录，在 .drover.conf 里配 REVIEW_PLAN_PATHS，否则 .md 计划会被当纯文本跳过"
 echo
 echo "  [2] 项目简报 docs/reviewer-brief.md"
 if [ -f docs/reviewer-brief.md ]; then
