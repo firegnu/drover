@@ -2,6 +2,32 @@
 # 全局安装（只需一次，所有项目共用）
 set -euo pipefail
 
+# ============================================================================
+# 锁死：这个脚本是从 herdsman 原样继承来的，现在跑它会拆掉本机正在用的老 herdsman
+# ============================================================================
+# 它会：
+#   1. 覆盖 ~/.local/bin/ 里的 herdsman-init、review-board、review-map、review-task
+#      —— 那几个是老 herdsman 装出去的副本，正在推进一个真实项目；
+#   2. 覆盖 ~/.config/review/ 下的配置；
+#   3. launchctl bootout 再 bootstrap 掉 dev.herdsman.review-board 和
+#      dev.herdsman.review-board-serve —— 这两个 launchd 任务此刻正在运行。
+#
+# drover 装到哪、叫什么名字、用不用 launchd，是 ROADMAP D1 第 1 步和第 5 步要定的事。
+# 定完并把这个脚本重写之后，删掉下面这段守卫。在那之前不要绕过它。
+if [ "${DROVER_INSTALL_REWRITTEN:-}" != "1" ]; then
+  cat >&2 <<'GUARD'
+install.sh 还没有按 drover 重写，拒绝运行。
+
+它现在是 herdsman 时代的脚本，会覆盖 ~/.local/bin 里正在用的命令、覆盖
+~/.config/review/，并重启 dev.herdsman.* 两个 launchd 任务 —— 那是本机
+正在跑的老 herdsman，动了就会打断一个真实项目。
+
+要装 drover：先按 docs/ROADMAP.md D1 第 1 步定好装到哪、叫什么，第 5 步
+重写这个脚本，然后删掉本文件里这段守卫。
+GUARD
+  exit 2
+fi
+
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${HOME}/.local/bin"
 CFG="${HOME}/.config/review"

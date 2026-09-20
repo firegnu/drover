@@ -63,7 +63,17 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 | `~/.review/` | 老 herdsman 的交接目录，**看板的默认输出和项目清单都在这里** |
 | `~/wt/` | 老 herdsman 的评审 worktree |
 | herdr | 不要关窗格、不要 `herdr server stop`、不要往里面的 agent 送任何话 |
-| launchd 任务 `dev.herdsman.*` | 看板的定时生成和常驻服务 |
+| launchd 任务 `dev.herdsman.*` | 看板的定时生成和常驻服务，此刻正在运行 |
+| `~/.local/bin/{herdsman-init,review-board,review-map,review-task,request-review,review-archive}` | 老 herdsman **装出去的副本**，真实项目正在用的就是这几个 |
+| `~/.config/review/` | 老 herdsman 的全局配置 |
+
+### `install.sh` 已经被锁死，不要绕过
+
+本仓库的 `install.sh` 是从 herdsman 原样继承的。跑一次就会覆盖上面那几个装出去的命令、覆盖 `~/.config/review/`，并 `launchctl bootout` 再 `bootstrap` 掉两个正在运行的 launchd 任务——**一条命令拆掉整套正在用的东西**。
+
+所以脚本开头加了守卫，直接 `exit 2`。**不要设 `DROVER_INSTALL_REWRITTEN=1` 绕过它，也不要手工照着它的步骤装。** drover 装到哪、叫什么、用不用 launchd 是 D1 第 1 步和第 5 步要定的事；重写完那个脚本，再删掉守卫。
+
+同理：不要 `launchctl load / unload / bootstrap / bootout` 任何东西，不要往 `~/.local/bin` 拷任何文件，不要改 PATH。想在开发中跑这些脚本，直接用仓库里的相对路径（`./bin/review-task …`）。
 | `~/Developer/personal_projs/owlet`、`corral` | 别人的项目，只读；要改先问 |
 
 ### 测试看板的时候尤其小心
