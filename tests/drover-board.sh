@@ -408,6 +408,34 @@ tail -1 "${TMP}/notify.log" | grep -qF '\"引号\"' || fail 'double quotes are e
 tick "${TMP}/no-such-notifier" || fail 'a missing notifier must not break the loop'
 echo 'PASS 等你 notifications ride the loop engine: once per project, again when an item returns, escaped, never fatal'
 
+# ---- 通知节流：看一次「有没有新的等你」要跑一遍 collect()，不能每跳都跑 ----
+# collect() 每个项目十来个 git 子进程外加一次 corral status；引擎默认 5 秒一跳、常驻一天就是
+# 一万七千多跳。节流的是「多久看一次」，**不是**「哪些通知过了」——去重仍旧全靠
+# board-notified.json（上一块验的就是它）。循环推进（B.loop_tick）照旧每跳都跑，不跟着节流。
+TH2="${TMP}/thome"; mkdir -p "${TH2}/.drover"
+HOME="${TH2}" python3 - "${DROVER}" <<'PY2' || fail 'tick(): 通知节流'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("drover_cli", sys.argv[1])
+D = importlib.util.module_from_spec(importlib.util.spec_from_loader("drover_cli", l)); l.exec_module(D)
+
+collects, ticks = [], []
+D.B.collect = lambda lp: collects.append(lp) or []      # 数一数看了几次
+D.B.loop_tick = lambda lp: ticks.append(lp)
+
+D.tick("清单")
+D.tick("清单")                                          # 紧接着再来一跳
+assert len(collects) == 1, f"连着两跳看了 {len(collects)} 次，应该只看一次"
+assert len(ticks) == 2, f"循环推进被一起节流了：只跑了 {len(ticks)} 跳"
+
+D._looked_at -= D.NOTIFY_EVERY + 1                    # 装作隔了足够久
+D.tick("清单")
+assert len(collects) == 2, f"隔够了还是不看：{len(collects)}"
+assert len(ticks) == 3, len(ticks)
+assert D.NOTIFY_EVERY >= 60, D.NOTIFY_EVERY             # 别退回成「每跳都看」
+PY2
+echo 'PASS tick(): 通知节流——循环每跳都推，「有没有新的等你」隔一阵才看一次'
+
 # ---- 外层循环：开关只管开关，推动循环的是引擎进程 `drover loop` ----
 # 引擎看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次 drover next，由它把
 # **任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句「运行 drover next」——

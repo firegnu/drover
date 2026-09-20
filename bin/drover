@@ -492,10 +492,24 @@ def notify_new(projects, state_path):
             os.remove(tmp)
 
 
+NOTIFY_EVERY = 60        # 两次「看有没有新的等你」之间至少隔这么久
+_looked_at = 0.0         # 上次看的时刻。引擎是常驻进程，记在内存里就够，不用落文件
+
+
 def tick(list_path):
-    """一跳：推一次外层循环，再把新出现的「等你」通知出去。叫 tick 不叫 loop_tick，免得和
-    drover-board 里那个（真正干活的那个）看混。"""
+    """一跳：推一次外层循环，隔够了就再看一眼有没有新的「等你」要通知。叫 tick 不叫
+    loop_tick，免得和 drover-board 里那个（真正干活的那个）看混。
+
+    通知这半边要节流，循环推进那半边不能：看一眼要跑一整趟 `collect()`——每个项目十来个
+    git 子进程外加一次 corral status——而引擎默认 5 秒一跳，常驻一天就是一万七千多趟。
+    节流的是**多久看一次**；哪些已经通知过仍旧全靠 board-notified.json 去重，那套一个字没动。
+    `--once` 每次都是新进程，所以手动跑一跳照样会看。"""
+    global _looked_at
     B.loop_tick(list_path)
+    now = time.time()
+    if now - _looked_at < NOTIFY_EVERY:
+        return
+    _looked_at = now
     notify_new(B.collect(list_path), NOTIFY_STATE)
 
 
