@@ -43,8 +43,10 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 
 **建设中。** 评审协议整个摘掉了；配置、完成判据、corral 传输层、看板改造、外层循环闭合都做完了（D1 第 0–4 步），脚本改名成单命令 `drover`，完成判据有了依据（收尾记号），外层循环的引擎也从看板里拆成了独立的 `drover loop`。
 
-剩下第 5 步的最后一样：QUICKSTART 和手册。安装脚本与 launchd 模板已经写好，**实际安装、启用要人点头**。开发时仍用仓库里的相对路径跑：`python3 ./bin/drover …`。
+**D1 做完了。** 安装脚本与 launchd 模板已经写好，**实际安装、启用要人点头**。接下来是 D2 验证：第 1 层（合成测试）随 D1 做完了，还剩自举和靶场。
 
+- 装和跑：[docs/QUICKSTART.md](docs/QUICKSTART.md)
+- 为什么这么设计、怎么排查：[docs/手册.md](docs/手册.md)
 - 设计和分步：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 在这个仓库里干活的规矩：[AGENTS.md](AGENTS.md)
 
