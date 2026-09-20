@@ -6,7 +6,7 @@
 
 ## 2026-09-20
 
-**D1 全部做完了**（第 0–5 步）。四个套件全绿：`tests/criteria.sh`、`tests/drover.sh`、`tests/install.sh`、`tests/drover-board.sh`（10 块）。工作区干净，只有 `main` 分支，没有远端。
+**D1 全部做完了**（第 0–5 步）。四个套件全绿：`tests/criteria.sh`、`tests/drover.sh`、`tests/install.sh`、`tests/drover-board.sh`（10 块）。工作区干净，只有 `main` 分支。**远端 `origin` 2026-09-20 建好了**：`github.com/firegnu/drover`，公开，157 个提交已同步。
 
 ```sh
 # 一分钟自检
@@ -50,7 +50,11 @@ drover 驱动自己的开发。**一律放行模式**（`TASK_GATE=1`，每件�
 
 ## 派活的规矩（这个仓库已经是 corral-dispatch 项目了）
 
-`AGENTS.md`「开发方式（主控分派）」那节是今天加的：agent 名字 `drover/dev-`、任务文件放 `docs/任务/`、worktree 放 `../drover-worktrees/<分支>`、**本地合并不推送**（没有远端）、收尾记号和 owlet 用同一套措辞。
+`AGENTS.md`「开发方式（主控分派）」那节是今天加的：agent 名字 `drover/dev-`、任务文件放 `docs/任务/`、worktree 放 `../drover-worktrees/<分支>`、**本地合并、不自己推送**、收尾记号和 owlet 用同一套措辞。
+
+> **远端有了，但推送规矩没变。** `origin` 指向公开仓库 `github.com/firegnu/drover`，推之前每次都要人点头（`AGENTS.md`「先问人」那一节）。派出去的 agent 一律只在自己分支上提交，不合并也不推。
+>
+> **公开仓库意味着写进去的东西都会公开。** 今天推之前扫过：`gitleaks` 和 `trufflehog` 全干净，没有绝对路径、没有邮箱、`.drover.conf` 这类配置一直在 `.gitignore` 里。但文档里提到的 `owlet` 和 `jb-finetune` 是**私有仓库**——用户判断过：名字和工作流细节公开无妨，私有仓库本身访问不了。**往 `HANDOFF.md` / `ROADMAP.md` 里写那两个项目的细节时，心里有这条。**
 
 今天派活时踩过的两个坑，别再踩：
 
