@@ -21,7 +21,7 @@ drover 是赶牲口走长途的人：它不决定去哪，只负责队伍一直�
 
 就这两个动作。**它一个 agent 都不开、不关、不接入**——那些是人的事。用到的 corral 命令只有三个：`send`、`status`、`ls`。
 
-配套的是一个只读看板（HTML，深色），显示队列、主控在干什么、分支进展、什么时候需要你。
+配套的是一个只读看板（终端 TUI，深色），显示队列、当前这件活的进展和判据、什么时候需要你。推进靠按键：`g` 放行、`n` 发下一件、`p` 暂停、`a` 开编辑器加任务。
 
 ## 它不做什么
 
@@ -43,7 +43,7 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 
 **建设中。** 评审协议整个摘掉了；配置、完成判据、corral 传输层、看板改造、外层循环闭合都做完了（D1 第 0–4 步），脚本改名成单命令 `drover`，完成判据有了依据（收尾记号），外层循环的引擎也从看板里拆成了独立的 `drover loop`。
 
-剩下第 5 步：删看板的 agent 块、看板改 TUI、QUICKSTART 和手册。安装脚本与 launchd 模板已提供；实际安装、启用要人点头。开发时仍用仓库里的相对路径跑：`python3 ./bin/drover …`。
+剩下第 5 步的最后一样：QUICKSTART 和手册。安装脚本与 launchd 模板已经写好，**实际安装、启用要人点头**。开发时仍用仓库里的相对路径跑：`python3 ./bin/drover …`。
 
 - 设计和分步：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 在这个仓库里干活的规矩：[AGENTS.md](AGENTS.md)

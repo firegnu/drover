@@ -251,8 +251,16 @@ corral 主控提过第三条路：drover 别判断完成，把下一件直接送
 
       拆的过程里揪出一个**只有常驻进程才会暴露的 bug**：`NOW` 和 corral 的 agent 清单原先只在 `collect()`（渲染页面）里刷新，线程靠页面渲染顺带蹭。没有渲染之后，停在启动那刻的 `NOW` 会让 `close_if_done` 的节流 `NOW - mtime(stamp) < CHECK_EVERY` 一路算出负数——**永远在节流窗口里，查一次之后再也不查**。修法是 `loop_tick` 每跳自己重取；测试在 `tests/drover-board.sh` 里连跑两跳验这个不变量（去掉修复会红）。
    2. **砍掉看板里的 agent 块**（见「看板」那一节）——**2026-09-20 做完**。删掉的：主控状态块（`crew_chips`）、派出去的 agent 块（`crew_html` + `crew_of` + `repo_dirs` 那套 worktree 反推）、顶栏的 agent 行、`/crew` 端点和它 8 秒一次的轮询、「主控停在对话框」那条「等你」，以及对应的 CSS。`agents_of` 留着但瘦了一圈（只剩 `status` / `name` / `idle_for` / `src`），因为循环引擎的 `wants_human` 和 `close_if_done` 还要用。净减约 100 行。
-   3. **看板改 TUI**
-   4. **安装脚本 + launchd plist**，Label 不能再叫 `dev.herdsman.*`（老 herdsman 正用着）。`install.sh` 和两个 plist 已经在 `9a48774` 之后删掉了。**写是这一步的活，跑要人点头**——往 `~/.local/bin` 拷东西、动 launchd 都在 AGENTS.md「先问人」那一节里。
+   3. **看板改 TUI**——**2026-09-20 做完**。`bin/drover-board` 1598 → 927 行：CSS / JS / 静态页 / 本机 HTTP 服务 / 令牌 / Host-Origin 校验整层删掉（`tests/browser-smoke.mjs` 一起删），换成 `view_model()`（纯数据）/ `draw()`（只排版）两层 + curses TUI。数据模块那部分 21 个函数签名一个没动（`bin/drover` 和另外两个套件靠它们活着）。
+
+      按键是新的主操作面（「推进靠按键，不靠敲命令」），所以「按了什么键 → 做什么」也拆成纯函数 `key_action(k, pv, state)`：喂键码就能验，`p` 和 `l` 按当前状态决定发 `pause`/`resume`、`loop on`/`off`，切反了就是真 bug。写操作一律 `subprocess` 转给 `bin/drover`，判据和队列解析只有一份实现。中文宽度走 `width()` / `trunc()`（`east_asian_width`）。
+
+      **系统通知挪进引擎**（跟着守护进程走、和界面无关），并加了 `NOTIFY_EVERY = 60` 的节流：看一眼要跑一整趟 `collect()`（每个项目十来个 git 子进程加一次 corral status），引擎默认 5 秒一跳，不节流常驻一天就是一万七千多趟。节流的只是「多久看一次」，`board-notified.json` 的去重没动。
+
+      **还欠**：详情区不滚动，超出就截断并提示还有几行——队列长了会不够用。
+   4. **安装脚本 + launchd plist**——**2026-09-20 写完，还没跑**。`install.sh` 把两个命令绝对软链到 `~/.local/bin`，plist 生成到 `~/.drover/`，Label 是 `dev.drover.loop`（和正跑着的 `dev.herdsman.*` 不撞），常驻的是**引擎** `drover loop` 不是看板。预检在任何写入之前跑完，撞上不认识的目标就非零退出、一个字节都不写。`launchctl` 的启用命令**只打印不执行**。`tests/install.sh` 9 项，隔离 `HOME` 验装、幂等、拒绝覆盖。
+      **跑要人点头**——往 `~/.local/bin` 拷东西、动 launchd 都在 AGENTS.md「先问人」那一节里。
+      已知小账：plist 把安装时那条 shell 的整条 PATH 烤进 `EnvironmentVariables`（好处是一定找得到 `corral` 和 `git`，代价是换条 PATH 再装会拒绝、装时若激活着 venv 会一直用那个 python3）。**装的时候用干净的 shell。**
    5. **QUICKSTART（纯步骤）和手册**。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 
    **不做技能。** `~/.claude/skills` 是全局的，主控也在同一台机器上——装一个 drover 技能，主控就会看见「队列」「外循环」这些词，第 3 步那条「送出去的文本里不许出现 drover」的测试等于被从另一条路绕过去了。三层的教学方式本来就不一样：corral 是给 agent 用的工具（要技能）、corral-dispatch 是 agent 扮演的角色（要技能）、**drover 是人和代码在操作、agent 是它的对象（要文档）**。
