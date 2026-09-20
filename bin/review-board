@@ -34,7 +34,6 @@ DEFAULT_OUT = os.path.expanduser("~/.drover/board.html")
 STAT_FILES = {"precision.md", "self-closed.md", "timing.md", "skipped.md", "escapes.md"}
 DIFF_MAX_LINES = 2000
 ARCHIVES_SHOWN = 5
-SELF_CLOSED_SHOWN = 12
 NOW = time.time()
 
 
@@ -633,9 +632,6 @@ def project_state(repo, conf):
 
     latest = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
     p["last_activity"] = latest
-    p["accum"] = since_last_review(repo, conf)
-    p["brief"] = brief_status(repo, conf)
-    p["map"] = map_suggestions(repo)
     if explicit:
         pend = pending_decisions(prev)
         if this and this["sent"]:
@@ -738,90 +734,6 @@ def load_archives(repo):
     return out
 
 
-def path_is_plan(path, patterns):
-    import fnmatch
-    return any(fnmatch.fnmatch(path, pat) for pat in patterns)
-
-
-def since_last_review(repo, conf):
-    """观察用：上次 code 评审的 target 到 HEAD 之间积了多少提交，其中多少被 SKIP、多少走了 plan 评审、
-    多少根本没经过路由。只读 timing.md / self-closed.md / git，不改任何机制。"""
-    plan_pats = (conf.get("REVIEW_PLAN_PATHS") or "").split()
-    rows = [l for l in (read(f"{repo}/docs/reviews/timing.md") or "").splitlines() if re.match(r'\S+ \| \w+ \|', l)]
-    def row_kind(sha):
-        cols = [c.strip() for c in l.split("|")]
-        if len(cols) >= 5 and cols[4] in ("code", "plan"):
-            return cols[4]
-        files = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
-        return "plan" if files and all(path_is_plan(f, plan_pats) for f in files) else "code"
-    base = None
-    plan_targets = set()
-    for l in reversed(rows):
-        sha = [c.strip() for c in l.split("|")][1]
-        k = row_kind(sha)
-        if k == "plan":
-            plan_targets.add(sha[:7]); continue
-        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True).returncode == 0:
-            base = sha; break
-    if not base:
-        return None
-    commits = [c for c in git(repo, "rev-list", f"{base}..HEAD").split() if c]
-    if not commits:
-        return {"base": base, "n": 0, "skipped": 0, "plan": 0, "waived": 0, "unrouted": 0}
-    closed = read(f"{repo}/docs/reviews/self-closed.md") or ""
-    # 人用 SKIP_REVIEW（或任务「流程：不评审」）登记的提交：和 request-review 的 range_files 一样按 skipped.md 第二列的短 sha 认
-    waived_shas = {c.split("|")[1].strip() for c in (read(f"{repo}/docs/reviews/skipped.md") or "").splitlines() if c.count("|") >= 2}
-    waived = [c for c in commits if git(repo, "rev-parse", "--short", c).strip() in waived_shas]
-    rest = [c for c in commits if c not in waived]
-    skipped = sum(1 for c in rest if c[:7] in closed)
-    plan = sum(1 for c in rest if c[:7] in plan_targets)
-    return {"base": base, "n": len(commits), "skipped": skipped, "plan": plan, "waived": len(waived),
-            "unrouted": len(rest) - skipped - plan}
-
-
-def map_suggestions(repo):
-    """review-map --suggest 的输出：降级建议（要人点头）与图上没有的路径。没有 .review-map 或找不到命令 → []。"""
-    if not os.path.exists(f"{repo}/.review-map"):
-        return None
-    exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-map")
-    if not os.path.exists(exe):
-        exe = "review-map"
-    try:
-        out = subprocess.run([exe, repo, "--suggest"], capture_output=True, text=True, timeout=30).stdout
-    except Exception:
-        return []
-    rows = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 4:
-            rows.append(parts)
-    return rows
-
-
-def brief_status(repo, conf):
-    """简报新旧：verified-at 之后几个提交，上限多少。返回 None 表示项目没有简报或关闭了检查。"""
-    rel = conf.get("REVIEW_BRIEF", "docs/reviewer-brief.md") if "REVIEW_BRIEF" in conf else "docs/reviewer-brief.md"
-    if not rel or not os.path.exists(f"{repo}/{rel}"):
-        return None
-    cap = int(conf.get("REVIEW_BRIEF_MAX_COMMITS") or 50)
-    first = (read(f"{repo}/{rel}") or "").splitlines()[:1]
-    m = re.search(r'verified at:\s*([0-9a-f]{7,40})', first[0]) if first else None
-    if not m:
-        return {"sha": "", "n": None, "cap": cap, "state": "缺 verified at"}
-    sha = m.group(1)
-    ok = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True).returncode == 0
-    if not ok:
-        return {"sha": sha, "n": None, "cap": cap, "state": "基线不在 HEAD 历史里"}
-    n = int((git(repo, "rev-list", "--count", f"{sha}..HEAD").strip() or "0"))
-    return {"sha": sha, "n": n, "cap": cap, "state": "过期" if n > cap else ("将过期" if n > cap * 0.8 else "")}
-
-
-def load_self_closed(repo):
-    text = read(f"{repo}/docs/reviews/self-closed.md") or ""
-    rows = [l for l in text.splitlines() if re.match(r'^\d{4}-\d{2}-\d{2} \|', l)]
-    return [[c.strip() for c in l.split("|")] for l in reversed(rows[-SELF_CLOSED_SHOWN:])]
-
-
 # ============================================================ 最小 markdown（归档原文）
 def md(text):
     out, para, table, in_code = [], [], [], False
@@ -909,9 +821,8 @@ details[open]>summary .tri{transform:rotate(90deg)}
 .wait{margin:12px 0 0;border:1px solid #5a2c3c;background:var(--red-bg);border-radius:var(--r2);padding:10px 14px;font-size:var(--fs3)}
 .wait.calm{border-color:#54462c;background:#2e2b25}.wait .wh{font-weight:700;color:var(--red-t);margin-bottom:4px}
 .wait ul{margin:0;padding-left:18px}.wait li{margin:3px 0;color:var(--t2)}.wait li .dim{color:var(--t3)}.wait a{color:var(--red-t)}
-.wait details.mapsug{margin-top:6px}
 .tasks{margin:20px 0 0;background:var(--s1);border:1px solid var(--line);border-radius:var(--r2);padding:16px 20px 18px}.tasks .th{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;min-height:28px}.tasks .th .src{margin-left:auto;font-size:var(--fs1);color:var(--t4)}
-.mode,.kind,.flow,.badge,.lvl,.sev,.verb,.dec,.next,.hand,.hold-tag,.chip,.evbtn,.me,.accum{display:inline-block;font-size:var(--fs1);font-weight:600;line-height:18px;padding:0 7px;border-radius:var(--r1);border:0;white-space:nowrap}
+.mode,.kind,.flow,.badge,.lvl,.sev,.verb,.dec,.next,.hand,.hold-tag,.chip,.evbtn,.me{display:inline-block;font-size:var(--fs1);font-weight:600;line-height:18px;padding:0 7px;border-radius:var(--r1);border:0;white-space:nowrap}
 .mode{color:var(--t3);background:var(--s3)}
 .mode.gate{color:var(--red-t);background:var(--red-bg)}.mode.paused{color:var(--amber-t);background:var(--amber-bg)}
 .lanes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.45fr) minmax(0,1.15fr)}
@@ -1048,8 +959,6 @@ a.loc{color:var(--blue-t);text-decoration:none;border-bottom:1px dotted #4a6a95}
 details.proc{margin-top:10px}details.proc>summary{cursor:pointer}
 details.proc pre{margin:6px 0 0;padding:8px 10px;background:var(--s0);border:1px solid var(--line);border-radius:var(--r1);font-size:var(--fs2);white-space:pre-wrap;color:var(--t3)}
 .idle{padding:16px 0;color:var(--t4)}
-.accum{font-size:var(--fs2);font-weight:400;margin:20px 8px 0 0;padding:0 10px;line-height:26px;background:var(--s1);border:1px solid var(--line);color:var(--t3)}
-details.mapsug{margin-top:8px;font-size:var(--fs2)}details.mapsug>summary{color:var(--amber-t);cursor:pointer}details.mapsug li{margin:3px 0 3px 16px}.accum.warn{color:var(--amber-t);border-color:#5e4c2c;background:#2d2a25}.accum b{font-weight:700}
 .cycle{margin-top:20px;border:1px solid var(--line);background:var(--s1);padding:16px 20px;border-left:3px solid var(--t5);border-radius:var(--r2)}
 .cycle.s-pl{border-left-color:var(--purple)}.cycle.s-rv{border-left-color:var(--blue)}.cycle.s-wr{border-left-color:var(--amber)}.cycle.s-me{border-left-color:var(--red)}
 .cycle .title{font-size:var(--fs4);font-weight:700;letter-spacing:-.01em;margin-bottom:2px}
@@ -1071,7 +980,6 @@ details.ev{margin-top:5px}details.ev>summary{display:flex;gap:8px;align-items:ce
 .evteaser{font-size:var(--fs1);color:var(--t4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 details[open].ev .evteaser{display:none}
 details.bgrp{margin-top:8px}details.bgrp>summary.bhead{cursor:pointer}
-details.sc>summary{cursor:pointer}details.sc>summary h2{display:inline}
 .filter{margin:0 0 10px;font:var(--fs3) inherit;padding:6px 10px;border:1px solid var(--line-strong);border-radius:var(--r1);width:320px;background:var(--s0);color:var(--t2);outline:none}.filter:focus{border-color:var(--blue)}.filter::placeholder{color:var(--t5)}
 .cycle .top .lab{font-size:var(--fs2);color:var(--t4)}
 .lvl{background:var(--s3);color:var(--t3)}
@@ -1123,12 +1031,11 @@ h2 .sub{font-weight:400;color:var(--t4);font-size:var(--fs2);margin-left:8px}
 .arch .body table{border-collapse:collapse;margin:6px 0}.arch .body td{border:1px solid var(--line);padding:3px 8px;vertical-align:top}
 .arch .body li{margin:2px 0 2px 18px}.arch .body pre{background:var(--s0);padding:8px 10px;white-space:pre-wrap}
 .arch .body p{margin:6px 0}
-.srow{display:grid;grid-template-columns:92px 72px 120px minmax(0,1fr);gap:0 12px;padding:8px 0;border-bottom:1px solid var(--line-soft)}
 .tab{font-variant-numeric:tabular-nums}
 .foot{padding:14px 24px;color:var(--t4);font-size:var(--fs1);border-top:1px solid var(--line)}
 .empty{color:var(--t4);padding:8px 0;font-size:var(--fs2)}
 .tasks,.sec,.round,.cycle,details.prev,.wait,.planning,details.lastrun{box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 10px 28px -16px rgba(0,0,0,.6)}
-ol.q li,.drow,.card,.bhead,.crew .agent,.accum,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+ol.q li,.drow,.card,.bhead,.crew .agent,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .lanes .empty{border-color:rgba(255,255,255,.12)}
 """
 
@@ -1772,7 +1679,7 @@ def crew_chips(p):
     return "".join(chips)
 
 
-def render_panel(p, archives, self_closed, live=None):
+def render_panel(p, archives, live=None):
     parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
     badge = state_badge(p)
     parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
@@ -1782,8 +1689,7 @@ def render_panel(p, archives, self_closed, live=None):
         slot = f' data-crew="{esc(p["name"])}"' if live else ""
         parts.append(f'<div class="crew"{slot}>{chips}</div>')
     # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。风险图建议放「不急」档。
-    sug = p.get("map")
-    if p["human"] or sug:
+    if p["human"]:
         items = []
         for kind, fid, verb, sev, reason in p["human"]:
             if kind != "decision":
@@ -1794,9 +1700,6 @@ def render_panel(p, archives, self_closed, live=None):
             items.append(f'<li><a href="#{esc(a)}" onclick="return rbGo(\'{esc(p["name"])}\',\'{esc(a)}\')">{esc(what)}</a>'
                          + (f'<span class="dim"> · {esc(reason)}</span>' if reason else "") + '</li>')
         body = f'<div class="wh">等你 · {len(items)}</div><ul>{"".join(items)}</ul>' if items else ""
-        if sug:
-            rows = "".join(f'<li><span class="mute">{"建议降级" if k == "lower" else "建议加入"}</span> <code>{esc(g)}</code> {esc(lv)} <span class="dim">· {esc(why)}</span></li>' for k, g, lv, why in sug)
-            body += f'<details class="mapsug"><summary>不急 · 风险图有 {len(sug)} 条建议，等你点头</summary><ul>{rows}</ul></details>'
         parts.append(f'<div class="wait{"" if items else " calm"}" id="w-{esc(p["name"])}">{body}</div>')
     parts.append(render_tasks(p, live))
     pl = p.get("planning")
@@ -1808,32 +1711,6 @@ def render_panel(p, archives, self_closed, live=None):
         parts.append(f'<details class="lastrun"><summary><span class="tri">▶</span><b>上次运行 request-review：exit {esc(lr["code"])}</b>'
                      f'<span class="age">{ago(lr["ts"])} 前</span><span class="msg">{esc(lr["head"])}</span></summary>'
                      f'<pre>{esc(lr["out"])}</pre></details>')
-    b = p.get("brief")
-    if b:
-        if b["n"] is None:
-            parts.append(f'<div class="accum warn">简报 {esc(b["state"])}，写手下次运行会被要求重写</div>')
-        else:
-            cls = "accum warn" if b["state"] else "accum mute"
-            tail = f' · <b>{esc(b["state"])}</b>' if b["state"] else ""
-            parts.append(f'<div class="{cls}">简报核实于 <code>{esc(b["sha"][:7])}</code>，之后 {b["n"]} 个提交，上限 {b["cap"]}{tail}</div>')
-    ms = p.get("map")
-    if ms is None:
-        parts.append('<div class="accum mute">没有 .review-map，代码路径全部由评审方 triage</div>')
-    acc = p.get("accum")
-    if acc is None:
-        parts.append('<div class="accum mute">尚无已完成的代码评审，无法计算累积</div>')
-    else:
-        bits = [f'上次代码评审 <code>{esc(acc["base"][:7])}</code> 以来 <b>{acc["n"]}</b> 个提交']
-        if acc["n"]:
-            bits.append(f'{acc["skipped"]} 个 SKIP')
-            if acc["plan"]:
-                bits.append(f'{acc["plan"]} 个走了计划评审')
-            if acc["waived"]:
-                bits.append(f'{acc["waived"]} 个人工免审')
-            if acc["unrouted"]:
-                bits.append(f'<b>{acc["unrouted"]} 个未经路由</b>')
-        cls = "accum warn" if acc["n"] and not p["waiting"] and not p["needs_me"] else "accum mute"
-        parts.append(f'<div class="{cls}">' + " · ".join(bits) + '</div>')
     if p.get("triage_reason"):
         parts.append(f'<div class="idle" style="padding:14px 0">{esc(p["triage_reason"])}</div>')
     stale = bool(p["rounds"]) and p["closed"] and not p["waiting"]
@@ -1896,16 +1773,7 @@ def render_panel(p, archives, self_closed, live=None):
         parts.append('<div class="empty">无归档</div>')
     parts.append("</div></div>")
 
-    rows = [(cells + ["", "", "", ""])[:4] for cells in self_closed]
-    kinds = {}
-    for c in rows:
-        kinds[c[2] or "?"] = kinds.get(c[2] or "?", 0) + 1
-    gist = "、".join(f"{n} 条{esc(k)}" for k, n in kinds.items()) if rows else "无记录"
-    parts.append(f'<div class="sec"><details class="sc"><summary><h2>自闭合<span class="sub">最近 {len(rows)} 条：{gist}</span></h2></summary><div class="list blist">')
-    for c in rows:
-        parts.append(f'<div class="srow"><span class="dim tab">{esc(c[0])}</span><code>{esc(c[1])}</code>'
-                     f'<span>{esc(c[2])}</span><span class="ink">{esc(c[3])}</span></div>')
-    parts.append("</div></details></div></div>")
+    parts.append("</div>")
     return "".join(parts)
 
 
@@ -1961,7 +1829,7 @@ def notify_new(projects, state_path):
             os.remove(tmp)
 
 
-def render(projects, archives, self_closed, live=None):
+def render(projects, archives, live=None):
     """live：本机服务打开时的 {"token": …}，页面多出令牌、放行 / 放弃按钮和确认框；静态文件为 None，和原来一样。"""
     waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
     if waits:
@@ -1975,7 +1843,7 @@ def render(projects, archives, self_closed, live=None):
         status = state_badge(p)
         side.append(f'<div class="proj{" needs" if p["needs_me"] else ""}" data-p="{esc(p["name"])}"><div class="row"><span class="nm">{esc(p["name"])}</span>'
                     f'<span class="age">{ago(p["since"])}</span></div><div class="st">{status}<span class="who">{esc(p["waiting"])}</span></div></div>')
-    panels = "".join(render_panel(p, archives[p["name"]], self_closed[p["name"]], live) for p in projects)
+    panels = "".join(render_panel(p, archives[p["name"]], live) for p in projects)
     gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     kinds = sorted({p["kind"] for p in projects}) or ["claude"]
     writer_kinds = [((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects]
@@ -2014,11 +1882,11 @@ def discover(list_path):
 
 
 def collect(list_path):
-    """各项目的当前状态 → (projects, archives, self_closed)；生成静态页和本机服务共用。
+    """各项目的当前状态 → (projects, archives)；生成静态页和本机服务共用。
     NOW 每次重取：本机服务是常驻进程，停在启动那刻的 NOW 会让页面上「几分钟前」「已进行多久」越来越偏。"""
     global NOW, _AGENTS
     NOW, _AGENTS = time.time(), None                 # herdr 的 agent 列表同理：每页重查
-    projects, archives, self_closed = [], {}, {}
+    projects, archives = [], {}
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
         if "REVIEW_DIR" not in conf:
@@ -2026,16 +1894,14 @@ def collect(list_path):
         p = project_state(repo, conf)
         projects.append(p)
         archives[repo] = load_archives(repo)
-        self_closed[repo] = load_self_closed(repo)
     # 同名仓库（不同目录下的同名 checkout）用上一级目录区分，name 是页面里的唯一键
     names = [p["name"] for p in projects]
     for p in projects:
         if names.count(p["name"]) > 1:
             p["name"] = os.path.basename(os.path.dirname(p["repo"])) + "/" + p["name"]
     archives = {p["name"]: archives[p["repo"]] for p in projects}
-    self_closed = {p["name"]: self_closed[p["repo"]] for p in projects}
     projects.sort(key=lambda p: (not p["needs_me"], -(p["since"] or p["last_activity"] or 0), p["name"]))
-    return projects, archives, self_closed
+    return projects, archives
 
 
 # ============================================================ 本机服务（review-board serve）
@@ -2136,7 +2002,7 @@ def health(started, port):
 
 def live_action(list_path, act, body):
     """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 review-task。"""
-    projects, _, _ = collect(list_path)
+    projects, _ = collect(list_path)
     p = next((x for x in projects if x["name"] == body.get("project")), None)
     if not p:
         return 404, {"ok": False, "out": "找不到这个项目"}
@@ -2350,14 +2216,14 @@ def main():
         return serve(args[1:])
     out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
     list_path = args[args.index("--projects") + 1] if "--projects" in args else None
-    projects, archives, self_closed = collect(list_path)
+    projects, archives = collect(list_path)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     # 先写临时文件再改名：浏览器 30 秒一刷，直接覆盖会有一瞬读到空文件。临时文件名带进程号：launchd 的定时刷新
     # 和 request-review 退出时的刷新会同时跑，共用一个名字时后到的那个改名会扑空。写失败就删掉自己的，不留残留。
     tmp = f"{out_path}.{os.getpid()}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            f.write(render(projects, archives, self_closed))
+            f.write(render(projects, archives))
         os.replace(tmp, out_path)
     finally:
         if os.path.exists(tmp):

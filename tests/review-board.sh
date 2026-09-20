@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # review-board 冒烟测试：造三个仓库覆盖 待人裁决 / 评审中 / triage 中，再造一份归档，
-# 断言生成的 HTML 里状态、横幅、finding 行、Backlog、归档、自闭合都在，且不接触真实项目。
+# 断言生成的 HTML 里状态、横幅、finding 行、Backlog、归档都在，且不接触真实项目。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -258,12 +258,6 @@ has '回应 ' 'round timing shown'
 # delta：闭合未归档 → 折叠成一行摘要
 has '<details class="prev"><summary>' 'closed cycle collapsed'
 has '1 轮</span><span>1 暂缓</span>' 'collapsed summary counts'
-has '以来 <b>1</b> 个提交 · 0 个 SKIP · <b>1 个未经路由</b>' 'accumulation counter'
-has '以来 <b>1</b> 个提交 · 0 个 SKIP · 1 个人工免审</div>' 'commits waived in skipped.md are not counted as unrouted'
-has '尚无已完成的代码评审' 'no-review accumulation note'
-has '没有 .review-map，代码路径全部由评审方 triage' 'no-map note'
-has '简报核实于 <code>' 'brief status line'
-has '之后 1 个提交，上限 50' 'brief commit count'
 lacks 'class="cycle stale"' 'old stale styling gone'
 
 # request 字段与 diff
@@ -275,7 +269,7 @@ has '3 条 · 1 阻断 · 1 应改 · 1 细节' 'round summary without zeros'
 has '<span class="d-add">+b = 1</span>' 'diff add line coloured'
 has 'class="d-hunk">@@' 'diff hunk coloured'
 
-# 归档、Backlog、自闭合
+# 归档、Backlog
 has '<code>abc1234</code>' 'archive row'
 has '1m35s' 'archive duration from timing.md'
 has '留到以后' 'backlog reason'
@@ -287,10 +281,6 @@ has '<div class="list blist">' 'backlog list is height-capped and scrolls'
 has 'else g.open=false' 'clearing the backlog filter collapses the groups again'
 has 'class="filter" type="search"' 'backlog filter box'
 has '<h2>最近归档</h2><div class="list blist"><div class="acols">' 'archive list is height-capped and scrolls'
-has '</h2></summary><div class="list blist">' 'self-closed list is height-capped and scrolls'
-has '<code>def5678</code>' 'self-closed row'
-has '最近 1 条：1 条纯文本' 'self-closed summary line'
-has '只改了 .md' 'self-closed reason'
 
 # 「等你」栏：每个项目一栏，横幅只是汇总
 has 'id="w-beta/repo"' 'beta has its own 等你 section'
@@ -376,7 +366,7 @@ lacks 'jb-finetune' 'real project leaked into fixture board'
 lacks '~/Developer' 'default discovery used'
 
 # 默认输出路径：--out 未给时写到 ~/.drover/board.html —— 不在测试里跑，避免碰真实目录
-echo 'PASS review-board renders states, banner, findings, backlog, archives, self-closed'
+echo 'PASS review-board renders states, banner, findings, backlog, archives'
 
 # 并发刷新：launchd 每 30 秒一次，request-review 退出时也刷一次，两者会同时跑。临时文件共用一个名字时，
 # 后到的那个改名会扑空（2026-09-11 board.err 里有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」
