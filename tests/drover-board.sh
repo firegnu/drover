@@ -186,6 +186,8 @@ is 'p("eta/repo")["queue"]["card"]["criteria"][0]["ok"]' False 'eta has no wrap-
 is 'p("eta/repo")["queue"]["card"]["met"]' 0/3 'eta: nothing met yet (wrap-up mark + the two cheap gates)'
 is 'p("eta/repo")["queue"]["card"]["criteria"][3]["ok"]' None 'the check command is never run while refreshing'
 is '"pytest -q" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'but the board still says what it is'
+# 说法是「没在刷新时跑」，不是「没在页面上跑」——页面没有了，看板每刷新一次就要算一遍判据
+is '"没在刷新时跑" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'and why it was skipped'
 
 # 派出去的 agent 一个字都不该出现：那是 corral board + --viewer 的活。
 # eta/m1-backend 在假 corral 的 ls 里、cwd 就落在 eta 的 worktree 上——正是以前会被认出来的那种。
@@ -313,6 +315,74 @@ s = Fake(10, 40)                                                 # 一个项目�
 B.draw(s, {"health": {"ok": True, "text": "corral 正常"}, "waits": [], "projects": []}, {"sel": 0, "msg": ""})
 PY2
 echo 'PASS draw(): 40x10 到 12x3 都不崩、不越界'
+
+# ---- 按键：「按了什么键 → 要做什么」也是一层纯函数 ----
+# 推进靠按键，这是新的主操作面（ROADMAP），所以不能只埋在 tui() 里跟 getch 缠着。
+# key_action(键码, 选中的项目, state) → 动作，喂键码就能验；tui() 只管 getch 和执行。
+# p 和 l 是有状态的：按当前 paused / loop 决定发 pause 还是 resume、loop on 还是 off，切反了就是真 bug。
+python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'key_action(): 键码 → 动作'
+import curses, importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+
+# 拿真的 view_model 当底子，字段名跟着一起验（手搓的 pv 会和真结构悄悄走散）
+model = B.view_model(B.collect(sys.argv[2]))
+eta = next(p for p in model["projects"] if p["name"] == "eta/repo")          # 没暂停、循环没开
+theta = next(p for p in model["projects"] if p["name"] == "theta/repo")      # 暂停中
+none_q = next(p for p in model["projects"] if p["queue"] is None)            # 没接队列的项目
+assert eta["queue"]["paused"] is False and eta["queue"]["loop"] is False, eta["queue"]
+assert theta["queue"]["paused"] is True, theta["queue"]
+looping = {**eta, "queue": {**eta["queue"], "loop": True}}                   # 循环开着的样子
+st = lambda sel=0, n=3: {"sel": sel, "n": n}
+
+
+def act(k, pv=eta, state=None):
+    return B.key_action(k, pv, state or st())
+
+
+# 放行、发下一件：原样转给 drover
+assert act(ord("g")) == ("run", ["go"]), act(ord("g"))
+assert act(ord("n")) == ("run", ["next"]), act(ord("n"))
+# 暂停 / 恢复、循环开 / 关：按当前状态选，切反了就是真 bug
+assert act(ord("p")) == ("run", ["pause"]), act(ord("p"))
+assert act(ord("p"), theta) == ("run", ["resume"]), act(ord("p"), theta)
+assert act(ord("l")) == ("run", ["loop", "on"]), act(ord("l"))
+assert act(ord("l"), looping) == ("run", ["loop", "off"]), act(ord("l"), looping)
+# 没接队列的项目：当成没暂停、循环没开
+assert act(ord("p"), none_q) == ("run", ["pause"]), act(ord("p"), none_q)
+assert act(ord("l"), none_q) == ("run", ["loop", "on"]), act(ord("l"), none_q)
+# 加任务、退出
+assert act(ord("a")) == ("edit",), act(ord("a"))
+assert act(ord("q")) == ("quit",), act(ord("q"))
+
+# 选项目：上下都不许越界
+for k in (curses.KEY_UP, ord("k")):
+    assert act(k, state=st(sel=1)) == ("sel", 0), k
+    assert act(k, state=st(sel=0)) == ("sel", 0), k                          # 已经在第一个
+for k in (curses.KEY_DOWN, ord("j")):
+    assert act(k, state=st(sel=1)) == ("sel", 2), k
+    assert act(k, state=st(sel=2)) == ("sel", 2), k                          # 已经在最后一个
+for k in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k")):               # 一个项目都没有
+    assert act(k, None, st(sel=0, n=0)) == ("sel", 0), k
+
+# 刷新：手按 r、30 秒没人按（getch 超时给 -1）、窗口改大小，都是重跑一遍
+for k in (ord("r"), -1, curses.KEY_RESIZE):
+    assert act(k) == ("refresh",), k
+
+# 不认识的键：什么都不做，也不重跑（重跑要跑一圈 git 和 corral，不能乱按就触发）
+for k in (ord("x"), ord("Z"), ord("1"), ord("G"), curses.KEY_F1):
+    assert act(k) is None, k
+# 一个项目都没选中时，对项目的操作一概不做
+for k in (ord("g"), ord("n"), ord("p"), ord("l"), ord("a")):
+    assert B.key_action(k, None, st(sel=0, n=0)) is None, k
+# 纯函数：不许改 state
+s = st(sel=1)
+for k in (ord("g"), curses.KEY_DOWN, ord("q"), -1):
+    B.key_action(k, eta, s)
+assert s == {"sel": 1, "n": 3}, s
+PY2
+echo 'PASS key_action(): 键码 → 动作；p / l 认当前状态，上下不越界，生键不重跑'
 
 # ---- 「等你」通知：跟着守护进程走，和界面无关 ----
 # 通知现在由循环引擎（drover loop）每跳发一次，看板一点不管——开不开看板都照发。

@@ -160,8 +160,10 @@ history / hold / health 那几块整块删掉；并发写临时文件那块删�
 - 任务书里「`width("把 CSS 导入改成流式")` 要等于 16 不是 11」这两个数字对不上：那串是
   **12 个字符、19 格**（7 个汉字 ×2 + `CSS` + 两个空格）。16/11 是 ROADMAP 里算岔了的，
   意思（宽度 ≠ 字符数）没错。测试按真值断言 19 和 12。
-- `criteria(do_check=False)` 第 3 条的 `why` 里那句「没在页面上跑」现在没有页面了，读着别扭。
-  它是被保护的返回值，**没动**，留给主控定（改一个词的事）。
+- `criteria(do_check=False)` 第 3 条的 `why` 里那句「没在页面上跑」现在没有页面了。
+  主控审查时定了改法，已改成「没在刷新时跑（可能是整套测试）；drover done 时才跑」，
+  `tests/drover-board.sh` 里加了一条断言钉住这个说法。`tests/criteria.sh` 没断言过它，
+  确认过之后一行没动。
 - `README.md` 第 24 行还写着「只读看板（HTML，深色）」、第 46 行还把「看板改 TUI」列在待办里。
   文件不在本任务的改动范围内（而且 `drover/dev-install` 可能也要动 README），**没动**。
 - `docs/ROADMAP.md` D1 第 5 步第 3 项「看板改 TUI」还没标做完——改 ROADMAP 要先问人，留给主控。
@@ -173,6 +175,25 @@ history / hold / health 那几块整块删掉；并发写临时文件那块删�
   并加了「跑完 mtime 不变」的核对）。**留下的痕迹**：真实家目录里多出一个
   `~/.drover/`，里面只有一个 `board-notified.json`，内容是合成仓库的条目。
   没删——AGENTS.md 里删东西要先问人。下次真的循环一跑就会被覆盖掉，留着也无害。
+
+### 主控审查之后补的
+
+**按键映射拆成纯函数 `key_action(k, pv, state)`**（审查意见：推进靠按键是新的主操作面，
+不能只埋在 `tui()` 里跟 `getch` 缠着，而且 `p` / `l` 认当前状态，切反了就是真 bug）。
+
+- `key_action` 不碰 curses、不跑命令、不改 `state`，只读 `state` 里的 `sel` 和 `n`，
+  返回 `("sel", 新下标)` / `("run", [drover 参数…])` / `("edit",)` / `("quit",)` /
+  `("refresh",)` / `None`。`tui()` 只剩 `getch` 和执行。
+- 新测试（先写、确认红 `no attribute 'key_action'` 再实现）盖住：`g`→go、`n`→next、
+  `p` 没暂停→pause / 暂停中→resume、`l` 循环关→loop on / 开着→loop off、没接队列的项目按
+  没暂停没循环算、`a`→edit、`q`→quit、`↑↓jk` 在第一个 / 最后一个 / 空列表都不越界、
+  `r` / `-1`（getch 超时）/ `KEY_RESIZE`→refresh、生键→`None`（不动也不重跑）、
+  以及「不许改 state」。`pv` 直接取自真的 `view_model()`，字段名跟着一起验，
+  免得手搓的 fixture 和真结构悄悄走散。
+- 顺带的行为变化：消息栏在每次「刷新」时还原成按键提示，所以命令的回话最多留到下一次
+  自动刷新（30 秒）。以前只有按 `r` 才还原。
+- 重新用 pty 验了一遍：`j` `k` 选项目、回到 alpha 再按 `l` `p`，只有 alpha 的交接目录里出现
+  `loop` / `paused`，beta 没被误操作，`q` 退出码 0。
 
 ### 没做的事
 

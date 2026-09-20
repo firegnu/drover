@@ -368,7 +368,7 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     if not check_cmd:
         rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
     elif not do_check:
-        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在页面上跑（可能是整套测试）；drover done 时才跑"})
+        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在刷新时跑（可能是整套测试）；drover done 时才跑"})
     else:
         code, tail = run_check(repo, check_cmd)
         rows.append({"n": 3, "name": name3, "ok": code == 0,
@@ -770,12 +770,43 @@ def edit_queue(stdscr, pv):
     return f"编辑完 {path}"
 
 
+def key_action(k, pv, state):
+    """按了什么键 → 要做什么。**纯函数**：不碰 curses、不跑命令、不改 state。
+
+    「推进靠按键，不靠敲命令」是看板的主操作面（ROADMAP），所以这一层和 view_model 一样
+    单拆出来：喂键码就能验，尤其是 p 和 l ——它们按当前状态决定发哪一条，切反了就是真 bug。
+    tui() 那边只剩 getch 和执行。
+
+    state 里只读两样：sel（选中第几个）、n（一共几个项目）。
+    → ("sel", 新下标) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
+      None = 这个键不认识，或者压根没有选中的项目：什么都不做，**也不重跑**——重跑要跑一圈
+      git 和 corral，不能乱按一下就触发。"""
+    sel, n = state.get("sel", 0), state.get("n", 0)
+    if k in (curses.KEY_UP, ord("k")):
+        return ("sel", max(0, sel - 1))
+    if k in (curses.KEY_DOWN, ord("j")):
+        return ("sel", min(n - 1, sel + 1) if n else 0)
+    if k == ord("q"):
+        return ("quit",)
+    if k in (ord("r"), -1, curses.KEY_RESIZE):                # -1 = getch 超时，没人按键，自己刷一次
+        return ("refresh",)
+    if not pv:
+        return None
+    if k == ord("a"):
+        return ("edit",)
+    q = pv["queue"] or {}                                     # 没接队列的项目：当成没暂停、循环没开
+    return {ord("g"): ("run", ["go"]),
+            ord("n"): ("run", ["next"]),
+            ord("p"): ("run", ["resume" if q.get("paused") else "pause"]),
+            ord("l"): ("run", ["loop", "off" if q.get("loop") else "on"])}.get(k)
+
+
 def tui(stdscr, list_path):
     curses.curs_set(0)
     init_colors()
     stdscr.timeout(REFRESH_MS)
-    state = {"sel": 0, "msg": HELP}
     vm = view_model(collect(list_path))
+    state = {"sel": 0, "n": len(vm["projects"]), "msg": HELP}
     while True:
         draw(stdscr, vm, state)
         stdscr.refresh()
@@ -785,26 +816,22 @@ def tui(stdscr, list_path):
             return
         ps = vm["projects"]
         pv = ps[min(state["sel"], len(ps) - 1)] if ps else None
-        if k == ord("q"):
+        act = key_action(k, pv, state)
+        if not act:
+            continue
+        if act[0] == "quit":
             return
-        if k in (curses.KEY_UP, ord("k")):
-            state["sel"] = max(0, state["sel"] - 1)
+        if act[0] == "sel":
+            state["sel"] = act[1]
             continue
-        if k in (curses.KEY_DOWN, ord("j")):
-            state["sel"] = min(len(ps) - 1, state["sel"] + 1) if ps else 0
-            continue
-        if k == ord("a") and pv:
+        if act[0] == "edit":
             state["msg"] = edit_queue(stdscr, pv)
-        elif k in (ord("g"), ord("n"), ord("p"), ord("l")) and pv:
-            q = pv["queue"] or {}
-            state["msg"] = run_drover(pv["repo"], *{"g": ("go",), "n": ("next",),
-                                                    "p": ("resume",) if q.get("paused") else ("pause",),
-                                                    "l": ("loop", "off") if q.get("loop") else ("loop", "on")}[chr(k)])
-        elif k == ord("r"):
-            state["msg"] = HELP
-        elif k not in (-1, curses.KEY_RESIZE):
-            continue                                          # 不认识的键：不动，也不重跑
+        elif act[0] == "run":
+            state["msg"] = run_drover(pv["repo"], *act[1])
+        else:
+            state["msg"] = HELP                               # refresh：消息栏还原成按键提示
         vm = view_model(collect(list_path))                   # 刷新等于重跑
+        state["n"] = len(vm["projects"])
 
 
 # ============================================================ 外层循环的一跳
