@@ -1,121 +1,53 @@
-# bounded-adversarial-review
+# drover
 
-一个写手 agent 实现，一个评审 agent 挑错，你只在起点和分歧点出现。
+把一条任务队列，一件接一件地送进一个正在工作的 agent 主控，人不在场时也继续往前走。
 
-基于 [herdr](https://herdr.dev) 的终端多路复用能力，把只为「人坐在键盘前」设计的交互式 agent 变得可脚本、可观测。
+drover 是赶牲口走长途的人：它不决定去哪，只负责队伍一直在走。
 
-## 它解决什么
+## 三层
 
-写手写完代码，脚本和评审方决定要不要审，写手自己读报告、自己逐条表态，然后继续。你不当中介。
+| 层 | 是什么 | 认识什么 | 时间尺度 |
+|---|---|---|---|
+| [corral](https://github.com/firegnu/corral) | 基础设施 | 只认识「开 agent、送话、看状态」。不认识任何流程 | 进程级 |
+| corral-dispatch（corral 仓库里的技能） | **内循环** | corral 的命令；一件活怎么拆、交给谁、审不审 | 分钟到小时，主控在场 |
+| **drover** | **外循环** | corral 的命令；队列、闸门、什么时候叫醒、怎么记账 | 天级，无人值守 |
 
-评审不是自由讨论 —— 是一次阻塞调用：注入请求 → 评审方写文件 → 哨兵行标记完成 → 写手继续。没有回程，评审方永不主动发起任何调用。
+**只能往下依赖。** drover 对内循环的依赖薄到：内循环全靠人手工做的项目，drover 照样能跑。
 
-## 三条核心机制
+## 它做什么
 
-1. **evidence 门槛** —— 每条 blocking 必须带 `file:line` 或复现命令。无证据的判断落进 `## Suspicions`，永不阻塞。这是唯一的硬裁判。
-2. **稳定编号 + 范围冻结** —— 第一轮分配的 finding 编号永不重排，第二轮只做逐条验证（resolved / not-resolved / regressed / disputed），不重新评审。这让轮次上限真正成立。
-3. **事件驱动替代连续监控** —— 你从「系统里唯一的错误检测器」变成「等它叫你」。这一条不依赖评审质量。
+1. 往主控送一句话（任务正文）
+2. 只读核对 git，判断这件活做完没有
 
-## 为什么不是双 agent 辩论
+就这两个动作。**它一个 agent 都不开、不关、不接入**——那些是人的事。用到的 corral 命令只有三个：`send`、`status`、`ls`。
 
-2026 年多项研究表明多 agent 辩论会因谄媚性趋同而降低准确率，并快速收敛到系统性带偏的共识；额外轮次无法克服自我纠正的固有局限。本方案刻意采用不对称评审 + 外部证据裁判，而非对称讨论。
+配套的是一个只读看板（HTML，深色），显示队列、主控在干什么、分支进展、什么时候需要你。
 
-## 快速开始
+## 它不做什么
 
-```bash
-git clone <this-repo> ~/src/bar
-cd ~/src/bar && ./install.sh
+- 不做评审协议、不做 findings、不做轮次、不做证据门槛（那些是它的前身做的，见下）
+- 不开、不关、不接入任何 agent；不自动重开主控
+- 不解析主控写的自然语言结论
+- 不读 corral 的内部文件，不安装、不升级、不管理 corral
+- 不为自己的需求去改 corral 或 corral-dispatch
 
-cd <你的项目>
-herdsman-init <短名>
-```
+## 出身
 
-完整步骤见 [docs/QUICKSTART.md](docs/QUICKSTART.md)，原理与全部细节见 [docs/HANDBOOK.md](docs/HANDBOOK.md)。
+drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/herdsman) clone 而来，历史全留。那个项目是「一个写手 agent 实现，一个评审 agent 挑错」，跑在 herdr 上。
+
+分家的原因：corral 和 corral-dispatch 出现之后，评审这件事由内循环用更轻的方式承担了；herdsman 剩下的、也是它真正独一份的价值，是队列、看板和记账——那是外循环。所以这个仓库的第一个提交就是砍掉评审协议（`4545f68`），留下外循环。
+
+老仓库冻结，不再维护。要查被删掉的东西当初为什么那么设计，`git log` 全在。
+
+## 状态
+
+**建设中，现在是半成品。** `install.sh` 和 `tests/` 里还引用着已删除的文件，脚本名字还是 herdsman 时代的。
+
+- 设计和分步：[docs/ROADMAP.md](docs/ROADMAP.md)
+- 在这个仓库里干活的规矩：[AGENTS.md](AGENTS.md)
 
 ## 依赖
 
-- [herdr](https://herdr.dev) ≥ 0.8.2
-- `jq`
-- `python3`（仅 review-board，标准库）
-- `git` ≥ 2.5（worktree）
-- bash ≥ 4
-- 两个 CLI agent：一个当写手（Codex 系），一个当评审方（Claude Code 系）
-
-## 目录
-
-```
-bin/
-  request-review      写手调用的主脚本；注入、等待、哨兵判定、归档、度量
-  review-archive      手动归档工具（自动归档已内建在 request-review）
-  herdsman-init       项目初始化
-  review-board        只读看板：把交接目录和归档渲染成 ~/.review/board.html，request-review 退出时自动刷新
-config/
-  rubric.md           评审契约，全局共用，安装到 ~/.config/review/
-templates/
-  agents-section.md   常驻指令，追加到项目的 AGENTS.md / CLAUDE.md
-  brief-prompt.md     生成项目简报的提示词
-  planner-prompt.md   规划者的工作规则（可选角色：前沿模型起草计划，写手只实施）
-  request.md          请求文件示例
-  review-board.plist  看板定时生成的 launchd 任务，install.sh 装
-  pre-push.sample     可选的确定性触发 hook
-docs/
-  QUICKSTART.md       纯步骤
-  HANDBOOK.md         完整手册
-  ROADMAP.md          路线图：要改机制的大事，各带止损点
-install.sh
-```
-
-## 一次评审周期
-
-```
-你 → 写手：做 X
-写手改代码 → 按种类切 commit（代码 / 计划 / 状态记录）→ 每个 commit 后 request-review
-  脚本路由：纯文本 → SKIP；触及计划路径 → REVIEW；其余问评审方 triage（读 diff + brief，一分钟）
-  SKIP → 记 self-closed.md，结束；REVIEW → 写手写 request.md（含 kind）→ request-review
-  脚本：校验 kind、base sha → 找/建评审方 → worktree reset 到 target sha → 注入 → 等哨兵
-  评审方：读 rubric → brief → request → 按 kind 只执行一套契约 → 写 findings → 停
-  脚本：exit 0，打印路径，记 timing / precision
-写手：读 findings → 写 responses（先写后改）→ 改代码
-  accept 且改了 artifact → round 2，回到上面
-  全部 defer（仅 should/nit）→ 结束
-  有 reject / defer 了 blocking → exit 5，交给你裁决
-```
-
-## 可选：规划者
-
-写手可以是很便宜的模型，所以设计判断不该依赖它。`.review.conf` 里配了 `PLAN_KIND`
-之后，写手收到没有计划覆盖的任务时不自己起草，而是把任务写进 `plan-request.md` 运行
-`request-review plan`。脚本在仓库目录里拉起规划者（前沿模型），它决定直接做、短计划还是
-完整计划，起草计划、单独提交、自己跑 request-review 走完计划评审，再把答复写进 `plan.md`。
-写手等待期间不碰工作区；醒来后照评审过的计划实施。评审方仍是另一个会话，独立性不变。
-不配 `PLAN_KIND` 就没有这个角色。规划者和评审方来自两家模型时独立性最好，例如：
-
-```
-PLAN_KIND=codex
-PLAN_AGENT_ARGS='--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"'
-```
-
-## herdr 耦合面
-
-herdr 只出现在 `bin/request-review` 的 `transport_*` 函数里（脚本中有注释框标出）。其余全部逻辑只依赖 git 和文件系统。想换 tmux 或走非交互路线，只改这些函数。
-
-## 已知局限
-
-- **触发依赖写手自觉** —— 「要不要评审」是唯一跳过了也不报错的环节。`templates/pre-push.sample` 提供确定性补丁。
-- **无全仓库语义索引** —— 用手写的项目简报替代，需要人维护、会过期。
-- **评审通常比实现慢也更贵** —— 因为证据要求让评审方在跑代码而非读代码。压缩杠杆是写好简报和填 `test paths`，不是放松证据要求。
-- **评审对遗漏基本无能** —— 「该做但没做」在 diff 里不可见。
-
-## 度量
-
-`docs/reviews/` 下四个文件。`timing.md` 和 `skipped.md` 全自动，`precision.md` 脚本填前三项、你填「误报 ?」，`escapes.md` 全靠你。
-
-行业参照：2026 年独立评测中最好的商用 AI 评审工具精度约 49%，即大约每两条评论有一条真的导致改动。
-
-## 止损点
-
-三个月，或十个真实周期。到点问自己两个问题：误报率是多少？我还愿意读这些报告吗？
-
-如果在维护流程而不是在用它，就退回最简形态 —— 手动粘一句话给评审方，保留上面那三条核心机制。它们都不依赖任何工具。
-
-理由见 HANDBOOK 第 12 部分。
+- [corral](https://github.com/firegnu/corral)
+- `python3`（只用标准库）
+- `git`
