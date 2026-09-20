@@ -147,7 +147,7 @@ def task_text(t, again=False):
     """送进主控的那段话 —— 就是任务正文本身，和人手动粘一段任务进去一模一样。
 
     **这里绝不能出现「运行 drover …」这类话。** 老 herdsman 往写手窗格里注入的是
-    「运行 drover next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
+    「运行 review-task next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
     主控甚至不需要知道有 drover 这个东西（见 ROADMAP「全部动作」）。"""
     out = [f"TASK {t['id']}: {t['title']}"]
     if t.get("body"):

@@ -151,7 +151,7 @@ lacks 'Round 1' 'no review rounds'
 lacks '暂缓清单' 'no backlog section'
 lacks '最近归档' 'no archive section'
 lacks '等你裁决' 'no pending decisions'
-lacks 'request-review' 'no request-review anywhere on the page'
+lacks 'request-review' 'no request-review anywhere on the page'   # 老 herdsman 的命令，页面上不该再提
 
 # 「等你」栏：每个项目一栏，横幅只是汇总
 has 'id="w-zeta/repo"' 'zeta has its own 等你 section'
@@ -242,8 +242,8 @@ PY2
 echo 'PASS drover-board renders the queue, the banner and 主控 status; no review protocol left'
 echo 'PASS drover-board discovery: only ~/.drover/projects, never a directory scan'
 
-# 并发刷新：launchd 每 30 秒一次，request-review 退出时也刷一次，两者会同时跑。临时文件共用一个名字时，
-# 后到的那个改名会扑空（2026-09-11 board.err 里有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」
+# 并发刷新：launchd 的定时生成和人手动跑的会撞在一起。临时文件共用一个名字时，后到的那个改名会扑空
+# （老 herdsman 的 board.err 里 2026-09-11 有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」
 # 确定地暴露出来，再真并发跑几次。
 mkdir "${OUT}.tmp"
 python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null 2>"${TMP}/board.err" \
