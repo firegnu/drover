@@ -79,3 +79,44 @@
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-20，`m5-install` 分支完成，交主控审查。
+
+- 保留并补完上一轮两个未跟踪文件：`install.sh`、`tests/install.sh`；新增 `launchd/dev.drover.loop.plist`，补充 README 安装说明。未修改 `bin/` 或已有测试。
+- 安装前逐个预检两个命令和生成的 plist；未知普通文件、目录、断链均拒绝覆盖。相同配置重复运行不改写文件，PATH 只提示、不修改 shell rc。
+- plist 只托管 `drover loop`，`RunAtLoad` / `KeepAlive` 为真；安装脚本展开 HOME / PATH、正确转义 XML，只生成到 `~/.drover/`。启用命令仅打印，不写 LaunchAgents、不调用 launchctl。
+
+### 测试命令和结果
+
+- 半成品基线：`sh tests/install.sh`，原有 3 项通过。
+- RED：`sh tests/install.sh InstallTests.test_loop_plist_is_rendered_but_not_enabled`，退出 1，明确失败于「尚未实现 launchd 引擎模板」。实现模板和生成逻辑后，全套 4 项通过。
+- RED：`sh tests/install.sh InstallTests.test_reinstall_after_adding_bin_to_path`，退出 1，发现用户把安装目录加入 PATH 后重装误报 plist 冲突；PATH 去重后同一测试通过。
+- 最终 `sh tests/install.sh`：9 项全部通过；覆盖临时 HOME 安装、幂等、命令 / plist 冲突、特殊字符路径、旧工具和 rc 文件保持原样、模板和生成文件的 `plutil -lint`、仅打印 launchctl 命令。安装子进程树由 macOS 写入沙箱限制在测试临时目录，额外用另一个临时目录验证越界写入确实被拒绝；没有向真实 HOME 做写入探针。
+- `bash tests/criteria.sh`、`bash tests/drover.sh`、`bash tests/drover-board.sh` 全部退出 0；看板套件自带的浏览器冒烟也通过。
+- `sh -n install.sh tests/install.sh`、`plutil -lint launchd/dev.drover.loop.plist`、`git diff --check` 通过。所有命令均等待前台执行结束。
+
+### 实现时的取舍
+
+- 选绝对软链：更新仓库即可更新安装，且能用目标路径识别本次安装；代价是必须从长期保留的仓库安装，移动仓库或清理临时 worktree 会断链。
+- Label 与文件名选 `dev.drover.loop` / `dev.drover.loop.plist`；生成文件先放 `~/.drover/`，人确认后才链接进 `~/Library/LaunchAgents/` 并加载。采用用户 LaunchAgent，登录时启动，不承诺未登录时运行。
+- 日志选 `~/.drover/loop.stdout.log`、`~/.drover/loop.stderr.log`；HOME 和去重后的安装时 PATH 写入 plist，让 launchd 能找到 Python、git、corral。
+- 生成的 plist 只有内容一致才复用；其他 PATH 变化或人工修改导致不一致时拒绝覆盖，留给人核对，不引入额外安装状态文件。
+
+### 未做和待确认
+
+未在真实 HOME 执行安装，未启停 launchd，未修改全局 PATH、corral、旧 herdsman 或真实项目；未分派 agent、未合并 main、未推送。无新增设计待决；实际安装和启用服务仍须人点头，本次只提交可审查文件与隔离验证结果。
+
+## 主控审查
+
+2026-09-20，drover/main 审完，**可以合并**（合并提交 `7c64ee1`）。
+
+- **范围干净**：只动 `install.sh` / `launchd/` / `tests/install.sh` / `README.md` / 本文件。`bin/` 和已有测试一个字节没改，「不要做」那几条一条都没犯。
+- **硬要求逐条核过**：Label 是 `dev.drover.loop`，`dev.herdsman` 在整个分支里 0 处命中；`launchctl` 只出现在 `print()` 里，实际调用 0 个；装出去的命令名是 `drover` / `drover-board`，和老 herdsman 那六个不撞；只写 `~/.local/bin` 和 `~/.drover/`，没碰 `~/.config/review/`、`~/.review/`、`~/wt/`。
+- **自己重跑**：`criteria` / `drover` / `drover-board`（15 块）三个回归套件 + `tests/install.sh` 9 项，和它报的数字一致。
+- **自己实测**（不只看它的测试）：隔离 `HOME` 里跑真的 `install.sh` —— 装出两条软链、plist `plutil -lint` 合法、第二遍幂等退出 0、目标位置放个陌生文件就**非零退出且一个字节都不写**（预检在所有写入之前跑完，是全有全无，比任务文件要求的更稳）。跑之前和跑之后给真实 `$HOME`（`~/.local/bin` + `~/.drover` + `~/Library/LaunchAgents`）各拍一次哈希，**完全一致**。
+- **取舍逐条表态**：绝对软链 —— 同意，仓库一改就生效，正合现在的开发方式；Label `dev.drover.loop` —— 同意；日志放 `~/.drover/` —— 同意，那是 drover 自己的家；launchd 启用命令只打印 —— 同意，本来就是硬要求。
+- **一条「建议改」，没挡合并**：plist 把安装时那个 shell 的**整条 PATH** 烤进 `EnvironmentVariables`。好处是常驻进程一定找得到 `corral` 和 `git`；代价是①换个 PATH 再跑 `install.sh` 会因为内容对不上而拒绝（幂等只在同一条 PATH 内成立，错误信息说清楚了，失败方向安全），②如果安装时恰好激活着某个 venv，守护进程会一直用那个 venv 的 `python3`，venv 删了就起不来。要改就是把 PATH 收成固定白名单加 `~/.local/bin`，但那样可能找不到 `corral`，所以**先这样**，装的时候用干净的 shell。
+
+审查中我自己犯了个错，记在这里免得下次再踩：验「拒绝覆盖」那条时，往 `$HOME/.local/bin/drover-board` 写了个陌生文件，可那时它**已经是指向仓库的软链**，写穿了，把 worktree 里真的 `bin/drover-board` 覆盖成了一行中文。`git checkout --` 恢复了，main 和另一个 worktree 都没波及。**测装到哪里的脚本时，造"陌生文件"要先确认那个路径不是软链。**
