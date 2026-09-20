@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# review-board 冒烟测试：造三个仓库覆盖 待人裁决 / 评审中 / triage 中，再造一份归档，
-# 断言生成的 HTML 里状态、横幅、finding 行、Backlog、归档都在，且不接触真实项目。
+# review-board 冒烟测试：造八个合成仓库，断言生成的 HTML 里队列、「等你」横幅、主控状态
+# 都在，评审协议的东西一处都不剩，且不接触真实项目。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,7 +20,7 @@ mk() {   # <name>：两个提交的仓库 + .drover.conf + 交接目录
   git -C "$r" config user.name t; git -C "$r" config user.email t@example.com
   printf 'a\n' > "$r/a.py"; git -C "$r" add .; git -C "$r" commit -qm base
   printf 'a\nb = 1\n' > "$r/a.py"; git -C "$r" add .; git -C "$r" commit -qm change
-  printf 'REVIEW_DIR=%s\n' "${TMP}/$n/review" > "$r/.drover.conf"
+  printf 'HANDOFF_DIR=%s\n' "${TMP}/$n/review" > "$r/.drover.conf"
 }
 mk alpha; mk beta; mk gamma; mk delta; mk epsilon; mk zeta; mk eta; mk theta
 now=$(date +%s)
@@ -49,10 +49,10 @@ export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_GAMMA="${TMP}/gamma/repo" MOCK_EPS="$
 # 任务区 —— eta：T8 进行中（1 个提交）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
 E="${TMP}/eta"; EB=$(git -C "$E/repo" rev-parse HEAD~1); EH=$(git -C "$E/repo" rev-parse HEAD); ES=$(git -C "$E/repo" rev-parse --short HEAD)
-printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n流程：修好再审\n\n## T9 订单列表分页\n流程：不评审\n只动分页参数\n### 范围\n- 别碰 <b>旧接口</b> & 文档\n' > "$E/review/queue.md"
+printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n\n## T9 订单列表分页\n只动分页参数\n### 范围\n- 别碰 <b>旧接口</b> & 文档\n' > "$E/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T5", "title": "给导出加进度条", "body": "", "key": "给导出加进度条", "sha": "%s"}\n' "$((now - 9000))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": false}\n' "$((now - 7800))" "$EB"
-  printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "流程: 不评审", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
+  printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T7", "sha": "%s", "gate": false}\n' "$((now - 7750))" "$EH"
   printf '{"t": %s, "ev": "drop", "id": "T6", "title": "迁移到新日志库", "key": "迁移到新日志库", "reason": "和 T2 冲突"}\n' "$((now - 7700))"
   printf '{"t": %s, "ev": "start", "id": "T8", "title": "把 CSV 导入改成流式", "body": "约束：内存不超过 200MB", "key": "把 CSV 导入改成流式", "sha": "%s"}\n' "$((now - 3600))" "$EB"
@@ -156,7 +156,28 @@ lacks 'jb-finetune' 'real project leaked into fixture board'
 lacks '~/Developer' 'default discovery used'
 
 # 默认输出路径：--out 未给时写到 ~/.drover/board.html —— 不在测试里跑，避免碰真实目录
+
+# ---- 项目发现只认 ~/.drover/projects，不扫目录 ----
+# 上面所有调用都带 --projects，默认发现路径一次也没走到。这里把 HOME 指到临时目录，
+# 在老 glob（~/Developer/personal_projs/*/.drover.conf）会命中的位置埋一个仓库，
+# 断言它不会自己冒出来——「放对目录就自动接进看板」正是当初够到真 jb-finetune 的那条路。
+DH="${TMP}/dhome"
+mkdir -p "${DH}/.drover" "${DH}/Developer/personal_projs/sneaky"
+printf 'HANDOFF_DIR=%s\n' "${TMP}/alpha/review" > "${DH}/Developer/personal_projs/sneaky/.drover.conf"
+printf '%s/alpha/repo\n' "${TMP}" > "${DH}/.drover/projects"
+HOME="${DH}" HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" <<'PY2' || fail 'discovery reads only ~/.drover/projects'
+import importlib.machinery, importlib.util, os, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+assert B.PROJ_LIST == os.path.expanduser("~/.drover/projects"), B.PROJ_LIST
+found = B.discover(None)                                        # None = 走默认发现
+assert len(found) == 1 and found[0].endswith("/alpha/repo"), found
+assert not any("sneaky" in r for r in found), found             # 埋在老 glob 位置的那个不该出现
+assert not hasattr(B, "PROJ_GLOB"), "PROJ_GLOB 还在：目录扫描没删干净"
+PY2
 echo 'PASS review-board renders the queue, the banner and 主控 status; no review protocol left'
+echo 'PASS review-board discovery: only ~/.drover/projects, never a directory scan'
 
 # 并发刷新：launchd 每 30 秒一次，request-review 退出时也刷一次，两者会同时跑。临时文件共用一个名字时，
 # 后到的那个改名会扑空（2026-09-11 board.err 里有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」

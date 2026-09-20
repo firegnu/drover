@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """review-board —— 外层循环的只读看板。
 
-扫所有配了 .drover.conf 的仓库，从交接目录（REVIEW_DIR）生成一个静态 HTML，
-写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
+读 ~/.drover/projects 里登记过的仓库，从各自的交接目录（HANDOFF_DIR）生成一个静态
+HTML，写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
 
 用法:
   review-board            生成
   review-board --open     生成后用浏览器打开
   review-board --quiet    生成，不打印路径
   review-board --out P    写到 P
-  review-board --projects F   只看 F 里列出的仓库（一行一个），不做默认发现；测试用
+  review-board --projects F   改用 F 当项目清单（一行一个）；测试用
 
-项目发现: ~/Developer/personal_projs/*/.drover.conf；另可在 ~/.drover/projects 里一行一个仓库路径。
+项目发现: ~/.drover/projects，一行一个仓库路径，drover-init 会写进去。不扫目录。
 """
-import glob
 import hashlib
 import hmac
 import html
@@ -27,7 +26,6 @@ import sys
 import time
 from datetime import datetime
 
-PROJ_GLOB = os.path.expanduser("~/Developer/personal_projs/*/.drover.conf")
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 PROJ_LIST = os.path.expanduser("~/.drover/projects")
 DEFAULT_OUT = os.path.expanduser("~/.drover/board.html")
@@ -125,11 +123,15 @@ def ago(ts):
 
 # ============================================================ 解析交接文件
 def parse_conf(path):
+    """.drover.conf → {键: 值}。`#` 开头的行不匹配，天然当注释跳过。
+    HANDOFF_DIR 是人可能手写的路径，`~` 在这里统一展开，下面各处就不用再管。"""
     conf = {}
     for line in (read(path) or "").splitlines():
         m = re.match(r'\s*([A-Z_]+)=(.*)', line)
         if m:
             conf[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+    if conf.get("HANDOFF_DIR"):
+        conf["HANDOFF_DIR"] = os.path.expanduser(conf["HANDOFF_DIR"])
     return conf
 
 
@@ -247,7 +249,7 @@ def task_span(a, b):
 
 def task_view(repo, conf, p):
     """任务区要显示的东西。项目没有 queue.md（没用队列）就返回 None，页面上不出现任务区。"""
-    d = conf["REVIEW_DIR"]
+    d = conf["HANDOFF_DIR"]
     qtext = read(f"{d}/queue.md")
     if qtext is None:
         return None
@@ -288,7 +290,7 @@ def task_view(repo, conf, p):
 def task_history(repo, conf):
     """全部做完 / 放弃的任务，最新的在前，外加汇总；看板「查看全部」点开时才算。
     正在做的不算。没发出过就被放弃的，tasks.state 里没有正文，取 queue.md 里还在的原文。"""
-    d = conf["REVIEW_DIR"]
+    d = conf["HANDOFF_DIR"]
     tasks, _, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
     blocks = task_blocks(read(f"{d}/queue.md"))
     items = []
@@ -315,7 +317,7 @@ def task_history(repo, conf):
 
 
 def project_state(repo, conf):
-    d = conf["REVIEW_DIR"]
+    d = conf["HANDOFF_DIR"]
     p = {"name": os.path.basename(repo), "repo": repo, "dir": d,
          "head": git(repo, "rev-parse", "HEAD").strip(),
          "state": "空闲", "since": None, "waiting": "", "needs_me": False, "human": []}
@@ -1084,7 +1086,9 @@ def render(projects, live=None):
 
 # ============================================================ main
 def discover(list_path):
-    repos = [] if list_path else [os.path.dirname(c) for c in glob.glob(PROJ_GLOB)]
+    """只认登记过的仓库：~/.drover/projects 一行一个（drover-init 会写进去）。
+    不扫目录——「哪个目录下多了个 .drover.conf 就自动接进来」听着方便，实际是让看板去够它没被告知的东西。"""
+    repos = []
     for line in (read(list_path or PROJ_LIST) or "").splitlines():
         line = os.path.expanduser(line.strip())
         if line and not line.startswith("#") and os.path.isfile(f"{line}/.drover.conf"):
@@ -1105,7 +1109,7 @@ def collect(list_path):
     projects = []
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
-        if "REVIEW_DIR" not in conf:
+        if "HANDOFF_DIR" not in conf:
             continue
         projects.append(project_state(repo, conf))
     # 同名仓库（不同目录下的同名 checkout）用上一级目录区分，name 是页面里的唯一键
@@ -1125,7 +1129,7 @@ def live_version(list_path):
     """交接目录和 git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
     h = hashlib.sha1()
     for repo in discover(list_path):
-        d = parse_conf(f"{repo}/.drover.conf").get("REVIEW_DIR")
+        d = parse_conf(f"{repo}/.drover.conf").get("HANDOFF_DIR")
         for base in (d,):
             try:
                 for e in sorted(os.scandir(base), key=lambda e: e.name):
@@ -1285,7 +1289,7 @@ def loop_tick(list_path):
     且写手空闲时，往它的 pane 输入那句开工的话。第一次看到标记先向 herdr 核对 pane 确实是这个仓库的写手、记下 terminal / session；
     之后身份变了就不叫，标成失败留给人。叫醒失败重试 3 次。"""
     for repo in discover(list_path):
-        d = parse_conf(f"{repo}/.drover.conf").get("REVIEW_DIR")
+        d = parse_conf(f"{repo}/.drover.conf").get("HANDOFF_DIR")
         if not d or not os.path.exists(f"{d}/loop"):
             continue
         mf = f"{d}/.loop-wait"

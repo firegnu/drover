@@ -72,12 +72,14 @@ def setup():
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
     REPO = r.stdout.strip()
     conf = B.parse_conf(f"{REPO}/.drover.conf")
-    if not conf.get("REVIEW_DIR"):
-        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 REVIEW_DIR，这个仓库还没接入 drover。")
-    D = conf["REVIEW_DIR"]
+    if not conf.get("HANDOFF_DIR"):
+        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 HANDOFF_DIR，这个仓库还没接入 drover。")
+    D = conf["HANDOFF_DIR"]
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
+    # MAIN_AGENT / BRANCH_PREFIX / CHECK_CMD 的名字和含义在 D1 第 1 步定了（见 drover-init 写的模板），
+    # 读它们的代码在第 2、3 步；现在不读，免得留一堆没人用的变量。
 
 
 def sh(*args):

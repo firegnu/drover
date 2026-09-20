@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # review-task 测试：队列归人（queue.md），进度归工具（tasks.state），「做完了」由工具只读核对。
-# 造一个假仓库和交接目录，把 request-review 会留下的文件手工摆出来；review-task 不许碰 herdr。
+# 造一个假仓库和交接目录；review-task 不许碰 herdr，也不许写目标仓库一个字节。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -14,7 +14,7 @@ git -C "${REPO}" config user.name t; git -C "${REPO}" config user.email t@exampl
 printf '.drover.conf\n' > "${REPO}/.gitignore"
 printf 'a\n' > "${REPO}/a.py"
 git -C "${REPO}" add .; git -C "${REPO}" commit -qm base
-printf 'REVIEW_KIND=claude\nREVIEW_WT=%s\nREVIEW_DIR=%s\n' "${REPO}" "${D}" > "${REPO}/.drover.conf"
+printf 'HANDOFF_DIR=%s\n' "${D}" > "${REPO}/.drover.conf"
 # 假 herdr：只记录被调用过，好在最后断言 review-task 从没碰过它
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/herdr.log"\nexit 1\n' "${TMP}" > "${TMP}/bin/herdr"; chmod +x "${TMP}/bin/herdr"
 

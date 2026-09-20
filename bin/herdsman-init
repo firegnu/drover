@@ -28,8 +28,25 @@ if [ -f .drover.conf ]; then
   echo "  = .drover.conf 已存在，跳过（如需改动请手动编辑）"
 else
   cat > .drover.conf <<EOF
-REVIEW_DIR=${RDIR}
-# TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
+# drover 的项目配置。一行一个 \`键=值\`，# 开头是注释。这个文件不进 git。
+
+# 交接目录：queue.md（归人）和 tasks.state（归 drover）都在这里。
+HANDOFF_DIR=${RDIR}
+
+# 主控的 corral 名字，\`corral ls\` 里看得到的那个。drover 只对它 send / status，
+# 不开、不关、不接入。留空就是还没接上 corral，drover 不会送任务。
+MAIN_AGENT=
+
+# 里程碑分支前缀。完成判据第 2 条按 \`git branch --list '<前缀>-*'\` 找分支，
+# 再逐个问它合进 main 了没有。留空 = 这个项目不用里程碑分支。
+# 注意：前缀填错和「这件活没建分支」，从 git 那边看一模一样，都会让第 2 条空过去。
+BRANCH_PREFIX=
+
+# 默认验收命令。完成判据第 3 条跑它，退出码 0 才算过。队列条目可以覆盖。
+# 例：CHECK_CMD=uv run pytest -q
+CHECK_CMD=
+
+# 放行模式：1（默认）每个任务做完等人 go；0 自动模式，做完直接发下一个。
 # TASK_GATE=1
 EOF
   echo "  ✓ 写好 .drover.conf"
