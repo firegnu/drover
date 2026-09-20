@@ -103,7 +103,7 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 0. **收拾半成品**（先做）：`install.sh` 和 `tests/` 里引用已删文件的地方；脚本改名（`herdsman-init` → `drover-init`，`review-task` / `review-board` / `review-map` 的名字一并定；`REVIEW_DIR`、`.review.conf` 这些 herdsman 时代的名字也要定）。改名是机械活，但**名字一旦定下就到处都是**，先定再动。
 1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_GLOB`（里程碑分支的匹配模式，第 2 步从 `BRANCH_PREFIX` 改过来的，理由见完成判据那一节）、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
 2. **完成判据**：三条的只读核对；队列条目覆盖默认判据的写法；「等人」的识别。配合验证计划第 1 层的合成测试一起写。
-3. **`review-task` 换传输层**：`HERDR_PANE_ID` → corral 名字 + 实例编号；叫醒改送任务正文；`done` 的核对换成新判据。
+3. **`review-task` 换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：`review-task` 现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `review-task` 和 `drover` 这两个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
 4. **看板改造**：按上面的留 / 改 / 删；`loop_tick` 的 `herdr agent get/prompt` → `corral status/send`。
 5. **安装方式和文档重写**：`install.sh` 和两个 launchd plist 已经在 `9a48774` 之后删掉了（它们会顶掉正在跑的老 herdsman），要写新的先定第 1 步那些名字和路径，Label 不能再叫 `dev.herdsman.*`。文档方面：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 

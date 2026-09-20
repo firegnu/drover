@@ -25,26 +25,32 @@ mk() {   # <name>：两个提交的仓库 + .drover.conf + 交接目录
 mk alpha; mk beta; mk gamma; mk delta; mk epsilon; mk zeta; mk eta; mk theta
 now=$(date +%s)
 
-# 假 herdr：beta 的评审方 blocked，gamma 的在 working，其余 pane 不存在
-cat > "${TMP}/herdr" <<'MOCK'
+# 假 corral：只实现 send / status / ls 三个命令——drover 用到的就这三个（AGENTS.md 硬规矩）。
+# alpha 的主控在 working（带 last_tool / turn_started），zeta 的 blocked，theta 的状态由文件控制。
+cat > "${TMP}/corral" <<'MOCK'
 #!/usr/bin/env bash
-case "$1 $2 $3" in
-  'agent get beta-pane')  printf '{"result":{"agent":{"agent_status":"blocked"}}}\n';;
-  'agent get gamma-pane') printf '{"result":{"agent":{"agent_status":"working"}}}\n';;
-  'agent get eps-plan')   printf '{"result":{"agent":{"agent_status":"working"}}}\n';;
-  'agent list ') printf '{"result":{"agents":[{"agent":"codex","agent_status":"working","cwd":"%s","pane_id":"alpha-writer","terminal_title_stripped":"repo"},{"agent":"claude","agent_status":"working","cwd":"%s","pane_id":"gamma-pane","terminal_title_stripped":"Triage request"},{"agent":"claude","agent_status":"working","cwd":"%s","pane_id":"eps-plan","name":"pl-repo-","terminal_title_stripped":"Plan request"},{"agent":"codex","agent_status":"blocked","cwd":"%s","pane_id":"zeta-writer","terminal_title_stripped":"repo"}]}}\n' "${MOCK_ALPHA}" "${MOCK_GAMMA}" "${MOCK_EPS}" "${MOCK_ZETA}";;
-  'agent read eps-plan') printf '✻ Drafting… (2m 01s · esc to interrupt)\n';;
-  'agent read alpha-writer') printf 'some output\n• Working (12m 03s • esc to interrupt)\n\n› Ask Codex\n';;
-  'agent read gamma-pane') printf '✻ Reviewing diff… (3m 10s · esc to interrupt)\n\n❯\n';;
-  'agent get theta-writer') printf '{"result":{"agent":{"pane_id":"theta-writer","terminal_id":"%s","agent_status":"%s","cwd":"%s","agent_session":{"value":"s1"}}}}\n' \
-      "$(cat "${MOCK_DIR}/theta.term" 2>/dev/null || echo term_t)" "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)" "${MOCK_THETA}";;
-  'agent prompt theta-writer') printf '%s\n' "$4" >> "${MOCK_DIR}/prompts.log";;
-  *) printf '{"error":{"code":"agent_not_found"}}\n' >&2; exit 1;;
+st() {   # <name> <state> [title]
+  printf '{"ok":true,"name":"%s","instance":1,"kind":"claude","state":"%s","title":"%s","last_tool":"Edit","turn_started":%s,"last_input_source":"send","idle_for":3}\n' \
+    "$1" "$2" "${3:-}" "$(( $(date +%s) - 723 ))"
+}
+case "$1 $2" in
+  'status alpha/main') st alpha/main working;;
+  'status zeta/main')  st zeta/main blocked;;
+  'status theta/main') st theta/main "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)";;
+  'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"}]}\n' "${MOCK_ALPHA}";;
+  'send theta/main') printf '%s\n' "$3" >> "${MOCK_DIR}/prompts.log"
+                     printf '{"ok":true,"name":"theta/main","instance":1,"confirmed":true}\n';;
+  *) printf '{"ok":false,"error":"not_found"}\n'; exit 2;;
 esac
 MOCK
-chmod +x "${TMP}/herdr"
-export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_GAMMA="${TMP}/gamma/repo" MOCK_EPS="${TMP}/epsilon/repo" MOCK_ZETA="${TMP}/zeta/repo" MOCK_THETA="${TMP}/theta/repo" MOCK_DIR="${TMP}"
-# zeta：主控卡在审批对话框（假 herdr 里 blocked）→「等你」里出现一条 STOP
+chmod +x "${TMP}/corral"
+export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_DIR="${TMP}"
+export DROVER_CORRAL_BIN="${TMP}/corral"
+# 谁的 MAIN_AGENT 配了什么：看板按名字问 corral status
+printf 'MAIN_AGENT=alpha/main\n' >> "${TMP}/alpha/repo/.drover.conf"
+printf 'MAIN_AGENT=zeta/main\n'  >> "${TMP}/zeta/repo/.drover.conf"
+printf 'MAIN_AGENT=theta/main\n' >> "${TMP}/theta/repo/.drover.conf"
+# zeta：主控卡在审批对话框（假 corral 里 blocked）→「等你」里出现一条 STOP
 
 # 任务区 —— eta：T8 进行中（1 个提交）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
@@ -65,16 +71,18 @@ printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\
 : > "$TH/review/paused"
 
 printf '%s/alpha/repo\n%s/beta/repo\n%s/gamma/repo\n%s/delta/repo\n%s/epsilon/repo\n%s/zeta/repo\n%s/eta/repo\n%s/theta/repo\n# comment\n%s/nonexistent\n' "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" > "${TMP}/projects"
-HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null
+python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null
 
 # 项目发现与去重命名（三个 checkout 都叫 repo，用上级目录区分）
 for n in alpha beta gamma delta epsilon zeta eta theta; do has "data-p=\"$n/repo\"" "project $n listed"; done
 has '项目 · 8' 'project count'
 has '<div class="mast"><span class="brand">Review board</span>' 'masthead'
-has '<b>主控</b> codex' 'masthead names the running 主控'
+has '<b>主控</b> claude' 'masthead names the kind corral status reports'
 
-# 活动条：主控在干什么，来自 herdr agent list 的状态与标题，working 时再读 pane 最后那句
-has '<span class="dot st-working"></span><b>写手</b><span class="st st-working">working</span><span class="activity">Working (12m 03s)</span>' 'alpha 主控 chip with activity'
+# 活动条：全部来自 corral status 的结构化字段（state / last_tool / turn_started）。
+# 老的做法是跑 herdr agent read、再从输出里正则抠「Working (12m 03s · esc to interrupt)」那句话；
+# corral 契约明写 read「只作排查用，不要解析」，所以那段整个删了，换成这两个字段。
+has '<span class="dot st-working"></span><b>写手</b><span class="st st-working">working</span><span class="activity">正在调 Edit · 这一轮 12m</span>' 'alpha 主控 chip shows the tool and the turn length'
 # 按钮的样式名是 act、默认隐藏；agent 正在做什么的那段文字不能用同一个名字，否则被一起藏掉
 lacks '<span class="act">' 'crew activity text is not styled as a hidden button'
 
@@ -94,7 +102,7 @@ lacks 'request-review' 'no request-review anywhere on the page'
 
 # 「等你」栏：每个项目一栏，横幅只是汇总
 has 'id="w-zeta/repo"' 'zeta has its own 等你 section'
-has '主控停在审批或提问对话框，去看 pane zeta-writer' 'blocked 主控 listed'
+has '主控 zeta/main 停在审批或提问对话框' 'blocked 主控 listed by its corral name'
 has 'class="proj needs" data-p="zeta/repo"' 'zeta highlighted in the sidebar'
 
 # 任务区：只有接了队列的项目才有；三栏、阶段条、手写未编号、放弃带原因、做完等放行
@@ -112,7 +120,7 @@ has '<span class="mode gate">放行模式</span>' 'release-mode chip'
 has '<span class="mode paused">暂停中</span>' 'paused chip replaces the mode chip'
 has 'T3 补登录接口的回归测试（带&quot;引号&quot;） 做完了' 'awaiting release listed as waiting on you, title escaped'
 has 'review-task go' 'the waiting item says how to release'
-has '运行 review-task next，按它的输出办' 'the waiting item says the sentence a fresh writer needs'
+has '下一件会自动送进主控' 'the waiting item says what happens after release'
 has '<span class="badge me">等你放行</span>' 'awaiting release badge'
 has 'class="card s-me"' 'finished card turns crimson while it waits'
 has '<li class="now release">收尾<span class="x">核对通过 · 等你放行</span></li>' 'last step waits for release'
@@ -165,7 +173,7 @@ DH="${TMP}/dhome"
 mkdir -p "${DH}/.drover" "${DH}/Developer/personal_projs/sneaky"
 printf 'HANDOFF_DIR=%s\n' "${TMP}/alpha/review" > "${DH}/Developer/personal_projs/sneaky/.drover.conf"
 printf '%s/alpha/repo\n' "${TMP}" > "${DH}/.drover/projects"
-HOME="${DH}" HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" <<'PY2' || fail 'discovery reads only ~/.drover/projects'
+HOME="${DH}" python3 - "${BOARD}" <<'PY2' || fail 'discovery reads only ~/.drover/projects'
 import importlib.machinery, importlib.util, os, sys
 sys.dont_write_bytecode = True
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
@@ -183,12 +191,12 @@ echo 'PASS review-board discovery: only ~/.drover/projects, never a directory sc
 # 后到的那个改名会扑空（2026-09-11 board.err 里有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」
 # 确定地暴露出来，再真并发跑几次。
 mkdir "${OUT}.tmp"
-HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null 2>"${TMP}/board.err" \
+python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null 2>"${TMP}/board.err" \
   || fail "board writes through a shared fixed temp name: $(tail -1 "${TMP}/board.err")"
 rmdir "${OUT}.tmp"
 pids=""
 for i in 1 2 3 4; do
-  HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null 2>>"${TMP}/board.err" &
+  python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null 2>>"${TMP}/board.err" &
   pids="${pids} $!"
 done
 for p in ${pids}; do wait "$p" || fail "a concurrent board run failed: $(tail -1 "${TMP}/board.err")"; done
@@ -203,7 +211,7 @@ cat > "${TMP}/notifier" <<EOF
 printf '%s\n' "\$*" >> "${TMP}/notify.log"
 EOF
 chmod +x "${TMP}/notifier"
-board() { HERDR_BIN_PATH="${TMP}/herdr" REVIEW_NOTIFY_BIN="$1" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" "${@:2}" >/dev/null; }
+board() { REVIEW_NOTIFY_BIN="$1" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" "${@:2}" >/dev/null; }
 nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr -d ' '; else echo 0; fi; }
 board "${TMP}/notifier"
 [ "$(nlines)" = 0 ] || fail 'the board must not notify without --notify'
@@ -230,7 +238,7 @@ echo 'PASS 等你 notifications: only with --notify, once per project, again whe
 lacks '<meta name="rb-token"' 'the static board carries no token'
 lacks 'data-act=' 'the static board carries no action buttons'
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-HERDR_BIN_PATH="${TMP}/herdr" python3 "${BOARD}" serve --projects "${TMP}/projects" --port "${PORT}" > /dev/null 2> "${TMP}/serve.err" &
+python3 "${BOARD}" serve --projects "${TMP}/projects" --port "${PORT}" > /dev/null 2> "${TMP}/serve.err" &
 SERVE=$!
 trap 'kill "${SERVE}" 2>/dev/null; rm -rf "${TMP}"' EXIT
 U="http://127.0.0.1:${PORT}"
@@ -265,7 +273,7 @@ tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "drop", "id": "T9".*不
 [ "$(post /api/go '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'go refused when nothing waits for release'
 [ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'release the finished task'; }
 tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go", "id": "T3"' || fail 'go goes through review-task'
-grep -q '继续' "${TMP}/resp" || fail 'go passes on what to tell the writer'
+grep -q 'review-task next' "${TMP}/resp" || fail 'go passes on how the next one gets sent'
 [ "$(curl -s "${U}/v")" != "${V1}" ] || fail 'the version changes after the queue state changes'
 echo 'PASS review-board serve: token, local Host/Origin only, release and drop via review-task, in-progress task not droppable'
 
@@ -392,7 +400,7 @@ grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="1"' "${TMP}/li
 [ "$(post /api/loop '{"project":"eta/repo","on":false}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'loop off for eta'
 echo 'PASS review-board serve: hold toggle only while looping, via review-task hold, marked on the board, guarded by the fingerprint'
 
-# ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、herdr；页面顶栏有状态圆点
+# ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、corral；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
 lacks 'class="hp"' 'the static board has no health pill'
 grep -qF 'class="golive"' "${TMP}/live.html" && fail 'the live board does not link to itself'
@@ -400,18 +408,18 @@ grep -qF 'class="golive"' "${TMP}/live.html" && fail 'the live board does not li
 python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect refreshes NOW for every page'
 import importlib.machinery, importlib.util, os, sys, time
 sys.dont_write_bytecode = True
-os.environ["HERDR_BIN_PATH"] = "/nonexistent"
+os.environ["DROVER_CORRAL_BIN"] = "/nonexistent"
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
 B.NOW = 0
 B.collect(sys.argv[2])
 assert abs(B.NOW - time.time()) < 60, B.NOW
 PY2
-# 同理，herdr 的 agent 列表每页重查：常驻服务里缓存一次，主控的状态就永远停在服务启动那刻
-HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect re-reads herdr agents for every page'
+# 同理，corral 的 agent 列表每页重查：常驻服务里缓存一次，主控的状态就永远停在服务启动那刻
+python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail 'collect re-reads corral agents for every page'
 import importlib.machinery, importlib.util, sys
 sys.dont_write_bytecode = True
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
-B._AGENTS = []                                                  # 假装上一页时 herdr 什么都没有
+B._AGENTS = []                                                  # 假装上一页时 corral 什么都没有
 alpha = next(p for p in B.collect(sys.argv[2]) if p["name"] == "alpha/repo")
 assert (alpha["agents"].get("writer") or {}).get("status") == "working", alpha["agents"]
 PY2
@@ -428,15 +436,16 @@ case "\$2" in
   *) exit 113;;
 esac
 EOF
-cat > "${TMP}/hbin/herdr" <<EOF
+cat > "${TMP}/hbin/corral" <<EOF
 #!/usr/bin/env bash
-[ -f "${TMP}/herdr.down" ] && exit 1
-exec "${TMP}/herdr" "\$@"
+[ -f "${TMP}/corral.down" ] && exit 1
+exec "${TMP}/corral" "\$@"
 EOF
-chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/herdr"
+chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/corral"
 printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
 HP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" HERDR_BIN_PATH="${TMP}/hbin/herdr" REVIEW_LOOP_TICK=1 \
+HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" REVIEW_LOOP_TICK=1 \
+  DROVER_CORRAL_BIN="${TMP}/hbin/corral" \
   python3 "${TMP}/code/review-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
 SERVE2=$!
 trap 'kill "${SERVE}" "${SERVE2}" 2>/dev/null; rm -rf "${TMP}"' EXIT
@@ -447,7 +456,7 @@ health() {   # <期望的 level> <检查项名> <true|false> [detail 里应有�
 import json, sys
 h = json.load(open(sys.argv[1], encoding="utf-8")); level, name, ok = sys.argv[2:5]; want = sys.argv[5] if len(sys.argv) > 5 else ""
 names = [i["name"] for i in h["items"]]
-assert names == ["本机服务", "服务守护（launchd）", "看板定时生成", "生成出错记录", "herdr"], names
+assert names == ["本机服务", "服务守护（launchd）", "看板定时生成", "生成出错记录", "corral"], names
 it = next(i for i in h["items"] if i["name"] == name)
 assert h["level"] == level and it["ok"] == (ok == "true") and want in it["detail"], (h["level"], it)
 PY2
@@ -462,7 +471,7 @@ health ok 生成出错记录 true '上次出错'
 python3 -c 'import os,sys,time; t=time.time()-900; os.utime(sys.argv[1], (t, t))' "${TMP}/home/.drover/board-notified.json"
 health warn 看板定时生成 false '通知可能停了'
 printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
-: > "${TMP}/herdr.down"; health warn herdr false '连不上'; rm "${TMP}/herdr.down"
+: > "${TMP}/corral.down"; health warn corral false '连不上'; rm "${TMP}/corral.down"
 : > "${TMP}/serve.unloaded"; health warn '服务守护（launchd）' false '不会自动拉起'; rm "${TMP}/serve.unloaded"
 : > "${TMP}/serve.other"; health warn '服务守护（launchd）' false '另一个进程'; rm "${TMP}/serve.other"
 health ok '服务守护（launchd）' true '已由 launchd 托管'
@@ -472,14 +481,16 @@ health warn 本机服务 false '旧代码'
 # ---- agent 状态随轮询更新：GET /crew 返回各项目的 agent 状态块，页面每 8 秒换上，不用等整页刷新
 grep -qF 'data-crew="alpha/repo"' "${TMP}/live.html" || fail 'the live page has a crew slot per project'
 curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
-python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" in c["alpha/repo"] and "Working (12m 03s)" in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew shows the working writer'; }
-: > "${TMP}/herdr.down"; sleep 3
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" in c["alpha/repo"] and "正在调 Edit" in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew shows the working 主控'; }
+: > "${TMP}/corral.down"; sleep 3
 curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
-python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows herdr without a page reload'; }
-rm "${TMP}/herdr.down"
-echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and herdr; NOW and agents refreshed; crew polled'
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows corral without a page reload'; }
+rm "${TMP}/corral.down"
+echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed; crew polled'
 
-# ---- 外层循环：页面开关；服务看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）、写手空闲、pane 身份没变时，往写手 pane 输入那句话
+# ---- 外层循环：页面开关；服务看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次
+# review-task next，由它把**任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句
+# 「运行 review-task next」——内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
 curl -s "http://127.0.0.1:${HP}/" > "${TMP}/live2.html"
 TOKEN2=$(sed -n 's/.*<meta name="rb-token" content="\([^"]*\)".*/\1/p' "${TMP}/live2.html")
 grep -qF 'data-act="loop" data-p="theta/repo" data-on="0"' "${TMP}/live2.html" || fail 'loop switch (off) on the task board'
@@ -487,61 +498,35 @@ lpost() { curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: a
 [ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 200 ] || { cat "${TMP}/resp"; fail 'turn the loop on from the page'; }
 [ -f "${TMP}/theta/review/loop" ] || fail 'the page switch goes through review-task loop on'
 [ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 409 ] || fail 'loop on refused when already on'
-mark() { printf '{"reason": "empty", "pane": "theta-writer", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
+mark() { printf '{"reason": "empty", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
 waitfor() { for _ in $(seq 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
+[ "$(lpost /api/go '{"project":"theta/repo"}')" = 200 ] || true     # T3 还等着放行，先放掉
 rm -f "${TMP}/prompts.log"; mark
-waitfor '[ -s "${TMP}/prompts.log" ]' || { cat "${TMP}/serve2.err"; fail 'the service wakes the idle writer when a task is pending'; }
-grep -qx '运行 review-task next，按它的输出办' "${TMP}/prompts.log" || fail 'the wake prompt is the kickoff sentence'
-waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared after a successful wake'
-# 暂停中：不叫
-rm -f "${TMP}/prompts.log"; : > "${TMP}/theta/review/paused"; mark; sleep 2.5
-[ ! -s "${TMP}/prompts.log" ] || fail 'no wake while paused'
-rm "${TMP}/theta/review/paused"
-waitfor '[ -s "${TMP}/prompts.log" ]' || fail 'resuming lets the wake through'
-waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared after the wake'
-# 叫醒期间写手又停下、写了新标记：服务不能把新标记当旧的删掉（否则写手停着再没人叫）
-HERDR_BIN_PATH="${TMP}/herdr" python3 - "${BOARD}" "${TMP}/projects" "${TMP}" <<'PY2' || fail 'a marker rewritten during the wake survives'
-import importlib.machinery, importlib.util, json, os, sys
-sys.dont_write_bytecode = True
-l = importlib.machinery.SourceFileLoader("rb", sys.argv[1]); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
-mf = os.path.join(sys.argv[3], "theta", "review", ".loop-wait")
-open(os.path.join(sys.argv[3], "theta", "review", "loop"), "w").close()
-json.dump({"reason": "empty", "pane": "theta-writer", "t": 1}, open(mf, "w"))
-real_run = B.subprocess.run
-def run(cmd, *a, **k):
-    r = real_run(cmd, *a, **k)
-    if cmd[1:3] == ["agent", "prompt"]:               # 注入的同时，写手又停下写了新标记
-        json.dump({"reason": "empty", "pane": "theta-writer", "t": 2}, open(mf, "w"))
-    return r
-B.subprocess.run = run
-B.HERDR = os.environ["HERDR_BIN_PATH"]
-B.loop_tick(sys.argv[2])
-assert os.path.exists(os.path.join(sys.argv[3], "prompts.log")), "the wake did not happen"
-assert os.path.exists(mf) and json.load(open(mf))["t"] == 2, "new marker was deleted"
-os.remove(mf)
-PY2
-# 写手在忙时先记下 pane 身份；身份变了（换了 terminal）就不叫，标成失败留给人
-rm -f "${TMP}/prompts.log"; echo working > "${TMP}/theta.status"; mark
-waitfor 'grep -q terminal "${TMP}/theta/review/.loop-wait"' || fail 'the service records the writer pane identity'
-echo term_other > "${TMP}/theta.term"; echo idle > "${TMP}/theta.status"
-waitfor 'grep -q "\"failed\": true" "${TMP}/theta/review/.loop-wait"' || { cat "${TMP}/theta/review/.loop-wait"; fail 'a changed pane identity is marked failed'; }
-[ ! -s "${TMP}/prompts.log" ] || fail 'no wake into a pane whose identity changed'
-curl -s "http://127.0.0.1:${HP}/" | grep -q '自动叫醒失败' || fail 'the task board says the wake failed'
-rm -f "${TMP}/theta.term" "${TMP}/theta.status"
-# 循环关：标记作废，不叫
+waitfor '[ -s "${TMP}/prompts.log" ]' || { cat "${TMP}/serve2.err"; cat "${TMP}/theta/review/.loop.log" 2>/dev/null; fail 'the loop sends the next task when one is pending'; }
+# 送出去的是任务正文本身，不是「运行 review-task …」那种指令
+grep -q 'T4' "${TMP}/prompts.log" || { cat "${TMP}/prompts.log"; fail 'the sent text is the task itself'; }
+grep -q 'review-task' "${TMP}/prompts.log" && { cat "${TMP}/prompts.log"; fail 'the sent text must never tell the agent to run review-task'; }
+waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared once the task went out'
+# 暂停中：不发
+[ "$(lpost /api/pause '{"project":"theta/repo","on":true}')" = 200 ] || true
+rm -f "${TMP}/prompts.log"; mark; sleep 2.5
+[ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent while paused'
+[ "$(lpost /api/pause '{"project":"theta/repo","on":false}')" = 200 ] || true
+# 循环关：标记作废，不发
 [ "$(lpost /api/loop '{"project":"theta/repo","on":false}')" = 200 ] || fail 'turn the loop off from the page'
-mark; sleep 2.5
-[ ! -s "${TMP}/prompts.log" ] || fail 'no wake with the loop off'
-echo 'PASS review-board serve: loop switch; wakes the idle writer when work is pending, not while paused, not into a changed pane, not with the loop off'
+rm -f "${TMP}/prompts.log"; mark; sleep 2.5
+[ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent with the loop off'
+rm -f "${TMP}/theta/review/.loop-wait"
+echo 'PASS review-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
 
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
 # 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。
 if command -v node >/dev/null; then
   # 给冒烟测试准备一个「做完等放行」的任务：theta 领 T4、提交一笔（判据第 1 条要 main 前进）、做完
   rm -f "${TMP}/theta/review/loop" "${TMP}/theta/review/.loop-wait" "${TMP}/theta/review/paused"
-  ( cd "${TMP}/theta/repo" && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" next >/dev/null \
+  ( cd "${TMP}/theta/repo" && python3 "$(dirname "${BOARD}")/review-task" next >/dev/null \
     && printf 'flag\n' >> a.py && git add a.py && git commit -qm 'T4 work' \
-    && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
+    && python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
   grep -q '"ev": "done", "id": "T4".*"gate": true' "${TMP}/theta/review/tasks.state" || fail 'smoke setup: theta T4 waits for release'
   set +e; node "${ROOT}/tests/browser-smoke.mjs" "${U}/" "${SERVE}"; SMOKE=$?; set -e
   if [ "${SMOKE}" = 77 ]; then :

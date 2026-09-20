@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # review-task 测试：队列归人（queue.md），进度归工具（tasks.state），「做完了」由工具只读核对。
-# 造一个假仓库和交接目录；review-task 不许碰 herdr，也不许写目标仓库一个字节。
+# 造一个假仓库和交接目录 + 一个假 corral；review-task 只用 send / status / ls，也不许写目标仓库一个字节。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -15,11 +15,40 @@ printf '.drover.conf\n' > "${REPO}/.gitignore"
 printf 'a\n' > "${REPO}/a.py"
 git -C "${REPO}" add .; git -C "${REPO}" commit -qm base
 printf 'HANDOFF_DIR=%s\n' "${D}" > "${REPO}/.drover.conf"
-# 假 herdr：只记录被调用过，好在最后断言 review-task 从没碰过它
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/herdr.log"\nexit 1\n' "${TMP}" > "${TMP}/bin/herdr"; chmod +x "${TMP}/bin/herdr"
+# 假 corral：把 send 的收件人和正文记下来，退出码由 ${TMP}/corral.code 控制（默认 0 = 送达）。
+# 只实现 send / status / ls 三个命令——drover 用到的就这三个（AGENTS.md 硬规矩）。
+cat > "${TMP}/bin/corral" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$1" >> "${TMP}/cmds"     # 记下用过哪些子命令，最后断言只用了 send / status / ls
+case "\$1" in
+  send)
+    printf '%s\n' "\$2" >> "${TMP}/sent.to"
+    printf '%s\n--8<--\n' "\$3" >> "${TMP}/sent.txt"
+    c=\$(cat "${TMP}/corral.code" 2>/dev/null || true); [ -n "\$c" ] || c=0
+    case "\$c" in
+      0) printf '{"ok":true,"name":"%s","instance":1,"confirmed":true,"merged_with_draft":false}\n' "\$2";;
+      7) printf '{"ok":false,"error":"not_idle","state":"working"}\n';;
+      8) printf '{"ok":false,"error":"human_active"}\n';;
+      3) printf '{"ok":false,"error":"not_delivered"}\n';;
+      2) printf '{"ok":false,"error":"not_found"}\n';;
+    esac
+    exit "\$c";;
+  status)
+    s=\$(cat "${TMP}/corral.state" 2>/dev/null || echo idle)
+    [ "\$s" = "gone" ] && { printf '{"ok":false,"error":"not_found"}\n'; exit 2; }
+    printf '{"ok":true,"name":"%s","instance":1,"kind":"claude","state":"%s","title":"t","last_tool":"Edit","turn_started":%s,"last_input_source":"send"}\n' "\$2" "\$s" "\$(date +%s)"
+    exit 0;;
+  ls) printf '{"ok":true,"agents":[]}\n'; exit 0;;
+esac
+printf '{"ok":false,"error":"usage"}\n'; exit 1
+EOF
+chmod +x "${TMP}/bin/corral"
+sent_to() { tail -1 "${TMP}/sent.to" 2>/dev/null; }
+sent_txt() { awk 'BEGIN{RS="--8<--\n"} {b=$0} END{printf "%s", b}' "${TMP}/sent.txt" 2>/dev/null; }
+# 大部分用例不配 MAIN_AGENT：next 就只把任务正文打出来（内循环全靠人手工做的项目照样能用）
 
 fail() { echo "FAIL: $*" >&2; echo "--- 最后一次输出 ---" >&2; cat "${TMP}/out" >&2 || true; exit 1; }
-rt() { set +e; ( cd "${REPO}" && PATH="${TMP}/bin:${PATH}" env -u HERDR_PANE_ID python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }   # 测试可能跑在 herdr 里：默认当作不在
+rt() { set +e; ( cd "${REPO}" && DROVER_CORRAL_BIN="${TMP}/bin/corral" python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
 has() { grep -qF -e "$1" "${TMP}/out" || fail "$2 (missing: $1)"; }
 code() { [ "${RC}" = "$1" ] || fail "$2: exit ${RC}, expected $1"; }
 edit() { mkdir -p "$(dirname "${REPO}/$1")"; printf '%s\n' "$2" >> "${REPO}/$1"; git -C "${REPO}" add "$1"; git -C "${REPO}" commit -qm "$2"; }
@@ -36,12 +65,21 @@ import sys; p = sys.argv[1]; s = open(p, encoding='utf-8').read(); i = s.index('
 open(p, 'w', encoding='utf-8').write(s[:i] + '## 修一下登录页的超时\n\n' + s[i:])
 PY
 
-# ---- next：发第一个没做的；给手写的补编号；记下开始的 sha；任务文本自带交差办法 ----
+# ---- next：发第一个没做的；给手写的补编号；记下开始时 main 的 sha ----
 rt next; code 0 'next issues a task'
 has 'TASK T3: 修一下登录页的超时' 'hand-written block goes first and is numbered after the highest ID'
-has 'review-task done T3' 'the task text says how to report done'
+# 送出去的是任务正文本身。里面绝不能有「运行 review-task …」——那是内循环依赖外循环，
+# 正是老 herdsman 注入 LOOP_PROMPT 的做法，ROADMAP 明确要求改掉。
+grep -q 'review-task' "${TMP}/out" && fail 'the task text must never tell the agent to run review-task'
+grep -q 'drover' "${TMP}/out" && fail 'the task text must not mention drover at all'
 grep -q "$(hsha)" "${D}/tasks.state" || fail 'start sha recorded in tasks.state'
-rt next; code 0 'next again'; has 'TASK T3: 修一下登录页的超时' 'next re-issues the in-progress task so a fresh writer can take over'
+python3 -c 'import json,sys
+e=[json.loads(l) for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
+s=[x for x in e if x["ev"]=="start"][-1]
+assert s["main"] == sys.argv[2], (s, sys.argv[2])' "${D}/tasks.state" "$(git -C "${REPO}" rev-parse main)" \
+  || fail 'the start event records main, not HEAD'
+rt next; code 0 'next again'; has 'TASK T3: 修一下登录页的超时' 'next re-issues the in-progress task'
+[ "$(grep -c '"ev": "start", "id": "T3"' "${D}/tasks.state")" = 1 ] || fail 're-issuing must not record a second start'
 
 # ---- done：编号不对就拒绝；main 没前进就拒绝（判据第 1 条）；放行模式下停下等人 ----
 rt done T1; code 2 'done for a task that is not in progress'
@@ -52,7 +90,7 @@ has '✓ 1 main 前进了' 'the passing criteria are printed'
 has '— 2 里程碑分支都合进去了' 'a skipped criterion is shown as skipped, not as passed'
 rt next; code 8 'next before release'; has '等人放行' 'next refuses until released'
 rt go; code 0 'go'
-has '运行 review-task next，按它的输出办' 'go says the sentence a fresh writer needs'
+has 'review-task next' 'go says how to send the next one'
 rt go; code 2 'go when nothing waits for release'
 rt next; code 0 'next after release'; has 'TASK T1: 给导出加进度条' 'the finished hand-written block is not issued again'
 
@@ -164,8 +202,8 @@ rt drop --pos 9 "x"; code 2 'a position past the queue'
 rt list; has '手写戊' 'list shows the dropped unnumbered task'
 rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues the task now at the front'
 
-# ---- 外层循环：loop 文件在交接目录，默认没有 = 关。开着时做完直接领下一个（不管 TASK_GATE），
-# 停在队列那一步（队列空 / 暂停）时留下 .loop-wait 唤醒标记（原因 + 写手 pane，由看板服务去叫醒）；review-task 自己不碰 herdr
+# ---- 外层循环：loop 文件在交接目录，默认没有 = 关。开着时做完直接发下一件（不管 TASK_GATE），
+# 停在队列那一步（队列空 / 暂停 / 主控在忙）时留下 .loop-wait，条件满足后由看板服务再跑一次 next
 [ ! -f "${D}/loop" ] || fail 'the loop is off by default'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 grep -v '^TASK_GATE=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"   # 回到放行模式
@@ -180,12 +218,11 @@ while grep -q '^TASK ' "${TMP}/out"; do
   TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out"); rt done "${TID}"
 done
 code 8 'the loop runs until the queue is empty'; has '队列空了' 'says the queue is empty'
-[ ! -f "${D}/.loop-wait" ] || fail 'no wake marker outside herdr (no HERDR_PANE_ID)'
-has '叫醒' 'says why it cannot be woken automatically'
-rt_pane() { set +e; ( cd "${REPO}" && PATH="${TMP}/bin:${PATH}" HERDR_PANE_ID=w9:p3 python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
+# 标记里只有原因和时间：送给谁看配置的 MAIN_AGENT，不再记 pane，也不再核对 pane 身份
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="empty" and m["t"] and "pane" not in m, m' "${D}/.loop-wait" || fail 'the wake marker records the reason only'
+rt_pane() { rt "$@"; }        # 老的「在不在写手窗格里」没有意义了：review-task 只在 drover 这边跑
 rt_pane next; code 8 'empty queue stops'
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="empty" and m["pane"]=="w9:p3" and m["t"], m' "${D}/.loop-wait" || fail 'the wake marker records reason and pane'
-has '自动叫醒' 'tells the writer it will be woken'
+has '自动接着往下发' 'says the loop will pick it up again'
 rt add "循环里新加的任务"; rt pause
 rt_pane next; code 8 'paused stops'
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="paused", m' "${D}/.loop-wait" || fail 'the marker says paused'
@@ -209,7 +246,9 @@ rt hold 1 on --expect "$(qv)"; code 0 'hold the first pending task'
 [ "$(cat "${D}/queue.md")" = "${QB}" ] || fail 'hold does not touch queue.md'
 tail -1 "${D}/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the hold is recorded in tasks.state'
 rt hold 9 on; code 2 'hold a position past the queue'
-rt_pane next; code 0 'next issues the held task'; has '做完要看一眼的甲' 'the held task'; has '做完后会停下' 'the writer is told it will stop after this one'
+rt_pane next; code 0 'next issues the held task'; has '做完要看一眼的甲' 'the held task'
+# 「做完停」是 drover 自己的事，不写进送出去的正文：主控不需要知道有 drover 这个东西
+grep -q '做完后会停下' "${TMP}/out" && fail 'the hold must not leak into the task text'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 edit hold.py 'work for the held task'
 rt_pane done "${TID}"; code 8 'a held task stops after done even while looping'; has '等人放行' 'waits for release'
@@ -219,7 +258,6 @@ TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 edit hold.py 'work for the unheld task'
 rt_pane done "${TID}"; code 8 'an unheld task continues'; has '队列空了' 'straight to the next (empty) step'
 rt add "正文里写了的丙" "做完：等我放行"; rt_pane next; TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
-has '做完后会停下' 'the written line is recognised too'
 edit hold.py 'work for the written-line task'
 rt_pane done "${TID}"; code 8 'a task with the written line stops'; has '等人放行' 'waits for release'
 rt go
@@ -244,6 +282,44 @@ rt done "${TID}"; code 8 'without the line it falls back to CHECK_CMD'
 has '✓ 3 验收命令过了' 'the default check ran and passed'
 grep -v '^CHECK_CMD=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"
 
+# ---- 配上 MAIN_AGENT：next 真的把任务正文送进主控（corral send）----
+printf 'MAIN_AGENT=owlet/main\n' >> "${REPO}/.drover.conf"
+: > "${TMP}/sent.to"; : > "${TMP}/sent.txt"; printf '0\n' > "${TMP}/corral.code"
+rt go || true                      # 上一块结束时可能还有一件在等放行
+rt add "送出去的任务" "范围：只动 a.py"; rt next; code 0 'next sends the task'
+[ "$(sent_to)" = "owlet/main" ] || fail "sent to the wrong agent: $(sent_to)"
+sent_txt | grep -q '范围：只动 a.py' || fail 'the body travels with the task'
+sent_txt | grep -q 'review-task' && fail 'the sent text must never mention review-task'
+has '已送给 owlet/main' 'next reports where it went'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${D}/../out" 2>/dev/null || true)
+TID=$(python3 -c 'import json,sys
+e=[json.loads(l) for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
+print([x for x in e if x["ev"]=="start"][-1]["id"])' "${D}/tasks.state")
+edit sendtest.py 'work'; rt done "${TID}"; rt go
+
+# 送不出去时一个字都不能写：主控在忙 / 有人在打字 / 主控不在，队列必须原样不动
+rt add "送不出去的任务"
+for c in 7 8 2; do
+  printf '%s\n' "$c" > "${TMP}/corral.code"
+  rt next; code 8 "corral send exit ${c} stops instead of pretending it was issued"
+  python3 -c 'import json,sys
+e=[json.loads(l) for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
+assert not [x for x in e if x["ev"]=="start" and x.get("title")=="送不出去的任务"], "recorded a start for a task that was never delivered"' \
+    "${D}/tasks.state" || fail "exit ${c}: a refused send must not record a start"
+done
+printf '7\n' > "${TMP}/corral.code"; rt next; has '不是 idle' 'exit 7 explains the 主控 is busy'
+printf '8\n' > "${TMP}/corral.code"; rt next; has '有人在' 'exit 8 explains a human is typing'
+printf '2\n' > "${TMP}/corral.code"; rt next; has '不会替你开它' 'exit 2 says drover will not start the 主控'
+# 送了但没确认（退出码 3）：契约说不要重送，所以照样记开始，但要显眼地报出来
+printf '3\n' > "${TMP}/corral.code"
+rt next; code 8 'exit 3 is reported, not silently retried'; has '没确认送达' 'says the delivery was not confirmed'
+python3 -c 'import json,sys
+e=[json.loads(l) for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
+assert [x for x in e if x["ev"]=="start" and x.get("title")=="送不出去的任务"], "exit 3 must still record the start so it is not re-sent"' \
+  "${D}/tasks.state" || fail 'exit 3 records the start'
+printf '0\n' > "${TMP}/corral.code"
+grep -v '^MAIN_AGENT=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"
+
 # ---- docs/queue-example.md 本身是合法的队列：四个任务 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
 import importlib.machinery, importlib.util, sys
@@ -255,5 +331,6 @@ assert [b["id"] for b in blocks] == ["T21", "T22", "T23", "T24"], [b["id"] for b
 assert "不走规划" in blocks[1]["body"] and "不走规划" in blocks[2]["body"]
 PY
 
-[ ! -s "${TMP}/herdr.log" ] || { cat "${TMP}/herdr.log"; fail 'review-task must never call herdr'; }
+# 只许用 send / status / ls 三个 corral 命令（AGENTS.md 硬规矩），别的一个都不许出现
+grep -vE '^(send|status|ls)$' "${TMP}/cmds" 2>/dev/null | grep -q . && { cat "${TMP}/cmds"; fail 'review-task used a corral command outside send / status / ls'; }
 echo 'PASS review-task queue, release gate, read-only done check, pause and drop'

@@ -1,32 +1,36 @@
 #!/usr/bin/env python3
-"""review-task —— 任务队列：人往 queue.md 里写任务，写手用 next / done 一个接一个地做。
+"""review-task —— 外层循环的队列：人往 queue.md 里写任务，本工具一件接一件送进主控。
 
+**这是 drover 侧的工具，不在主控里跑。** 它做的只有两件事（见 ROADMAP「全部动作」）：
+用 `corral send` 往主控送一句话（任务正文），以及只读核对 git。送出去的就是任务正文本身，
+和人手动粘一段任务进去一模一样——主控甚至不需要知道有 drover 这个东西。
 不启动、不关闭、也不接入任何 agent。**对目标仓库完全只读**——一个字节都不写。
   queue.md    交接目录里，只归人。「## T7 标题」或「## 标题」开一块，下面随意写约束和验收；
               编号可省（发出时补上），文件里的先后就是执行顺序。
   tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
-「做完了」由本工具只读核对 git 和交接目录，不听主控一句话。交接文件的解析复用看板（review-board）里的
-函数，两边用同一套判据。
+「做完了」由本工具只读核对 git，不听主控一句话。交接文件的解析和三条判据都复用看板
+（review-board）里的函数，两边用同一套。
 
 在仓库目录里运行：
   review-task add "标题" [说明行 …]   人：加到队列末尾，自动编号
   review-task list                    看进行中、队列、已完成
-  review-task next                    写手：有进行中的就重发它（换写手接手时用）；否则发下一个
-  review-task done T5                 写手：核对是否真的收尾；通过后停下等放行，或直接发下一个
+  review-task next                    把下一件送进主控；有进行中的就重发它
+  review-task done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
   review-task go                      人：放行（放行模式）
   review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
   review-task drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
   review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
-  review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接领下一个；
-                                      写手停在队列那一步（队列空 / 暂停）时留下 .loop-wait，条件满足后由看板服务叫醒它
+  review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接发下一件；
+                                      停在队列那一步（队列空 / 暂停 / 主控在忙）时留下 .loop-wait，条件满足后由看板服务再跑一次 next
   review-task hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
                                       （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
   review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
-退出码：0 发出任务或操作成功；8 停下，把输出报告给人（队列空、暂停、等放行）；9 还没收尾；2 用法或前置条件不满足；
-        10 队列在这期间被改过（--expect 对不上），什么都没写。
-.drover.conf 的 TASK_GATE：1（默认）放行模式，每个任务做完等人 go；0 自动模式，做完直接发下一个。
+退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
+        2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
+配置见 .drover.conf：MAIN_AGENT 送给谁（空 = 不自动送，打出来让人粘）、TASK_GATE 放行模式、
+BRANCH_GLOB 和 CHECK_CMD 是完成判据第 2、3 条用的。
 """
 import importlib.machinery
 import importlib.util
@@ -66,7 +70,7 @@ GATE = True
 
 
 def setup():
-    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD
+    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD, MAIN_AGENT
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
@@ -80,7 +84,7 @@ def setup():
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
     BRANCH_GLOB = conf.get("BRANCH_GLOB", "")        # 判据第 2 条；空 = 这个项目不用里程碑分支
     CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条的默认值；队列条目的「验收：」行可覆盖
-    # MAIN_AGENT 是第 3 步换传输层时才读的，现在不读。
+    MAIN_AGENT = conf.get("MAIN_AGENT", "")          # 送给谁；空 = 不自动送，打出来让人粘
 
 
 def sh(*args):
@@ -125,17 +129,57 @@ def next_num():
     return max([int(i[1:]) for i in ids if re.fullmatch(r"T\d+", i or "")], default=0) + 1
 
 
-def issue(t, again=False):
+def start_task(t, again):
+    """记下「这件活发出去了」。**只在真的送达之后才调**——corral 拒绝送（主控在忙、有人在打字、
+    主控不在）时一个字都不能写，否则队列里会留下一件主控从没收到的「进行中」任务。
+    again 是重发进行中的那件，它早就有 start 事件了，不再记一条。"""
+    if not again:
+        append({"ev": "start", "id": t["id"], "title": t["title"], "body": t.get("body", ""), "key": t["title"],
+                "sha": head(), "main": main_sha()})
+    if os.path.exists(f"{D}/.loop-wait"):
+        os.remove(f"{D}/.loop-wait")             # 发出去了：停下的标记作废
+    return 0
+
+
+def task_text(t, again=False):
+    """送进主控的那段话 —— 就是任务正文本身，和人手动粘一段任务进去一模一样。
+
+    **这里绝不能出现「运行 review-task …」这类话。** 老 herdsman 往写手窗格里注入的是
+    「运行 review-task next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
+    主控甚至不需要知道有 drover 这个东西（见 ROADMAP「全部动作」）。"""
     out = [f"TASK {t['id']}: {t['title']}"]
     if t.get("body"):
         out += ["", t["body"]]
-    out += ["", "这是进行中的任务，接着做；之前的进度都在 git 和交接目录里。" if again else "这是队列里的下一个任务。"]
-    if B.task_held(t, B.task_holds(B.task_events(B.read(S)))):
-        out += ["人标了「做完停」：这个任务做完后会停下等人放行（review-task done 核对通过之后），那时照输出停下即可，不是出了问题。"]
-    out += ["按 AGENTS.md 里的流程做，和人直接交代给你的任务一样。",
-            f"做完后运行：review-task done {t['id']}  —— 它会核对是否真的收尾，并告诉你下一步。"]
-    print("\n".join(out))
-    return 0
+    if again:
+        out += ["", "（这件活之前发过，接着做；进度都在 git 里。）"]
+    return "\n".join(out)
+
+
+def issue(t, again=False):
+    """把任务送进主控。没配 MAIN_AGENT 就打出来让人自己粘 —— 内循环全靠人手工做的项目，
+    drover 照样能用，只是少了自动送这一步（ROADMAP「怎么算成功」里那条依赖方向的验证）。"""
+    text = task_text(t, again)
+    if not MAIN_AGENT:
+        print(text)
+        print("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）")
+        return start_task(t, again)
+    code, j = B.corral("send", MAIN_AGENT, text, timeout=60)
+    if code == 0:
+        rc = start_task(t, again)
+        extra = "（和人留的草稿拼在一起提交了，去看一眼）" if j.get("merged_with_draft") else ""
+        print(f"已送给 {MAIN_AGENT}：{t['id']} {t['title']}{extra}")
+        return rc
+    if code == B.CORRAL_NOT_DELIVERED:
+        # 契约：corral 不补发任何按键，**不要重送**。可能已经到了，所以照样记开始，
+        # 但要显眼地报出来让人去看一眼——这是唯一一种「状态真的不确定」的情况。
+        start_task(t, again)
+        print(f"送了但没确认送达：{t['id']} 已按发出记账，不会重送。去 {MAIN_AGENT} 那边看一眼收到没有。")
+        return 8
+    why = {B.CORRAL_NOT_FOUND: f"corral 里没有 {MAIN_AGENT}（主控没开，或者名字配错了）。drover 不会替你开它。",
+           B.CORRAL_NOT_IDLE: f"{MAIN_AGENT} 不是 idle（{j.get('state', '?')}），它正忙：等它这一轮结束再送。",
+           B.CORRAL_HUMAN_ACTIVE: f"最近 30 秒有人在 {MAIN_AGENT} 的接入窗口里操作：让着人，等会儿再送。",
+           }.get(code, f"corral send 退出码 {code}：{j.get('message', '')}")
+    return loop_stop("blocked", f"STOP: {t['id']} 没送出去。{why}")
 
 
 # ============================================================ 「做完了」的核对（只读）
@@ -279,17 +323,16 @@ def loop_on():
 
 
 def loop_stop(reason, msg):
-    """写手停在队列那一步。循环开着时留下唤醒标记（原因 + 写手的 herdr pane），看板服务等条件满足、写手空闲时叫醒它；
-    本工具不碰 herdr，pane 的身份由看板服务去核对。不在 herdr 里（没有 HERDR_PANE_ID）就叫不醒，照常等人。"""
+    """停在队列那一步（队列空 / 暂停 / 等放行）。循环开着时留下标记，看板服务的 loop_tick
+    等条件重新满足就再跑一次 next。标记里只有原因和时间——要送给谁看配置里的 MAIN_AGENT，
+    不需要记 pane，也不需要核对 pane 的身份（那是老 herdsman 往写手窗格里注入时才要的）。"""
     mark = f"{D}/.loop-wait"
-    if loop_on() and os.environ.get("HERDR_PANE_ID"):
+    if loop_on():
         tmp = f"{mark}.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"reason": reason, "pane": os.environ["HERDR_PANE_ID"], "t": int(time.time())}, f, ensure_ascii=False)
+            json.dump({"reason": reason, "t": int(time.time())}, f, ensure_ascii=False)
         os.replace(tmp, mark)
-        return stop(msg + "（循环开着：条件满足后会自动叫醒你，停下等就行，不用报告给人。）")
-    if loop_on():
-        return stop(msg + "（循环开着，但你不在 herdr 里，没法自动叫醒：照上面说的等人。）")
+        return stop(msg + "（循环开着：条件满足后会自动接着往下发。）")
     return stop(msg)
 
 
@@ -303,14 +346,9 @@ def cmd_next():
         return loop_stop("release", f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 review-task go 之后，再运行 review-task next。")
     todo = pending(tasks)
     if not todo:
-        return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。停下，把这句报告给人；人往 {Q} 里加了任务之后，再运行 review-task next。")
+        return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。往 {Q} 里加了任务之后会自动接着发。")
     b = todo[0]
-    t = {"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]}
-    append({"ev": "start", "id": t["id"], "title": t["title"], "body": t["body"], "key": t["title"],
-            "sha": head(), "main": main_sha()})
-    if os.path.exists(f"{D}/.loop-wait"):
-        os.remove(f"{D}/.loop-wait")             # 领到了：唤醒标记作废
-    return issue(t)
+    return issue({"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]})
 
 
 def cmd_done(tid):
@@ -331,9 +369,9 @@ def cmd_done(tid):
     gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
     if gate and loop_on():
-        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：停下等人放行；放行后运行 review-task next。")
+        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：等人放行（review-task go）。")
     if gate:
-        return stop(f"DONE {tid}：核对通过。放行模式：停下，把这句报告给人，等人放行；放行后运行 review-task next。")
+        return stop(f"DONE {tid}：核对通过。放行模式：等人放行（review-task go）。")
     print(f"DONE {tid}：核对通过。")
     return cmd_next()
 
@@ -343,7 +381,8 @@ def cmd_go():
     if not awaiting:
         die(2, "ERROR: 没有在等放行的任务")
     append({"ev": "go", "id": awaiting})
-    print(f"已放行（{awaiting} 之后）。对写手说「继续」，它会运行 review-task next；想换个新写手，就开一个新的，对它说「运行 review-task next，按它的输出办」——AGENTS.md 里没写队列，新写手只能从这句话知道。")
+    print(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
+                                          else "运行 review-task next 发下一件。"))
     return 0
 
 

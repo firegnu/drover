@@ -41,7 +41,8 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 
 ## 状态
 
-**建设中，现在是半成品。** `install.sh` 和 `tests/` 里还引用着已删除的文件，脚本名字还是 herdsman 时代的。
+**建设中。** 评审协议已经整个摘掉，配置、完成判据、corral 传输层都接好了（D1 第 0–3 步）。
+剩下的是看板改造和安装方式（第 4、5 步）；脚本名字还是 herdsman 时代的（`review-task` / `review-board`），改名排在最后。
 
 - 设计和分步：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 在这个仓库里干活的规矩：[AGENTS.md](AGENTS.md)
