@@ -43,7 +43,7 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 
 **建设中。** 评审协议整个摘掉了；配置、完成判据、corral 传输层、看板改造、外层循环闭合都做完了（D1 第 0–4 步），脚本改名成单命令 `drover`，完成判据有了依据（收尾记号），外层循环的引擎也从看板里拆成了独立的 `drover loop`。
 
-剩下第 5 步：删看板的 agent 块、看板改 TUI、装到哪、用不用 launchd、QUICKSTART 和手册。现在只能用仓库里的相对路径跑：`python3 ./bin/drover …`。
+剩下第 5 步：删看板的 agent 块、看板改 TUI、QUICKSTART 和手册。安装脚本与 launchd 模板已提供；实际安装、启用要人点头。开发时仍用仓库里的相对路径跑：`python3 ./bin/drover …`。
 
 - 设计和分步：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 在这个仓库里干活的规矩：[AGENTS.md](AGENTS.md)
@@ -53,3 +53,17 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 - [corral](https://github.com/firegnu/corral)
 - `python3`（只用标准库）
 - `git`
+
+## 安装（人工确认后执行）
+
+在准备长期保留的仓库目录运行 `sh ./install.sh`。脚本把 `drover`、`drover-board` 以绝对软链装到 `~/.local/bin/`，建立 `~/.drover/`，并生成 `~/.drover/dev.drover.loop.plist`。仓库更新会直接生效；不要安装到随后会删除的临时 worktree，仓库挪走也会让软链失效。
+
+安装前会一次检查所有目标：命令只接受指向当前仓库的原有软链，生成的 plist 只接受内容完全一致的普通文件，其他情况非零退出、拒绝覆盖。相同配置重复安装不会改写文件。`~/.local/bin` 不在 PATH 时只提示自行添加，不修改 shell 配置。
+
+launchd 模板中的 `__HOME__` / `__PATH__` 由安装脚本展开并作 XML 转义；不要直接加载仓库里的模板。生成文件记录安装时的 HOME 和 PATH（优先加入 `~/.local/bin` 并去重），供引擎找到 `python3`、`git`、`corral`。其他 PATH 配置变化或 plist 已被手改时，重装会拒绝覆盖，请先人工核对旧文件。
+
+**脚本不运行 launchctl，也不写 `~/Library/LaunchAgents/`。** 它只打印人工启用命令：把生成文件链接到该目录，再以 `dev.drover.loop` 加载引擎。启用后立即启动 `drover loop`，以后用户登录时启动，退出后自动重启；用户 LaunchAgent 不会在尚未登录时启动。标准输出和错误分别写入 `~/.drover/loop.stdout.log`、`~/.drover/loop.stderr.log`。目标已存在或服务已加载时先核对，不要覆盖或重复加载。
+
+在目标项目里执行 `drover init <短名>`，配置 `.drover.conf` 的主控，把任务写到交接目录的 `queue.md`，再执行 `drover loop on` 开启该项目。未启用 launchd 时，另一个终端运行 `drover loop`（默认每 5 秒检查一次）；启用后不要重复手动启动引擎。看板仍由人单独打开。
+
+隔离验收：`sh tests/install.sh`（macOS，临时 HOME + 写入沙箱，不执行真实 launchctl）。
