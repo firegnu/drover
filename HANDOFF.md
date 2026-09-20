@@ -46,7 +46,7 @@ drover 驱动自己的开发。**一律放行模式**（`TASK_GATE=1`，每件�
 
 - **待定 3（记账记什么）、待定 4（路由行）**——见 `docs/ROADMAP.md`「待定」。这两个不定，欠账 2、3 就动不了。
 - **`~/.drover/board-notified.json`**：`drover/dev-tui` 测试疏忽漏出来的残渣，内容是合成仓库（`iota/main`）的条目。按「删东西先问人」留着没删。
-- **两个 dev agent 关不关**：`drover/dev-tui`、`drover/dev-install`，活都干完合并了，worktree 已删（`git worktree list` 只剩 main）。留着的话下一件活可以直接给它们，省一次开机。
+- ~~两个 dev agent 关不关~~：**已关**（`drover/dev-tui`、`drover/dev-install`，2026-09-20 收工时用户定的）。明天要派活得重新 `corral start`，别忘了带免确认参数（`claude --dangerously-skip-permissions` / `codex --yolo`），见下面「派活的规矩」。
 
 ## 派活的规矩（这个仓库已经是 corral-dispatch 项目了）
 
