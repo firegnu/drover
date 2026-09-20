@@ -5,12 +5,14 @@
 - `README.md`：drover 是什么，三层怎么分。
 - `docs/ROADMAP.md`：设计、分步、验证计划、待定项。所有决定的来源。改设计先改这里。
 
-## 这个仓库现在是半成品
+## 这个仓库现在到哪了
 
-从 herdsman clone 来，第一个提交砍掉了评审协议（`4545f68`）。所以：
+从 herdsman clone 来，第一个提交砍掉了评审协议（`4545f68`），之后 D1 第 0–4 步都做完了：评审协议整个摘干净，配置、完成判据、corral 传输层、看板「当前这件活」块、外层循环闭合，都在了。
 
-- `install.sh`、`tests/` 里还引用着已删除的文件，脚本名字还是 herdsman 时代的（`herdsman-init`、`review-task`、`review-board`、`review-map`）。
-- 这是**故意的**，不是坏了。怎么收拾按 ROADMAP 的分步来，不要自己先动手重命名或大扫除。
+**只剩 D1 第 5 步**：装出去、脚本改名、写文档。所以现在：
+
+- 脚本名字还是 herdsman 时代的（`herdsman-init`、`review-task`、`review-board`）。改名方案已经定了（待定项 1：单命令 `drover`，队列动词提到顶层），**和「装到哪」一起做**，别单独先改。
+- 没有任何安装路径，只能用仓库里的相对路径跑：`python3 ./bin/review-task add "标题"`。
 - 要查被删掉的东西当初为什么那么设计，`git log` 全在，别凭空猜。
 
 ## 硬规矩
@@ -35,8 +37,8 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 
 ## 技术约束
 
-- **只用 Python 标准库**，不装第三方包。不依赖 tmux、herdr 或其他终端工具。
-- 留下来的脚本里 `review-task`、`review-board` 是 Python，`review-map` 是 Python。新写的也用 Python。
+- **只用 Python 标准库**，不装第三方包。不依赖 tmux、herdr 或其他终端工具——herdr 的依赖在第 3 步全换成 corral 了。
+- 两个脚本 `review-task`、`review-board` 都是 Python，新写的也用 Python。
 - 看板不存自己的状态，**刷新等于重跑**。这条是它一直好用的原因，不要为了性能破例。
 - 看板是深色（`color-scheme:dark` 那套 CSS 变量），不为浅色折中。
 
@@ -73,7 +75,7 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 
 所以现在**没有任何安装路径**，这是故意的：
 
-- 不要重新写一个 `install.sh` 然后跑它。drover 装到哪、叫什么、用不用 launchd，是 D1 第 1 步和第 5 步要定的事，定完再说。
+- **写**新的安装脚本是 D1 第 5 步的活（装到哪、叫什么、用不用 launchd，连同脚本改名一起定）。但**跑**它是另一回事：往 `~/.local/bin` 拷东西、动 launchd，在「先问人」那一节里，写完也要人点头才能执行。
 - 不要 `launchctl load / unload / bootstrap / bootout` 任何东西。
 - 不要往 `~/.local/bin` 拷任何文件，不要改 PATH。
 - 开发中要跑这些脚本，用仓库里的相对路径：`./bin/review-task …`。

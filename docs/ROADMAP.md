@@ -6,8 +6,11 @@
 
 | 编号 | 事项 | 状态 |
 |---|---|---|
-| D1 | 把外循环从 herdsman 里摘出来，接到 corral / corral-dispatch 上 | 设计定稿，动手中 |
-| D2 | 验证：合成测试 → 回放真实历史 → 自举 → jb-finetune 迁移 | 见「验证计划」，第 1 层随 D1 一起做 |
+| D1 | 把外循环从 herdsman 里摘出来，接到 corral / corral-dispatch 上 | 第 0–4 步做完（2026-09-20），**只剩第 5 步**：装出去 + 脚本改名 + 文档 |
+| D2 | 验证：合成测试 → 回放真实历史 → 自举 → jb-finetune 迁移 | 第 1 层做完（三个套件）；第 2 层**待人点头**；第 3、4 层等第 5 步 |
+
+D1 做完到哪了：drover 已经能自己转一圈——从 `queue.md` 取任务、`corral send` 送进主控、主控空闲时只读核对三条判据、过了记 `done` 并发下一件、没过就把「它在等人」挂上看板和通知。corral 一行没改，corral-dispatch 一个字没碰，用到的 corral 命令仍然只有 `send` / `status` / `ls`。
+还欠的两处都卡在待定项 3（记账记什么）：「做完的」那栏的「派了几个 agent、返工几轮」，和最底下的记账整块。
 
 ---
 
@@ -100,13 +103,16 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。
 
 ## D1 分步
 
-0. **收拾半成品**（先做）：`install.sh` 和 `tests/` 里引用已删文件的地方；脚本改名（`herdsman-init` → `drover-init`，`review-task` / `review-board` / `review-map` 的名字一并定；`REVIEW_DIR`、`.review.conf` 这些 herdsman 时代的名字也要定）。改名是机械活，但**名字一旦定下就到处都是**，先定再动。
+0. **收拾半成品**（2026-09-20 做完，但只做了一半，另一半挪到第 5 步）。原计划是「一次把名字全改了」，实际拆成了两段：
+   - **隔离改名先做**（`388a42a`）：`.review.conf` → `.drover.conf`、`~/.review/` → `~/.drover/`、`dev.herdsman.*` → `dev.drover.*`。这三个是和正在跑的老 herdsman **共用**的名字，不先换掉，后面砍代码时一旦把 `discover()` 改坏就会扫到真 jb-finetune。换完这台机器上没有任何项目配了 `.drover.conf`，安全边界是结构性的而不是靠小心。
+   - **脚本改名推到第 5 步**：`review-task` / `review-board` / `herdsman-init` 现在还是 herdsman 时代的名字。待定项 1 已经定了方案（**单命令 `drover`，队列动词提到顶层**：`drover add` / `drover go` / `drover board` / `drover init`），但没执行——它和「装到哪」是同一件事，一起做才不会改两遍。
+   - 「`install.sh` 和 `tests/` 里引用已删文件的地方」这半句作废：`install.sh` 在 `9a48774` 之后已经删了；`tests/` 里那些引用不是坏的，它们随第 3、4 步的改造一起改掉了。
 1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_GLOB`（里程碑分支的匹配模式，第 2 步从 `BRANCH_PREFIX` 改过来的，理由见完成判据那一节）、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
 2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `review-board.criteria` 里，看板和队列共用；队列条目用正文里一行「验收：`<命令>`」覆盖 `CHECK_CMD`（只认 `queue.md` 里写的，网页表单拒收——那行会被当 shell 命令跑）；「等人」的识别见 `wants_human`。合成测试在 `tests/criteria.sh`。
    **渲染页面时只算前两条。** 第 3 条可能是整套测试，而页面 30 秒一刷、每个项目都渲染，全算一遍等于每半分钟把所有项目的测试跑一遍（`criteria(..., do_check=False)`）。前两条是纯 git，便宜，「等人」的识别靠它们就够——主控停下等人时，main 基本都还没前进。
 3. **`review-task` 换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：`review-task` 现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `review-task` 和 `drover` 这两个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
 4. **看板改造**（2026-09-20 做完大半）：按上面的留 / 改 / 删；`loop_tick` 换 corral 在第 3 步一起做了。「当前这件活」块齐了：主控状态 / 正在调什么工具 / 这一轮多久、派出去的 agent 各自状态、分支进展（`main` 上几个提交、最后一次多久前）、完成判据过了几条。「等你」每条带 `corral attach <名字>`（只是给人抄的一句话，drover 自己不跑 attach）。
-   **判据第 3 条在页面上只显示命令、标「没在页面上跑」**，理由见完成判据那一节。要让它也显示结果，得先有循环引擎轮询判据、把结果记进交接目录（像 `.loop-wait` 那样），那件事和「自动 done」是同一件，还没做。
+   **判据第 3 条在页面上只显示命令、标「没在页面上跑」**，理由见完成判据那一节。轮询本身已经有了（`close_if_done`，见上面完成判据那一节），但它只是跑一次 `review-task done`、往 `.loop.log` 写一行，**没有把三条各自的结果记成看板读得了的形式**。要让第 3 条也上页面，还差这一步：把那次核对的结果写进交接目录（像 `.loop-wait` 那样归循环引擎所有，看板只读——这样不算「看板存自己的状态」）。
    **还欠**：「做完的」那一栏要显示「派了几个 agent、返工几轮」，以及最底下的「记账」整块——两者都要先定待定项 3（记账记什么）。
 5. **安装方式和文档重写**：`install.sh` 和两个 launchd plist 已经在 `9a48774` 之后删掉了（它们会顶掉正在跑的老 herdsman），要写新的先定第 1 步那些名字和路径，Label 不能再叫 `dev.herdsman.*`。文档方面：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 
@@ -186,8 +192,9 @@ jb-finetune 今天跑的是**老内循环**（写手 + 评审方 + `request-revi
 
 ## 待定
 
-1. **改名方案**（D1 第 0 步）：`herdsman-init`、`review-task`、`review-board`、`review-map`、`.review.conf`、`REVIEW_DIR`、`~/.review/` 全是 herdsman 时代的名字。
-2. **`review-map`（风险图）去留**：它和 corral-dispatch 的 `route.py` 都在判「这次改动要不要审、审多深」，但风险图是**有记忆的**（从归档证据里长出来：哪些路径出过 blocking、扇入多少、有没有测试），`route.py` 每次只拿三五句摘要问模型。三种选择：删掉、留着喂 `route.py`、单独留着当看板的一个提示。
+1. ~~**改名方案**~~（2026-09-20 定了，**等第 5 步执行**）。配置那边已经落地：`.drover.conf`、`~/.drover/`、`HANDOFF_DIR` / `MAIN_AGENT` / `BRANCH_GLOB` / `CHECK_CMD` / `TASK_GATE`，命名规则是「环境变量带 `DROVER_` 前缀，配置键不带」。
+   **脚本改成单命令 `drover`，队列动词提到顶层**：`drover add "标题"` / `list` / `go` / `pause` / `move` / `edit` / `drop` / `hold` / `loop`，外加 `drover board`、`drover init`。形状和隔壁 corral 一致。实现上 `bin/drover` 开头几行判断：第一个参数是 `board` / `init` 就 exec 对应脚本，否则当队列动词——不另起分发器文件。和第 5 步的「装到哪」一起做。
+2. ~~**`review-map`（风险图）去留**~~（2026-09-20 定了：**删**，已执行 `5d5a746`）。drover 只有两个作用——前端面板和外层任务循环，风险图两头都不沾。另一个理由：它的「记忆」来自 `docs/reviews/*.md` 的 findings 归档，而那套归档正是砍掉的东西；没有归档它退化成「import 扇入 + 有没有测试」，那是 `route.py` 每次现算也拿得到的。
 3. **记账记什么**：老的 `precision.md` / `escapes.md` 是评审口径，没有了。换成耗时、返工轮数、路由判了什么 / 主控推翻没有。记不出数就等于没记（见「从哪来」）。
 4. **要不要读任务文件开头那行「路由：…」**：读它等于依赖内循环的一个书写格式（擦边，但不要求主控多做事）。倾向「读，但降级处理」——解析失败就不显示这一项，绝不参与任何判断。不读的话这个数据只能靠人手工翻任务文件统计。
    **配套的「任务文件目录」字段跟着这一条走**：第 1 步原本要定它，但它没有别的用处，定了「读」再往 `.drover.conf` 里加（`TASK_FILE_DIR`，值如 `docs/任务`）；定「不读」就不加。
