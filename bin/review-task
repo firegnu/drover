@@ -66,7 +66,7 @@ GATE = True
 
 
 def setup():
-    global REPO, D, Q, S, PAUSED, LOOP, GATE
+    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
@@ -78,8 +78,9 @@ def setup():
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
-    # MAIN_AGENT / BRANCH_PREFIX / CHECK_CMD 的名字和含义在 D1 第 1 步定了（见 drover-init 写的模板），
-    # 读它们的代码在第 2、3 步；现在不读，免得留一堆没人用的变量。
+    BRANCH_GLOB = conf.get("BRANCH_GLOB", "")        # 判据第 2 条；空 = 这个项目不用里程碑分支
+    CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条的默认值；队列条目的「验收：」行可覆盖
+    # MAIN_AGENT 是第 3 步换传输层时才读的，现在不读。
 
 
 def sh(*args):
@@ -92,6 +93,11 @@ def git(*args):
 
 def head():
     return git("rev-parse", "HEAD").strip()
+
+
+def main_sha():
+    """送任务之前 main 停在哪。判据第 1 条拿它比——不能用 HEAD，仓库不一定在 main 上。"""
+    return git("rev-parse", B.MAIN_BRANCH).strip()
 
 
 # ============================================================ 队列（人的）与进度（本工具的）
@@ -137,12 +143,34 @@ def tree_dirty():
     return [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
 
 
+def task_check_cmd(body):
+    """这件活的验收命令：正文里那行「验收：…」优先，否则 .drover.conf 的 CHECK_CMD。
+    人在 queue.md 里写这件活算完的标准，本来就是人的活（见 ROADMAP 完成判据那一节）。"""
+    return B.task_check_cmd(body, CHECK_CMD)
+
+
 def check_done(task):
     """→ 问题列表。只读核对 git，不听主控一句话。
-    完成判据的正式版（main 前进 / 里程碑分支已合入 / 验收命令退出码 0）是 ROADMAP D1 第 2 步的事，
-    这里暂时只保留「工作区干净」这一条——它和评审协议无关，砍掉评审后仍然成立。"""
+    三条完成判据见 docs/ROADMAP.md；求值在 review-board.criteria 里，看板和这里用同一份。
+    「不适用」的那几条（没配 BRANCH_GLOB、没有验收命令）不算不过，但会照原样报出来——
+    3 条里过了几条要看得见，不能让跳过的悄悄混成通过。"""
+    probs = []
     dirty = tree_dirty()
-    return ["工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else "")] if dirty else []
+    if dirty:
+        probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
+    for r in B.criteria(REPO, task.get("main", ""), BRANCH_GLOB, task_check_cmd(task.get("body"))):
+        if r["ok"] is False:
+            probs.append(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}')
+    return probs
+
+
+def criteria_report(task):
+    """三条判据各自什么状态，原样打给人看。跳过的也要出现。"""
+    out = []
+    for r in B.criteria(REPO, task.get("main", ""), BRANCH_GLOB, task_check_cmd(task.get("body"))):
+        mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
+        out.append(f'  {mark} {r["n"]} {r["name"]}：{r["why"]}')
+    return out
 
 
 # ============================================================ 命令
@@ -278,7 +306,8 @@ def cmd_next():
         return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。停下，把这句报告给人；人往 {Q} 里加了任务之后，再运行 review-task next。")
     b = todo[0]
     t = {"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]}
-    append({"ev": "start", "id": t["id"], "title": t["title"], "body": t["body"], "key": t["title"], "sha": head()})
+    append({"ev": "start", "id": t["id"], "title": t["title"], "body": t["body"], "key": t["title"],
+            "sha": head(), "main": main_sha()})
     if os.path.exists(f"{D}/.loop-wait"):
         os.remove(f"{D}/.loop-wait")             # 领到了：唤醒标记作废
     return issue(t)
@@ -295,6 +324,9 @@ def cmd_done(tid):
             print(f"  - {p}")
         print(f"处理完再运行 review-task done {tid}。")
         return 9
+    print(f"核对通过 {tid}：")
+    for line in criteria_report(current):
+        print(line)
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
     gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})

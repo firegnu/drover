@@ -43,9 +43,13 @@ has 'review-task done T3' 'the task text says how to report done'
 grep -q "$(hsha)" "${D}/tasks.state" || fail 'start sha recorded in tasks.state'
 rt next; code 0 'next again'; has 'TASK T3: 修一下登录页的超时' 'next re-issues the in-progress task so a fresh writer can take over'
 
-# ---- done：编号不对就拒绝；没有提交的任务直接通过；放行模式下停下等人 ----
+# ---- done：编号不对就拒绝；main 没前进就拒绝（判据第 1 条）；放行模式下停下等人 ----
 rt done T1; code 2 'done for a task that is not in progress'
+rt done T3; code 9 'main has not moved since the task was issued'; has '判据 1' 'names the criterion that failed'
+edit login.py 'timeout fix'
 rt done T3; code 8 'done in release mode stops the writer'; has '等人放行' 'release mode says wait for release'
+has '✓ 1 main 前进了' 'the passing criteria are printed'
+has '— 2 里程碑分支都合进去了' 'a skipped criterion is shown as skipped, not as passed'
 rt next; code 8 'next before release'; has '等人放行' 'next refuses until released'
 rt go; code 0 'go'
 has '运行 review-task next，按它的输出办' 'go says the sentence a fresh writer needs'
@@ -65,6 +69,7 @@ has 'TASK T2: 订单列表分页' 'auto mode issues the next task'; has '约束�
 edit a.py 'pagination'
 rt done T2; code 8 'a committed change passes'; has '队列空了' 'queue empty after the last pending task'
 rt add "清理旧的 feature flag"; rt next; code 0 'next T4'; has 'TASK T4' 'T4 issued'
+edit flags.py 'drop old flag'
 rt done T4; code 8 'T4 done'
 rt add "补登录接口的回归测试"; rt next; has 'TASK T5' 'T5 issued'
 edit a.py 'regression tests'
@@ -75,6 +80,7 @@ rt add "订单导出去重"; rt next; has 'TASK T6: 订单导出去重' 'T6 issu
 sed -i '' 's/^## T6 订单导出去重$/## T6 订单导出去重（含历史数据）/' "${D}/queue.md"
 rt next; code 0 'next after editing the title'; has 'TASK T6: 订单导出去重' 'in-progress task re-issued from its snapshot'
 grep -q '含历史数据' "${TMP}/out" && fail 'an edited in-progress task must not change under the writer'
+edit export.py 'dedupe'
 rt done T6; code 8 'T6 done'; has '队列空了' 'an ID-matched edited task is not issued again'
 
 # ---- 暂停、放弃、列表 ----
@@ -165,9 +171,12 @@ TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 grep -v '^TASK_GATE=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"   # 回到放行模式
 rt loop on; code 0 'loop on'; [ -f "${D}/loop" ] || fail 'loop on creates the loop file'
 rt list; has '循环' 'list shows the loop is on'
+edit loop.py 'work for the looping task'
 rt done "${TID}"; code 0 'with the loop on, done issues the next task even in release mode'; has 'TASK ' 'the next task follows right away'
 grep -q '"ev": "done".*"gate": false' "${D}/tasks.state" || fail 'the done event is not gated while looping'
+n=0
 while grep -q '^TASK ' "${TMP}/out"; do
+  n=$((n + 1)); edit loop.py "work ${n}"          # 每个任务都要让 main 前进，否则判据第 1 条不过
   TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out"); rt done "${TID}"
 done
 code 8 'the loop runs until the queue is empty'; has '队列空了' 'says the queue is empty'
@@ -184,6 +193,7 @@ rt resume; rt_pane next; code 0 'next after resume'; has '循环里新加的任�
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 [ ! -f "${D}/.loop-wait" ] || fail 'issuing a task clears the wake marker'
 rt loop off; code 0 'loop off'; [ ! -f "${D}/loop" ] || fail 'loop off removes the loop file'
+edit loop.py 'work for the last task'
 rt done "${TID}"; code 8 'with the loop off, release mode stops again'; has '等人放行' 'back to waiting for release'
 rt_pane next; code 8 'waiting for release'
 [ ! -f "${D}/.loop-wait" ] || fail 'no wake marker when the loop is off'
@@ -201,19 +211,38 @@ tail -1 "${D}/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the hol
 rt hold 9 on; code 2 'hold a position past the queue'
 rt_pane next; code 0 'next issues the held task'; has '做完要看一眼的甲' 'the held task'; has '做完后会停下' 'the writer is told it will stop after this one'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+edit hold.py 'work for the held task'
 rt_pane done "${TID}"; code 8 'a held task stops after done even while looping'; has '等人放行' 'waits for release'
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="release", m' "${D}/.loop-wait" || fail 'the wake marker says release'
 rt go; rt_pane next; code 0 'released: the loop goes on'; has '甲之后的乙' 'the next task'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+edit hold.py 'work for the unheld task'
 rt_pane done "${TID}"; code 8 'an unheld task continues'; has '队列空了' 'straight to the next (empty) step'
 rt add "正文里写了的丙" "做完：等我放行"; rt_pane next; TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 has '做完后会停下' 'the written line is recognised too'
+edit hold.py 'work for the written-line task'
 rt_pane done "${TID}"; code 8 'a task with the written line stops'; has '等人放行' 'waits for release'
 rt go
 rt add "打了又撤的丁"; rt hold 1 on; rt hold 1 off; code 0 'unhold'
 rt_pane next; TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out"); grep -q '做完后会停下' "${TMP}/out" && fail 'an unheld task has no stop note'
+edit hold.py 'work for the unheld-again task'
 rt_pane done "${TID}"; code 8 'unheld task continues to the empty queue'; has '队列空了' 'continues'
 rt loop off
+
+# ---- 队列条目覆盖默认验收命令：正文里一行「验收：<命令>」----
+printf 'CHECK_CMD=true\n' >> "${REPO}/.drover.conf"
+rt add "带自己验收命令的任务" "验收：test -f no-such-file"; rt next
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+edit acc.py 'work'
+rt done "${TID}"; code 9 'the queue entry overrides CHECK_CMD and this one fails'
+has '判据 3' 'names the criterion'; has 'no-such-file' 'quotes the command that ran'
+rt drop "${TID}" "换一个"
+rt add "用默认验收命令的任务"; rt next
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+edit acc.py 'more work'
+rt done "${TID}"; code 8 'without the line it falls back to CHECK_CMD'
+has '✓ 3 验收命令过了' 'the default check ran and passed'
+grep -v '^CHECK_CMD=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"
 
 # ---- docs/queue-example.md 本身是合法的队列：四个任务 ----
 python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'

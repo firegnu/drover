@@ -56,7 +56,7 @@
 drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 
 1. `main` 前进了（sha 变了）；
-2. 所有里程碑分支都已经是 `main` 的祖先（对每个 `git branch --list '<前缀>-*'` 跑 `git merge-base --is-ancestor <分支> main`）；
+2. 所有里程碑分支都已经是 `main` 的祖先（对每个 `git branch --list '<BRANCH_GLOB>'` 跑 `git merge-base --is-ancestor <分支> main`，`main` 自己永远不算）；
 3. 验收命令退出码为 0（队列条目里写，例如 `cd backend && uv run pytest -q`）。
 
 三条都满足才算完成。队列条目可以覆盖默认判据——人在 `queue.md` 里写这件活算完的标准，本来就是人的活。
@@ -76,9 +76,9 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 
 **这一条最初写的是「没有残留的里程碑分支」，2026-09-20 改掉了。** 真实仓库给的反馈：jb-finetune 的 `m3/implementation` 已经合进 main 但分支没删。也就是说「分支不存在」不是普适的 git 常识，它依赖 corral-dispatch 第 7 节那套收尾纪律（`git worktree remove` + `git branch -d`），换个项目就不成立，会一直判成「没做完」（假阴性）。改成问「活合进去了吗」，删不删分支都成立，语义也更准。
 
-**第 2 条会空真，这是第 2 步必须挡的。** `git branch --list '<前缀>-*'` 一个都匹配不到时，「所有里程碑分支都已经是 `main` 的祖先」**空真**——对空集合跑 `--is-ancestor`，一次都不跑，第 2 条直接过。而「匹配到 0 个」有三种来源，从 git 这边看一模一样：前缀在配置里填错了、corral-dispatch 换了分支命名、这件活压根没建分支。任何一种都会让判据在活没干完时放行，正是止损点里写的那条「没做完却判成做完了」。
+**第 2 条会空真（第 2 步已挡）。** 匹配不到分支时，「所有里程碑分支都已经是 `main` 的祖先」**空真**——对空集合跑 `--is-ancestor`，一次都不跑，第 2 条直接过。而「匹配到 0 个」有三种来源，从 git 这边看一模一样：模式在配置里写错了、corral-dispatch 换了分支命名、这件活压根没建分支。任何一种都会让判据在活没干完时放行，正是止损点里写的那条「没做完却判成做完了」。**处理方式：`BRANCH_GLOB` 非空却匹配到 0 个 → 判不过；`BRANCH_GLOB` 留空 → 这条标「不适用」，不算过也不算不过。**
 
-所以**匹配到 0 个分支不能当作通过**。第 2 步要定怎么处理（判「不满足」，还是要求队列条目显式写明这件活不建分支），但默认值只能是不通过。
+**原先写的 `'<前缀>-*'` 是错的，2026-09-20 改成 `BRANCH_GLOB`。** 拿两个真实项目一比就露馅：owlet 的里程碑分支是 `m8-2-backend`，jb-finetune（靶场）的是 `m3/implementation`。前缀填 `m` 得到模式 `m-*`，**两边都匹配 0 个**——也就是说照原公式写，判据在两个真实项目上都会踩空真。放宽成 `m*` 又会把 `main` 自己卷进来。两边都能用的是 `m[0-9]*`。所以配置里存的是**直接交给 `git branch --list` 的模式**，代码不再自作主张拼 `-*`，另外在代码里硬性排除 `main` 自己。
 
 **已知待验的反例**：owlet 的 M7 出现过「合并进 main 之后主控又发起第四轮改动，改完再合一次」。也就是「合进 main」出现了两次，第一次出现时活还没真完。判据会不会提前放行，见验证计划第 2 层。
 
@@ -101,7 +101,7 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
 ## D1 分步
 
 0. **收拾半成品**（先做）：`install.sh` 和 `tests/` 里引用已删文件的地方；脚本改名（`herdsman-init` → `drover-init`，`review-task` / `review-board` / `review-map` 的名字一并定；`REVIEW_DIR`、`.review.conf` 这些 herdsman 时代的名字也要定）。改名是机械活，但**名字一旦定下就到处都是**，先定再动。
-1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_PREFIX`、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
+1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_GLOB`（里程碑分支的匹配模式，第 2 步从 `BRANCH_PREFIX` 改过来的，理由见完成判据那一节）、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
 2. **完成判据**：三条的只读核对；队列条目覆盖默认判据的写法；「等人」的识别。配合验证计划第 1 层的合成测试一起写。
 3. **`review-task` 换传输层**：`HERDR_PANE_ID` → corral 名字 + 实例编号；叫醒改送任务正文；`done` 的核对换成新判据。
 4. **看板改造**：按上面的留 / 改 / 删；`loop_tick` 的 `herdr agent get/prompt` → `corral status/send`。

@@ -177,6 +177,15 @@ def task_blocks(text):
 
 
 TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
+# 正文里的「验收：<命令>」覆盖 .drover.conf 的 CHECK_CMD（完成判据第 3 条）。
+# 它会被当成 shell 命令跑，所以只认 queue.md 里写的，网页表单里不收（见 live_action）。
+TASK_CHECK = re.compile(r'^\s*验收\s*[:：]\s*(\S.*?)\s*$', re.M)
+
+
+def task_check_cmd(body, default=""):
+    """正文里那行「验收：<命令>」→ 命令；没写就用传进来的默认值（.drover.conf 的 CHECK_CMD）。"""
+    m = TASK_CHECK.search(body or "")
+    return m.group(1) if m else default
 
 
 def task_holds(evs):
@@ -216,7 +225,7 @@ def task_fold(evs):
         tid, ev = e.get("id"), e.get("ev")
         if ev == "start":
             tasks[tid] = {"id": tid, "title": e.get("title", ""), "body": e.get("body", ""), "key": e.get("key", ""),
-                          "start": e.get("sha", ""), "t0": e.get("t"), "status": "doing"}
+                          "start": e.get("sha", ""), "main": e.get("main", ""), "t0": e.get("t"), "status": "doing"}
             awaiting = None
         elif ev == "done" and tid in tasks:
             tasks[tid].update(status="done", end=e.get("sha", ""), t1=e.get("t"))
@@ -238,6 +247,81 @@ def task_pending(blocks, tasks):
 
 def task_commits(repo, a, b):
     return git(repo, "rev-list", f"{a}..{b}").split() if a and b and a != b else []
+
+
+# ============================================================ 完成判据（只读核对 git）
+MAIN_BRANCH = "main"
+CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，不能把 drover 卡住
+
+
+def milestone_branches(repo, glob_pat):
+    """glob 匹配到的里程碑分支。main 自己永远不算——`m*` 这种写法会把它匹配进来。"""
+    if not glob_pat:
+        return []
+    out = git(repo, "branch", "--list", "--format=%(refname:short)", glob_pat).splitlines()
+    return [b.strip() for b in out if b.strip() and b.strip() != MAIN_BRANCH]
+
+
+def run_check(repo, cmd):
+    """跑验收命令 → (退出码, 输出尾巴)。过 shell（CHECK_CMD 里会有 && 和管道），在仓库根跑。
+    命令跑不起来（127）和测试没通过（非 0）都是不过，但退出码会照原样报出来，好分辨是哪一种。"""
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, timeout=CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, f"超过 {CHECK_TIMEOUT} 秒还没跑完"
+    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-8:])
+    return r.returncode, tail
+
+
+def criteria(repo, base_sha, glob_pat, check_cmd):
+    """三条完成判据的只读核对 → [{n, name, ok, why}]。
+    ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
+    全程只读：只跑 rev-parse / branch --list / merge-base，外加人自己配的验收命令。
+
+    **别在渲染页面时调它。** 第 3 条会真的跑验收命令（可能是整套测试）；页面 30 秒刷一次、
+    每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。D1 第 4 步要在看板上显示
+    「完成判据过了几条」时，得先想清楚在哪算、多久算一次、结果存哪，不能直接在 render 里调。"""
+    rows = []
+
+    head = git(repo, "rev-parse", MAIN_BRANCH).strip()
+    if not head:
+        rows.append({"n": 1, "name": f"{MAIN_BRANCH} 前进了", "ok": False,
+                     "why": f"仓库里没有 {MAIN_BRANCH} 分支，判据无从谈起"})
+    else:
+        moved = bool(base_sha) and head != base_sha
+        rows.append({"n": 1, "name": f"{MAIN_BRANCH} 前进了", "ok": moved,
+                     "why": (f"{base_sha[:7]} → {head[:7]}" if moved else
+                             f"还停在 {head[:7]}，送任务之后没有前进" if base_sha else
+                             "没有记下送任务之前的 sha，没法比")})
+
+    name2 = "里程碑分支都合进去了"
+    if not glob_pat:
+        rows.append({"n": 2, "name": name2, "ok": None, "why": "没配 BRANCH_GLOB：这个项目不用里程碑分支"})
+    else:
+        brs = milestone_branches(repo, glob_pat)
+        if not brs:
+            # 对空集合「全都合进去了」恒真。前缀填错、分支命名换了、这件活压根没建分支，
+            # 从 git 这边看一模一样——都不能当作通过。见 ROADMAP 完成判据那一节。
+            rows.append({"n": 2, "name": name2, "ok": False,
+                         "why": f"`{glob_pat}` 一个都没匹配到。是写错了，还是这件活没建分支？"})
+        else:
+            left = [b for b in brs
+                    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", b, MAIN_BRANCH],
+                                      capture_output=True).returncode != 0]
+            rows.append({"n": 2, "name": name2, "ok": not left,
+                         "why": (f"{len(brs)} 个都已经是 {MAIN_BRANCH} 的祖先：" + "、".join(brs)) if not left
+                                else f"还没合进 {MAIN_BRANCH}：" + "、".join(left)})
+
+    name3 = "验收命令过了"
+    if not check_cmd:
+        rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
+    else:
+        code, tail = run_check(repo, check_cmd)
+        rows.append({"n": 3, "name": name3, "ok": code == 0,
+                     "why": f"`{check_cmd}` " + ("过了" if code == 0 else
+                                                 tail if code is None else
+                                                 f"退出码 {code}" + (f"\n{tail}" if tail else ""))})
+    return rows
 
 
 def task_span(a, b):
@@ -1236,6 +1320,10 @@ def live_action(list_path, act, body):
         bad = [l for l in lines if TASK_HDR.match(l)]
         if bad:
             return 400, {"ok": False, "out": f"正文里顶格的「## 」会被当成另一个任务：{bad[0][:40]}…；小标题请用 ###"}
+        # 「验收：<命令>」会被当成 shell 命令跑（判据第 3 条）。ROADMAP 写的是「人在 queue.md 里写
+        # 这件活算完的标准」——那就只让它从文件进来，网页表单里不收，免得一个输入框变成任意命令执行。
+        if any(TASK_CHECK.match(l) for l in lines):
+            return 400, {"ok": False, "out": "「验收：」那行会被当成命令执行，网页上不收；要改验收命令请直接编辑 queue.md"}
         if len("\n".join(lines)) > 20000:
             return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
         text = [title, *lines]

@@ -277,6 +277,10 @@ EQ=$(cat "${TMP}/eta/review/queue.md")
 [ "$(post /api/add '{"project":"eta/repo","title":"两行\n标题","body":""}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a multi-line title is refused'
 [ "$(post /api/add '{"project":"eta/repo","title":"坏正文","body":"第一行\n## 这会变成新任务"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a body line starting with ## is refused'
 grep -q '###' "${TMP}/resp" || fail 'the refusal says to use ### instead'
+# 「验收：」那行会被当成 shell 命令跑（判据第 3 条）：网页表单里不收，不让一个输入框变成任意命令执行
+[ "$(post /api/add '{"project":"eta/repo","title":"想塞命令","body":"验收：touch /tmp/pwned"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a 验收 line is refused from the web form'
+grep -q 'queue.md' "${TMP}/resp" || fail 'the refusal says to edit queue.md instead'
+[ "$(post /api/edit '{"project":"eta/repo","pos":1,"title":"想塞命令","body":"验收: rm -rf /"}' -H "X-RB-Token: ${TOKEN}")" = 400 ] || fail 'a 验收 line is refused from edit too'
 [ "$(cat "${TMP}/eta/review/queue.md")" = "${EQ}" ] || fail 'refused adds leave queue.md untouched'
 [ "$(post /api/add '{"project":"eta/repo","title":"导出支持按月分文件","body":"### 范围\n- 只动导出\n\n怎么算做完：测试通过"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'add a task from the page'; }
 grep -q '"ok": true' "${TMP}/resp" && grep -q 'T10' "${TMP}/resp" || fail 'add reports the new ID'
@@ -533,9 +537,11 @@ echo 'PASS review-board serve: loop switch; wakes the idle writer when work is p
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
 # 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。
 if command -v node >/dev/null; then
-  # 给冒烟测试准备一个「做完等放行」的任务：theta 领 T4、做完（没有提交，放行模式）
+  # 给冒烟测试准备一个「做完等放行」的任务：theta 领 T4、提交一笔（判据第 1 条要 main 前进）、做完
   rm -f "${TMP}/theta/review/loop" "${TMP}/theta/review/.loop-wait" "${TMP}/theta/review/paused"
-  ( cd "${TMP}/theta/repo" && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" next >/dev/null && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
+  ( cd "${TMP}/theta/repo" && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" next >/dev/null \
+    && printf 'flag\n' >> a.py && git add a.py && git commit -qm 'T4 work' \
+    && env -u HERDR_PANE_ID python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
   grep -q '"ev": "done", "id": "T4".*"gate": true' "${TMP}/theta/review/tasks.state" || fail 'smoke setup: theta T4 waits for release'
   set +e; node "${ROOT}/tests/browser-smoke.mjs" "${U}/" "${SERVE}"; SMOKE=$?; set -e
   if [ "${SMOKE}" = 77 ]; then :
