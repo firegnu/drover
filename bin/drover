@@ -13,7 +13,7 @@
 
 在仓库目录里运行：
   drover init <短名>             人：把这个仓库接上 drover（写 .drover.conf、建交接目录、登记）
-  drover board [--out P] …       生成 / 伺服看板（参数原样转给 drover-board，见它的 --help）
+  drover board                   打开看板（curses TUI；参数原样转给 drover-board，见它的 --help）
   drover add "标题" [说明行 …]   人：加到队列末尾，自动编号
   drover list                    看进行中、队列、已完成
   drover next                    把下一件送进主控；有进行中的就重发它
@@ -32,7 +32,7 @@
                                       （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
   drover move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
   drover edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
-                                      --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
+                                      --expect：queue.md 的指纹，对不上说明队列刚被改过，不写（move / edit / drop --pos）
 退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
         2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
 配置见 .drover.conf：MAIN_AGENT 送给谁（空 = 不自动送，打出来让人粘）、TASK_GATE 放行模式、
@@ -448,9 +448,60 @@ def cmd_hold(pos, on, expect):
     return 0
 
 
+# ============================================================ 系统通知
+# 通知跟着守护进程走，和界面无关：引擎每跳发一次，看板开不开都照发。以前它挂在看板的静态生成
+# 路径上（`drover-board --notify`，由 launchd 定时调），看板改成前台 TUI 之后那条路就没了。
+NOTIFY_BIN = os.environ.get("DROVER_NOTIFY_BIN", "osascript")
+NOTIFY_STATE = os.path.expanduser("~/.drover/board-notified.json")
+
+
+def applescript_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def notify_new(projects, state_path):
+    """新出现的「等你」条目弹 macOS 通知：一个项目一条，写有几条新的和第一条的内容。
+    已通知过的 key 记在 state_path；条目解决后从记录里消失，再出现会重新通知。这是 drover 唯一
+    为了「别重复烦人」存的东西，删掉只会把还开着的条目再通知一次。通知发不出去就跳过，
+    不影响循环。"""
+    try:
+        seen = set(json.loads(B.read(state_path) or "[]"))
+    except ValueError:
+        seen = set()
+    current = []
+    for p in projects:
+        items = B.wait_items(p)
+        current += [k for k, _ in items]
+        new = [text for k, text in items if k not in seen]
+        if not new:
+            continue
+        body = " ".join((new[0] if len(new) == 1 else f"{len(new)} 条新的：{new[0]}").split())[:220]
+        script = f"display notification {applescript_str(body)} with title {applescript_str('drover · ' + p['name'] + ' 等你')}"
+        try:
+            subprocess.run([NOTIFY_BIN, "-e", script], capture_output=True, timeout=10)
+        except Exception:
+            pass
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    tmp = f"{state_path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(current), f, ensure_ascii=False)
+        os.replace(tmp, state_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def tick(list_path):
+    """一跳：推一次外层循环，再把新出现的「等你」通知出去。叫 tick 不叫 loop_tick，免得和
+    drover-board 里那个（真正干活的那个）看混。"""
+    B.loop_tick(list_path)
+    notify_new(B.collect(list_path), NOTIFY_STATE)
+
+
 def cmd_loop_run(list_path, once, interval):
-    """外层循环的引擎，独立进程。一跳做什么全在 drover-board.loop_tick 里，这里只管「多久一跳」
-    和「一跳出错不许把进程带走」。
+    """外层循环的引擎，独立进程。一跳做什么全在 drover-board.loop_tick 里，这里只管「多久一跳」、
+    「一跳出错不许把进程带走」，外加每跳发一次系统通知。
 
     以前它是 `drover board serve` 里的一个守护线程——**不开那个网页服务，外层循环一跳都不转**，
     「无人值守」根本不成立。拆出来之后看板退回纯观察者：开不开、关没关，都不影响循环。
@@ -458,12 +509,12 @@ def cmd_loop_run(list_path, once, interval):
     哪个项目转不转不在这里判断，看它交接目录里有没有 loop 文件（`drover loop on/off`）。
     这个命令不需要待在某个仓库里，所以不走 setup()。"""
     if once:
-        B.loop_tick(list_path)
+        tick(list_path)
         return 0
     print(f"drover loop：每 {interval} 秒一跳，项目清单 {list_path or '~/.drover/projects'}", flush=True)
     while True:
         try:
-            B.loop_tick(list_path)
+            tick(list_path)
         except Exception as e:                       # 一个项目出岔子，不能把整条循环带走
             print(f"loop_tick: {e}", file=sys.stderr, flush=True)
         time.sleep(interval)

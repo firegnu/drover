@@ -1,33 +1,41 @@
 #!/usr/bin/env python3
-"""drover-board —— 外层循环的只读看板。
+"""drover-board —— 外层循环的看板，一个 curses TUI。
 
-读 ~/.drover/projects 里登记过的仓库，从各自的交接目录（HANDOFF_DIR）生成一个静态
-HTML，写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
+读 ~/.drover/projects 里登记过的仓库，从各自的交接目录（HANDOFF_DIR）算出每个项目的队列、
+当前这件活、完成判据，画在终端里。不存任何自己的状态，**刷新等于重跑**；不接 agent，只问
+corral 要状态。推进靠按键，不靠敲命令——按下去的每一个写操作都转给 bin/drover，判据和队列
+的解析只能有一份实现。
 
 用法:
-  drover-board            生成
-  drover-board --open     生成后用浏览器打开
-  drover-board --quiet    生成，不打印路径
-  drover-board --out P    写到 P
-  drover-board --projects F   改用 F 当项目清单（一行一个）；测试用
+  drover board                 打开看板
+  drover board --projects F    改用 F 当项目清单（一行一个）；测试用
 
-项目发现: ~/.drover/projects，一行一个仓库路径，drover-init 会写进去。不扫目录。
+按键:
+  ↑ ↓ / j k  选项目      g  放行（drover go）        n  发下一件（drover next）
+  p  暂停 / 恢复         a  加任务（$EDITOR 编 queue.md）
+  l  循环开 / 关         r  刷新                     q  退出
+
+这个文件同时是 drover 的**数据模块**：bin/drover 和几个测试都 import 它，交接文件的解析、
+完成判据的核对、外层循环的一跳（loop_tick）都在这里，两边用同一套。
+
+以前这里还有一整层网页：静态 HTML、本机 HTTP 服务、令牌、Host / Origin 校验、页面 JS，
+约 800 行。改 TUI 时整个删掉了（理由见 ROADMAP「看板」一节）——corral 已经有自己的 board，
+drover 这边只需要一个不占分栏、能走 SSH 的任务看板。要查当初怎么写的，git log 全在。
+
+项目发现: ~/.drover/projects，一行一个仓库路径，drover init 会写进去。不扫目录。
 """
+import curses
 import hashlib
-import hmac
-import html
-import http.server
 import json
 import os
 import re
-import secrets
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 PROJ_LIST = os.path.expanduser("~/.drover/projects")
-DEFAULT_OUT = os.path.expanduser("~/.drover/board.html")
 NOW = time.time()
 
 
@@ -52,10 +60,6 @@ def git(repo, *args):
         return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=30).stdout
     except Exception:
         return ""
-
-
-def esc(s):
-    return html.escape(s or "", quote=True)
 
 
 _AGENTS = None
@@ -226,7 +230,7 @@ def task_blocks(text):
 
 TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
 # 正文里的「验收：<命令>」覆盖 .drover.conf 的 CHECK_CMD（完成判据第 3 条）。
-# 它会被当成 shell 命令跑，所以只认 queue.md 里写的，网页表单里不收（见 live_action）。
+# 它会被当成 shell 命令跑，所以只认 queue.md 里写的：人自己编的文件，不经任何表单。
 TASK_CHECK = re.compile(r'^\s*验收\s*[:：]\s*(\S.*?)\s*$', re.M)
 
 
@@ -467,35 +471,6 @@ def task_view(repo, conf, p):
             "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
 
 
-def task_history(repo, conf):
-    """全部做完 / 放弃的任务，最新的在前，外加汇总；看板「查看全部」点开时才算。
-    正在做的不算。没发出过就被放弃的，tasks.state 里没有正文，取 queue.md 里还在的原文。"""
-    d = conf["HANDOFF_DIR"]
-    tasks, _, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
-    blocks = task_blocks(read(f"{d}/queue.md"))
-    items = []
-    for t in tasks.values():
-        if t["status"] == "doing":
-            continue
-        body, source = t.get("body", ""), "发出时的快照（写手收到的版本）"
-        if t.get("t0") and not body:
-            source = "发出时的快照（这个任务没写正文）"
-        elif not body:
-            b = next((b for b in blocks if (b["id"] == t["id"]) or (not b["id"] and b["title"] == t.get("key"))), None)
-            body, source = (b["body"], "queue.md 里的原文（没发出过）") if b else ("", "没有正文：没发出过，queue.md 里也已经删掉")
-        items.append({"id": t["id"], "title": t["title"], "status": t["status"], "reason": t.get("reason", ""),
-                      "body": body, "source": source,
-                      "t0": t.get("t0"), "t1": t.get("t1") or 0, "span": task_span(t.get("t0"), t.get("t1")),
-                      "date": datetime.fromtimestamp(t["t1"]).strftime("%Y-%m-%d %H:%M") if t.get("t1") else "",
-                      "range": f"{t['start'][:7]}..{t['end'][:7]}" if t.get("end") and t["end"] != t.get("start") else "",
-                      "awaiting": t["id"] == awaiting})
-    items.sort(key=lambda i: i["t1"], reverse=True)
-    done = [i for i in items if i["status"] == "done"]
-    spans = [i["t1"] - i["t0"] for i in done if i["t0"] and i["t1"]]
-    return {"items": items, "summary": {"done": len(done), "dropped": len(items) - len(done),
-            "avg": task_span(1, 1 + sum(spans) / len(spans)) if spans else ""}}
-
-
 def project_state(repo, conf):
     d = conf["HANDOFF_DIR"]
     p = {"name": os.path.basename(repo), "repo": repo, "dir": d,
@@ -512,699 +487,7 @@ def project_state(repo, conf):
     return p
 
 
-# ============================================================ 渲染
-CSS = """
-:root{--s0:#1b1e26;--rail:#181b22;--s1:#21252e;--s2:#2f3541;--s3:#3a4150;--mast:#13161d;--mast-hi:#1c2029;--line:rgba(255,255,255,.08);--line-soft:rgba(255,255,255,.05);--line-strong:rgba(255,255,255,.15);
---t1:#f4f5f8;--t2:#e2e4ea;--t3:#aeb3bf;--t4:#858b98;--t5:#646a77;
---red:#c8375a;--red-t:#f0a3b3;--red-bg:#3a2530;--blue:#4a7fc1;--blue-t:#8fb8ee;--blue-bg:#27364a;--purple:#8f6ccf;--purple-t:#c4a6f0;--purple-bg:#332c50;
---amber:#d9a83a;--amber-t:#e5b866;--amber-bg:#3e3324;--green:#4a8a55;--green-t:#7fd48a;--green-bg:#273e33;
---r1:4px;--r2:6px;--r3:8px;--fs1:11px;--fs2:12px;--fs3:13px;--fs4:15px;--fs5:20px;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
-html,body{color-scheme:dark;margin:0;padding:0;background:var(--s0);color:var(--t2);font-variant-numeric:tabular-nums;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Helvetica Neue","Microsoft YaHei",sans-serif;font-size:var(--fs3);line-height:1.55;-webkit-font-smoothing:antialiased}
-a{color:inherit;text-decoration:none}a:hover{text-decoration:underline;text-decoration-color:rgba(255,255,255,.35);text-underline-offset:2px}
-code,pre{font-family:var(--mono)}
-code{font-size:var(--fs2)}
-summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
-.hit{outline:2px solid var(--red);outline-offset:2px}
-.mute{color:var(--t4)}.dim{color:var(--t3)}
-.wrap{min-height:100vh;display:flex;flex-direction:column;min-width:1200px}
-.mast{display:flex;align-items:center;gap:20px;padding:0 24px;height:46px;background:linear-gradient(var(--mast-hi),var(--mast));color:var(--t2);border-bottom:1px solid rgba(0,0,0,.6);box-shadow:0 1px 0 rgba(255,255,255,.06);position:sticky;top:0;z-index:5}
-.mast .brand{font-weight:700;font-size:var(--fs4);letter-spacing:.01em;color:#fff}
-.mast .gen{margin-left:auto;font-size:var(--fs2);color:var(--t4);font-variant-numeric:tabular-nums}.mast .golive{color:var(--blue-t)}
-.banner{background:linear-gradient(90deg,rgba(200,55,90,.12),rgba(200,55,90,.04));border-bottom:1px solid rgba(200,55,90,.35);box-shadow:inset 3px 0 0 var(--red);padding:12px 24px;display:flex;gap:20px;align-items:flex-start}
-.banner .t{font-weight:700;color:var(--red-t);font-size:var(--fs4);flex:none;line-height:30px}
-.banner .items{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
-.banner a{display:grid;grid-template-columns:112px minmax(0,1fr) auto 14px;gap:0 12px;align-items:center;color:#ecc3cc;line-height:1.5;padding:4px 10px;border-radius:var(--r1);transition:background-color .12s}.banner a:hover{text-decoration:none;color:#fff;background:rgba(255,255,255,.06)}
-.banner a b{font-weight:600;font-size:var(--fs1);color:#f7d4dc;background:rgba(200,55,90,.28);border-radius:var(--r1);padding:0 8px;line-height:20px;justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}.banner a .age{color:#d98aa0;font-size:var(--fs2)}.banner a .arr{color:var(--red);text-align:right}
-.nowait{padding:0 24px;line-height:32px;color:var(--t4);border-bottom:1px solid var(--line-soft);font-size:var(--fs2)}
-.wait{margin:12px 0 0;border:1px solid #5a2c3c;background:var(--red-bg);border-radius:var(--r2);padding:10px 14px;font-size:var(--fs3)}
-.wait.calm{border-color:#54462c;background:#2e2b25}.wait .wh{font-weight:700;color:var(--red-t);margin-bottom:4px}
-.wait ul{margin:0;padding-left:18px}.wait li{margin:3px 0;color:var(--t2)}.wait li .dim{color:var(--t3)}.wait a{color:var(--red-t)}
-.tasks{margin:20px 0 0;background:var(--s1);border:1px solid var(--line);border-radius:var(--r2);padding:16px 20px 18px}.tasks .th{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;min-height:28px}.tasks .th .src{margin-left:auto;font-size:var(--fs1);color:var(--t4)}
-.mode,.kind,.flow,.badge,.lvl,.sev,.verb,.dec,.next,.hand,.hold-tag,.chip,.evbtn,.me{display:inline-block;font-size:var(--fs1);font-weight:600;line-height:18px;padding:0 7px;border-radius:var(--r1);border:0;white-space:nowrap}
-.mode{color:var(--t3);background:var(--s3)}
-.mode.gate{color:var(--red-t);background:var(--red-bg)}.mode.paused{color:var(--amber-t);background:var(--amber-bg)}
-.lanes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.45fr) minmax(0,1.15fr)}
-.lane{min-width:0;padding:0 20px}.lane:first-child{padding-left:0}.lane:last-child{padding-right:0}.lane+.lane{border-left:1px solid var(--line-soft)}
-.lanes .empty{border:1px dashed var(--line-strong);border-radius:var(--r1);padding:18px 12px;text-align:center;color:var(--t4);font-size:var(--fs2)}
-.lane>.lh{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line-soft);padding:0 0 8px;margin-bottom:10px;font-size:var(--fs1);letter-spacing:.04em;color:var(--t4)}.lane>.lh .n{font-variant-numeric:tabular-nums;color:var(--t3)}
-.tid{font-family:var(--mono);font-size:var(--fs2);color:var(--t3);margin-right:7px}
-ol.q{list-style:none;margin:0;padding:0;counter-reset:q}ol.q li{counter-increment:q;display:grid;grid-template-columns:18px minmax(0,1fr);gap:3px 8px;padding:10px 12px 10px 10px;margin:0 0 8px;background:var(--s2);border-left:3px solid transparent;border-radius:var(--r1)}ol.q li:first-child{border-left-color:var(--blue)}
-ol.q li::before{content:counter(q);grid-row:span 2;color:var(--t5);font-size:var(--fs2);font-variant-numeric:tabular-nums;padding-top:1px}
-ol.q .t{color:var(--t2);font-size:var(--fs3)}ol.q .sub{font-size:var(--fs2);color:var(--t4);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.next{color:var(--s0);background:var(--t2)}.next.hold{background:var(--red-bg);color:var(--red-t)}
-.hand{color:var(--amber-t);background:var(--amber-bg);font-weight:500}
-.card{background:var(--s2);border-left:3px solid var(--blue);border-radius:var(--r1);padding:14px 18px}.card.s-me{border-left-color:var(--red)}
-.card .tt{font-size:var(--fs4);font-weight:700;letter-spacing:-.01em;color:var(--t1)}.card .meta{margin-top:4px;font-size:var(--fs2);color:var(--t4);display:flex;gap:4px 14px;flex-wrap:wrap;font-variant-numeric:tabular-nums;align-items:center}.card .meta code{color:var(--t3)}
-ol.steps{list-style:none;margin:16px 0 14px;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
-ol.steps li{border-top:2px solid var(--line-strong);padding-top:8px;font-size:var(--fs2);color:var(--t4)}ol.steps li .x{display:block;margin-top:2px;font-size:var(--fs1);line-height:1.4;color:var(--t4)}
-ol.steps li.ok{border-top-color:var(--green);color:var(--t3)}ol.steps li.ok .x{color:var(--t4)}
-ol.steps li.now{border-top-color:var(--blue);color:var(--blue-t);font-weight:700}ol.steps li.now .x{color:var(--blue-t);font-weight:400}
-ol.steps li.now.release{border-top-color:var(--red);color:var(--red-t)}ol.steps li.now.release .x{color:var(--red-t)}
-.card .nowl{border-top:1px solid var(--line);padding-top:10px;display:grid;gap:3px;font-size:var(--fs3);color:var(--t2)}.card .nowl .dim{color:var(--t4);font-size:var(--fs2)}
-.drow{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:4px 10px;padding:10px 12px 10px 10px;margin:0 0 8px;align-items:baseline;background:var(--s2);border-radius:var(--r1)}
-.drow .t{color:var(--t2);font-size:var(--fs3)}.drow .r{font-size:var(--fs2);color:var(--t4);font-variant-numeric:tabular-nums;white-space:nowrap}
-.drow .s{grid-column:2 / 4;font-size:var(--fs1);color:var(--t4);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.drow:not(.dropped) .s>span:not(.kind),.drow .s code{display:inline-block;font-size:var(--fs1);line-height:18px;padding:0 7px;border-radius:var(--r1);background:var(--s3);color:var(--t3)}.drow .s code{font-family:var(--mono)}
-.drow.dropped .t{color:var(--t4);text-decoration:line-through;text-decoration-color:var(--t5)}.drow.dropped .r{color:var(--amber-t)}
-.kind{background:var(--purple-bg);color:var(--purple-t)}.kind.direct{background:var(--s3);color:var(--t3)}.kind.noreview{background:var(--amber-bg);color:var(--amber-t)}
-.flow{color:var(--amber-t);background:var(--amber-bg)}.flow.later{color:var(--t3);background:var(--s3)}
-.tasks .foot-note{margin-top:12px;font-size:var(--fs2);color:var(--t4)}.tasks .foot-note code{color:var(--t3)}
-[hidden]{display:none!important}
-:focus-visible{outline:0;box-shadow:0 0 0 3px rgba(74,127,193,.45)}
-.act{display:none}.live .act{display:inline-block;font:600 var(--fs2)/1 inherit;padding:6px 12px;border-radius:var(--r1);cursor:pointer;border:1px solid transparent}
-.live .act.go{background:var(--red);color:#fff;margin-top:6px}.live .act.go:hover{background:#d8456a}
-ol.q li{position:relative}.live ol.q li{padding-bottom:34px}
-.qa{position:absolute;left:36px;right:10px;bottom:7px;display:flex;justify-content:flex-end;gap:4px;border-top:1px solid var(--line);padding-top:6px;opacity:0;pointer-events:none;transition:opacity .12s}
-.live ol.q li:hover .qa,.live ol.q li:focus-within .qa{opacity:1;pointer-events:auto}
-.live ol.q li .qa .act{font:600 var(--fs1)/18px inherit;padding:0 8px;border-radius:var(--r1);background:var(--s3);color:var(--t3);border-color:transparent}.live ol.q li .qa .act:hover{color:var(--blue-t);background:var(--blue-bg)}
-.live ol.q li .qa .act.drop:hover{color:var(--amber-t);background:var(--amber-bg)}.live ol.q li .qa .act.mv{padding:0 7px}
-.live ol.q li[draggable]{cursor:grab}.live ol.q li.dragging{opacity:.45}
-.live ol.q li.drop-before{box-shadow:0 -3px 0 var(--blue-t)}.live ol.q li.drop-after{box-shadow:0 3px 0 var(--blue-t)}
-dialog.rbd{background:var(--s1);color:var(--t2);border:1px solid var(--line-strong);border-radius:var(--r3);padding:20px 22px;width:min(460px,90vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
-dialog.rbd::backdrop{background:rgba(0,0,0,.45)}
-.rbd-t{font-size:var(--fs4);font-weight:700;color:var(--t1)}.rbd-m{margin-top:8px;font-size:var(--fs3);color:var(--t3);line-height:1.6}
-.rbd-r{margin-top:12px;width:100%;box-sizing:border-box;font:var(--fs3) inherit;padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--r1);background:var(--s0);color:var(--t2);outline:none}.rbd-r:focus{border-color:var(--blue)}
-.rbd-out{margin:12px 0 0;padding:8px 10px;border-radius:var(--r1);font-size:var(--fs2);white-space:pre-wrap;background:var(--s0);border:1px solid var(--line);color:var(--t3)}.rbd-out.ok{border-color:#356243}.rbd-out.bad{border-color:#803733;color:var(--red-t)}
-.rbd-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.rbd-b button{font:600 var(--fs3) inherit;padding:7px 14px;border-radius:var(--r1);cursor:pointer;border:1px solid var(--line-strong);background:var(--s2);color:var(--t2)}
-.rbd-b .rbd-ok,.rbd-b .rbe-ok{background:var(--blue);border-color:var(--blue);color:#fff}.rbd-b .rbd-ok:disabled,.rbd-b .rbe-ok:disabled{opacity:.6;cursor:default}.rbd-b button:hover{border-color:rgba(255,255,255,.25)}.rbd-b .rbd-ok:hover,.rbd-b .rbe-ok:hover{background:#5a8fd1;border-color:#5a8fd1}
-.hp{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font:var(--fs2) inherit;color:var(--t3);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:0 11px 0 9px;line-height:24px;cursor:pointer;font-variant-numeric:tabular-nums}
-.hp:hover{border-color:var(--line-strong);color:var(--t2)}.hp .hdot,.hrow .hdot{width:8px;height:8px;border-radius:50%;background:var(--t5);flex:none}
-.hp.ok .hdot,.hrow.ok .hdot{background:#5fb36a;box-shadow:0 0 0 3px rgba(95,179,106,.2)}.hp.warn .hdot,.hrow.warn .hdot{background:var(--amber-t);box-shadow:0 0 0 3px rgba(229,184,102,.2)}
-.hp.warn{color:var(--amber-t);border-color:#5e4c2c}.hp.bad .hdot{background:#e5533d;box-shadow:0 0 0 3px rgba(229,83,61,.25)}.hp.bad{color:var(--red-t);border-color:#6e3345}
-.offline .act{opacity:.35;pointer-events:none}
-.hlist{margin-top:14px;border-top:1px solid var(--line)}.hrow{display:grid;grid-template-columns:14px 150px minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--line-soft)}
-.hrow .hdot{transform:translateY(-1px)}.hrow b{font-weight:600;color:var(--t2);font-size:var(--fs3)}.hdet{font-size:var(--fs3);color:var(--t3);white-space:pre-wrap;word-break:break-word}.hrow.warn .hdet{color:#e5c98f}
-.live .act.hist{display:block;width:100%;margin-top:4px;padding:8px 10px;background:transparent;color:var(--t3);border:1px dashed var(--line-strong);border-radius:var(--r1);text-align:center;font-weight:500}
-.live .act.hist:hover{color:var(--blue-t);border-color:var(--blue)}
-.hback{background:none;border:0;color:var(--blue-t);font:var(--fs3) inherit;cursor:pointer;padding:0;margin-bottom:10px}.hback:hover{text-decoration:underline}
-.hbar{display:flex;gap:6px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}.hbar .filter{margin:0;flex:1;min-width:180px;width:auto}
-.hf{font:var(--fs2) inherit;padding:4px 10px;border-radius:var(--r1);border:1px solid var(--line-strong);background:var(--s0);color:var(--t3);cursor:pointer}.hf.on{background:var(--blue);border-color:var(--blue);color:#fff}
-.hlist2 .drow{cursor:pointer}.hlist2 .drow:hover{background:var(--s3)}
-.hold-tag{color:var(--red-t);background:var(--red-bg)}
-.live ol.q li .qa .act.hold-btn:hover{color:var(--red-t);background:var(--red-bg)}.live ol.q li .qa .act.hold-btn.on{color:var(--red-t);background:var(--red-bg)}
-.mode.loop{color:var(--green-t);background:var(--green-bg)}.loopw{margin-top:10px;font-size:var(--fs2);color:var(--green-t);border:1px dashed #356243;border-radius:var(--r1);padding:6px 10px}.loopw.bad{color:var(--red-t);border-color:#6e3345}
-.tasks .th .act.lp{margin-left:10px;background:var(--s2);color:var(--t2);border-color:var(--line-strong);padding:0 12px;line-height:26px}.tasks .th .act.lp:hover{border-color:var(--green);color:var(--green-t)}.tasks .th .act.lp.on{border-color:var(--green);color:var(--green-t)}
-.tasks .th .act.pz{margin-left:10px;background:var(--s2);color:var(--t2);border-color:var(--line-strong);padding:0 12px;line-height:26px}.tasks .th .act.pz:hover{border-color:var(--amber);color:var(--amber-t)}
-.tasks .th .act.add{margin-left:10px;background:var(--blue);color:#fff;padding:0 12px;line-height:26px}.tasks .th .act.add:hover{background:#5a8fd1}
-dialog.rbe{background:var(--s1);color:var(--t2);border:1px solid var(--line-strong);border-radius:var(--r3);padding:20px 22px;width:min(1080px,94vw);box-shadow:0 18px 48px rgba(0,0,0,.55)}
-dialog.rbe::backdrop{background:rgba(0,0,0,.5)}
-.rbe-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.rbe-t{font-size:var(--fs4);font-weight:700;color:var(--t1)}.rbe-p{font-size:var(--fs3);color:var(--t3)}.rbe-hint{margin-left:auto;font-size:var(--fs1);color:var(--t4)}
-.rbe-g{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:14px}
-.rbe-l{display:flex;flex-direction:column;gap:8px}
-.rbe-title,.rbe-flow,.rbe-body{font:var(--fs3) inherit;padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--r1);background:var(--s0);color:var(--t2);outline:none}
-.rbe-title:focus,.rbe-flow:focus,.rbe-body:focus{border-color:var(--blue)}.rbe-title{font-size:var(--fs4);font-weight:600}
-.rbe-body{height:52vh;min-height:260px;resize:vertical;font-family:var(--mono);font-size:var(--fs3);line-height:1.6}
-.rbe-r{border:1px solid var(--line);border-radius:var(--r1);background:var(--s0);padding:12px 16px;height:calc(52vh + 90px);min-height:350px;overflow-y:auto}
-.rbe-cap{font-size:var(--fs1);color:var(--t4);letter-spacing:.04em;margin-bottom:8px}.rbe-pv .dp.bad{color:var(--red-t)}
-.side,pre.block,.drawer .dct{scrollbar-width:thin;scrollbar-color:#414348 transparent}
-.lanes .lb{max-height:min(46vh,440px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#414348 transparent}
-.blist{max-height:min(60vh,560px);overflow-y:auto;padding-right:6px;scrollbar-width:thin;scrollbar-color:#46484d transparent}
-.lanes .lb::-webkit-scrollbar,.blist::-webkit-scrollbar{width:8px}.lanes .lb::-webkit-scrollbar-thumb,.blist::-webkit-scrollbar-thumb{background:#414348;border-radius:4px}
-[data-td]{cursor:pointer}ol.q li[data-td]:hover,.drow[data-td]:hover{background:var(--s3)}.card[data-td]:hover{background:#31343a}
-ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,92vw);background:var(--s1);border-left:1px solid var(--line-strong);box-shadow:-12px 0 32px rgba(0,0,0,.5);z-index:21;display:flex;flex-direction:column}
-.drawer .dhd{display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:46px;border-bottom:1px solid var(--line);font-size:var(--fs2);color:var(--t4)}
-.drawer .dx{background:none;border:1px solid var(--line-strong);color:var(--t2);border-radius:var(--r1);cursor:pointer;font-size:var(--fs2);padding:3px 10px}.drawer .dx:hover{border-color:var(--t5)}
-.drawer .dct{overflow-y:auto;padding:22px 28px 56px}
-.dtt{font-size:17px;line-height:1.35;font-weight:700;color:var(--t1);letter-spacing:-.01em}.dtt .tid{font-size:var(--fs2);font-weight:600;color:var(--t3);background:var(--s2);border-radius:var(--r1);padding:0 7px;line-height:20px;vertical-align:2px;margin-right:8px}
-.dsub{margin-top:10px;display:flex;gap:6px 12px;flex-wrap:wrap;align-items:center;font-size:var(--fs2);color:var(--t4)}.dsub code{color:var(--t3)}.dst{font-weight:600;color:var(--t2)}
-.dsrc{margin-top:8px;font-size:var(--fs1);color:var(--t4)}
-.dbody{margin-top:18px;border-top:1px solid var(--line);padding-top:16px;font-size:var(--fs3);line-height:1.75;color:var(--t2)}
-.dbody .dp{margin:0 0 8px}.dbody .dh4{margin:18px 0 6px;font-weight:700;color:var(--t1)}.dbody .dh4:first-child{margin-top:0}.dbody .dli{padding-left:16px;position:relative;margin:2px 0}.dbody .dli::before{content:"·";position:absolute;left:5px;color:var(--t4)}.dbody .dgap{height:10px}
-.grid{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;align-items:start;background:linear-gradient(to right,var(--rail) 0,var(--rail) 231px,var(--line) 231px,var(--line) 232px,transparent 232px)}
-.side{position:sticky;top:46px;align-self:start;padding:16px 0;max-height:calc(100vh - 46px);overflow:auto}
-.side .cap{padding:0 19px 8px;font-size:var(--fs1);color:var(--t4);letter-spacing:.06em}
-.proj{margin:2px 8px;padding:8px 8px;cursor:pointer;border-left:3px solid transparent;border-radius:var(--r2);transition:background-color .12s}
-.proj:hover{background:#26282e}.proj.needs{border-left-color:var(--red)}.proj.sel{background:var(--s2);border-left-color:var(--t2)}
-.proj .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.proj .nm{font-weight:500;font-size:var(--fs3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.proj.sel .nm{font-weight:700}
-.proj .age{font-size:var(--fs2);color:var(--t4);flex:none;font-variant-numeric:tabular-nums}
-.proj .st{display:flex;align-items:center;gap:6px;margin-top:4px}
-.proj .st .status{font-size:var(--fs2);color:var(--t3)}.proj .st .who{font-size:var(--fs2);color:var(--t4)}.proj.needs .st .who{color:var(--red-t)}
-.me{background:var(--red);color:#fff}
-.badge{font-weight:600}
-.badge.me{background:var(--red);color:#fff}
-.badge.rv{background:var(--blue-bg);color:var(--blue-t)}
-.badge.pl{background:var(--purple-bg);color:var(--purple-t)}
-.badge.wr{background:var(--amber-bg);color:var(--amber-t)}
-.badge.none{background:var(--s3);color:var(--t3);font-weight:500}
-.main{padding:20px 24px 60px;min-width:0}
-.panel{display:none}.panel.sel{display:block}
-.head{display:flex;align-items:center;gap:10px;padding:4px 0 6px}
-.head h1{margin:0 4px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--t1);line-height:1.2}
-.head .badge{transform:translateY(1px)}.head>.mute{font-size:var(--fs2);font-variant-numeric:tabular-nums}
-.head .hd{margin-left:auto;color:var(--t4);font-size:var(--fs1);font-family:var(--mono);letter-spacing:.02em;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:var(--r1);padding:0 9px;line-height:22px}.head .hd code{color:var(--t3);font-size:var(--fs2)}
-.prog,.crit{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-top:8px;font-size:var(--fs2);color:var(--t3)}
-.prog b{color:var(--t1);font-weight:700}
-.crit .k{color:var(--t2);font-weight:600}
-.crit .ok{color:var(--green-t)}.crit .bad{color:var(--red)}.crit .mute{color:var(--t4)}
-.planning .age{color:var(--t3);font-size:var(--fs2)}.planning .task{color:var(--t2)}.planning .dim{color:var(--t4);font-size:var(--fs2)}
-details.lastrun .age{color:var(--t3);font-size:var(--fs2)}
-.idle{padding:16px 0;color:var(--t4)}
-.cycle.s-me{border-left-color:var(--red)}
-.cycle .title{font-size:var(--fs4);font-weight:700;letter-spacing:-.01em;margin-bottom:2px}
-.cycle .commits{font-size:var(--fs2);color:var(--t3);margin:2px 0 8px}.cycle .commits div{margin:1px 0}
-.cycle .top{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:6px 0 12px}
-details.desc>summary,details.ev>summary,.diff summary,details.proc>summary{color:var(--t4);font-size:var(--fs2);display:flex;gap:6px;align-items:center;transition:color .12s}details.desc>summary:hover,details.ev>summary:hover,.diff summary:hover,details.proc>summary:hover{color:var(--t2)}
-details.ev{margin-top:5px}details.ev>summary{display:flex;gap:8px;align-items:center;min-width:0}
-details[open].ev .evbtn::before{transform:rotate(90deg) translateX(-1px)}
-details[open].ev .evteaser{display:none}
-details.bgrp{margin-top:8px}details.bgrp>summary.bhead{cursor:pointer}
-.filter{margin:0 0 10px;font:var(--fs3) inherit;padding:6px 10px;border:1px solid var(--line-strong);border-radius:var(--r1);width:320px;background:var(--s0);color:var(--t2);outline:none}.filter:focus{border-color:var(--blue)}.filter::placeholder{color:var(--t5)}
-.cycle .top .lab{font-size:var(--fs2);color:var(--t4)}
-.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px 14px;font-size:var(--fs3)}
-.kv .k{color:var(--t4);padding-top:1px}.kv .v{color:var(--t2)}
-.chips{display:flex;flex-wrap:wrap;gap:4px 6px}
-.chip{background:var(--s3);color:var(--t3);font-weight:500}
-.round{margin-top:20px;background:var(--s1);border:1px solid var(--line);border-radius:var(--r2);padding:16px 20px 18px}
-.round .rh{display:flex;align-items:center;gap:12px;margin-bottom:12px;min-height:28px}
-h2{margin:0;font-size:var(--fs4);font-weight:700}
-h2 .sub{font-weight:400;color:var(--t4);font-size:var(--fs2);margin-left:8px}
-.sev{color:var(--t3);background:var(--s3)}
-.sev.blocking{color:#f28b82;background:#442a2d;font-weight:700}
-.sev.should{color:var(--amber-t);background:var(--amber-bg)}
-.sev.nit{color:var(--t3);background:var(--s3)}
-.fstat.ok{color:#7fd18a}.fstat.bad{color:#f28b82;font-weight:600}.fstat.wait{color:var(--amber-t)}
-.verb{margin-right:6px}
-.verb.accept{color:#7fd18a;background:#273e33}.verb.defer{color:var(--amber-t);background:var(--amber-bg)}.verb.reject{color:var(--s0);background:var(--t2);font-weight:700}
-.pending .dot{width:8px;height:8px;background:var(--red);border-radius:50%;flex:none}
-.sec{margin-top:20px;background:var(--s1);border:1px solid var(--line);border-radius:var(--r2);padding:16px 20px 18px}.sec h2{margin-bottom:12px}
-.list{border-top:1px solid var(--line);font-size:var(--fs3)}
-.bgrp{margin-top:8px}
-.bitem{padding:10px 12px 10px 24px;border-bottom:1px solid var(--line-soft)}
-.bl{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 8px;max-width:1100px}
-.bl .who{font-size:var(--fs2);color:var(--t4);padding-top:1px}
-.blist .acols{position:sticky;top:0;z-index:1;background:var(--s1)}
-.arch .body{margin:0 0 10px 32px;padding:12px 16px;background:var(--s0);border:1px solid var(--line);border-radius:var(--r1);font-size:var(--fs3);overflow-x:auto}
-.arch .body h3,.arch .body h4,.arch .body h5,.arch .body h6{font-size:var(--fs3);margin:12px 0 4px}
-.arch .body h3{font-size:var(--fs4)}
-.arch .body table{border-collapse:collapse;margin:6px 0}.arch .body td{border:1px solid var(--line);padding:3px 8px;vertical-align:top}
-.arch .body li{margin:2px 0 2px 18px}.arch .body pre{background:var(--s0);padding:8px 10px;white-space:pre-wrap}
-.arch .body p{margin:6px 0}
-.foot{padding:14px 24px;color:var(--t4);font-size:var(--fs1);border-top:1px solid var(--line)}
-.empty{color:var(--t4);padding:8px 0;font-size:var(--fs2)}
-.tasks,.sec,.round,.cycle,details.prev,.wait,.planning,details.lastrun{box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 10px 28px -16px rgba(0,0,0,.6)}
-ol.q li,.drow,.card,.bhead,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
-.lanes .empty{border-color:rgba(255,255,255,.12)}
-"""
-
-# 任务全文抽屉：整页只有一个，盖在页面右侧，不占看板空间；内容由 JS 从被点任务的 <template> 里取
-DRAWER = ('<div class="scrim" hidden></div><aside class="drawer" hidden><div class="dhd"><span>任务描述 · Esc 关闭</span>'
-          '<button class="dx" type="button">关闭</button></div><div class="dct"></div></aside>')
-
-# 本机服务打开时的确认框：放行 / 放弃都先确认，结果原样显示 drover 的输出
-LIVE_DIALOG = ('<dialog class="rbd"><form method="dialog"><div class="rbd-t"></div><div class="rbd-m"></div>'
-               '<input class="rbd-r" type="text" maxlength="300" placeholder="原因（可留空）"><pre class="rbd-out" hidden></pre>'
-               '<div class="rbd-b"><button value="cancel" class="rbd-no">取消</button><button value="ok" class="rbd-ok">确认</button></div></form></dialog>')
-
-# 本机服务打开时的加任务编辑框：左边写，右边按抽屉的排版实时预览；草稿存在浏览器里，关掉再开还在
-LIVE_EDITOR = ('<dialog class="rbe"><form method="dialog"><div class="rbe-h"><span class="rbe-t">加任务</span><span class="rbe-p"></span>'
-               '<span class="rbe-hint">加到队列末尾，自动编号 · 小标题用 ###，别用 ##</span></div>'
-               '<div class="rbe-g"><div class="rbe-l"><input class="rbe-title" type="text" maxlength="200" placeholder="标题（一行）">'
-               '<textarea class="rbe-body" spellcheck="false" placeholder="目标 / 范围（尤其不做什么）/ 怎么算做完\n### 小标题\n- 列表"></textarea></div>'
-               '<div class="rbe-r"><div class="rbe-cap">预览 · 写手收到的样子</div><div class="rbe-pv"></div></div></div>'
-               '<pre class="rbe-out" hidden></pre><div class="rbd-b"><button value="cancel" class="rbe-no">关闭</button><button value="ok" class="rbe-ok">加入队列</button></div></form></dialog>')
-
-JS = """
-(function(){
-  var KEY='rb.selected';
-  function select(name,push){
-    document.querySelectorAll('.proj').forEach(function(e){e.classList.toggle('sel',e.dataset.p===name)});
-    document.querySelectorAll('.panel').forEach(function(e){e.classList.toggle('sel',e.dataset.p===name)});
-    try{localStorage.setItem(KEY,name)}catch(e){}
-  }
-  function hit(anchor){
-    document.querySelectorAll('.hit').forEach(function(e){e.classList.remove('hit')});
-    var el=document.getElementById(anchor);if(!el)return;
-    el.classList.add('hit');
-    window.scrollTo({top:el.getBoundingClientRect().top+window.scrollY-72});
-    history.replaceState(null,'','#'+anchor);
-  }
-  window.rbFilter=function(inp){var q=inp.value.trim().toLowerCase();
-    inp.nextElementSibling.querySelectorAll('.bgrp').forEach(function(g,i){var any=false;
-      g.querySelectorAll('.bitem').forEach(function(r){var hit=!q||r.textContent.toLowerCase().indexOf(q)>=0;r.style.display=hit?'':'none';any=any||hit});
-      g.style.display=any?'':'none';if(q)g.open=any;else g.open=false})};
-  window.rbGo=function(name,anchor){select(name);setTimeout(function(){hit(anchor)},30);return false};
-  var names=[].map.call(document.querySelectorAll('.proj'),function(e){return e.dataset.p});
-  var first=document.querySelector('.proj.needs');
-  var saved=null;try{saved=localStorage.getItem(KEY)}catch(e){}
-  var pick=(first&&first.dataset.p)||(names.indexOf(saved)>=0?saved:names[0]);
-  if(names.indexOf(saved)>=0&&!first)pick=saved;
-  // 自动刷新前存下的状态（滚动、展开项、各栏滚动、打开的任务）；只用一次
-  var st={};try{st=JSON.parse(sessionStorage.rb||'{}');sessionStorage.removeItem('rb')}catch(e){}
-  // 地址栏里的锚点只在你点开或打开链接时跳；自动刷新时不跳，否则每 30 秒都被拽回那一条
-  if(location.hash.length>1&&!st.auto){var t=document.getElementById(decodeURIComponent(location.hash.slice(1)));
-    var pn=t&&t.closest('.panel');if(pn){pick=pn.dataset.p;setTimeout(function(){hit(t.id)},30)}}
-  if(pick)select(pick);
-  document.querySelectorAll('.proj').forEach(function(e){e.addEventListener('click',function(){select(e.dataset.p)})});
-  // 任务全文抽屉：点任务（队列、进行中、已完成）从右侧滑出，Esc / 点遮罩 / 关闭按钮收起
-  var dr=document.querySelector('.drawer'),sc=document.querySelector('.scrim'),openKey=null;
-  function openTd(k){var tp=document.getElementById('td-'+k);if(!tp||!dr)return;
-    var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(tp.content.cloneNode(true));box.scrollTop=0;
-    dr.querySelector('.dhd span').textContent='任务描述 · Esc 关闭';
-    dr.hidden=false;sc.hidden=false;openKey=k}
-  function closeTd(){if(!dr)return;dr.hidden=true;sc.hidden=true;openKey=null}
-  document.addEventListener('click',function(e){var el=e.target.closest('[data-td]');if(el)openTd(el.dataset.td)});
-  if(dr){sc.addEventListener('click',closeTd);dr.querySelector('.dx').addEventListener('click',closeTd)}
-  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeTd()});
-  // 自动刷新：整页重载前存状态，重载后恢复（file:// 下无法局部拉取）
-  (st.open||[]).forEach(function(i){var d=document.querySelectorAll('details')[i];if(d)d.open=true});
-  if(st.y)window.scrollTo(0,st.y);
-  (st.ls||[]).forEach(function(v,i){var b=document.querySelectorAll('.lb,.blist')[i];if(b)b.scrollTop=v});
-  if(st.td&&st.td!=='@health'&&st.td!=='@history'){openTd(st.td);if(openKey&&st.ds)dr.querySelector('.dct').scrollTop=st.ds}
-  function reloadKeep(){
-    try{sessionStorage.rb=JSON.stringify({auto:1,y:window.scrollY,
-      open:[].map.call(document.querySelectorAll('details'),function(d,i){return d.open?i:-1}).filter(function(i){return i>=0}),
-      ls:[].map.call(document.querySelectorAll('.lb,.blist'),function(b){return b.scrollTop}),
-      td:openKey,ds:dr?dr.querySelector('.dct').scrollTop:0,hs:openKey==='@history'&&window.rbHist?window.rbHist():null})}catch(e){}
-    location.reload()}
-  var dlg=document.querySelector('dialog.rbd');
-  function busy(){return !!document.querySelector('dialog[open]')}
-  // 服务连不上时不整页刷新：刷新会把页面换成浏览器的「无法连接」，停在最后一次同步的样子更有用
-  setInterval(function(){if(document.hidden||busy()||document.body.classList.contains('offline'))return;reloadKeep()},30000);
-  // 本机服务打开时（页面里有令牌）：放行 / 放弃按钮可用；每 4 秒问一次有没有变化，变了就刷新（确认框开着时不刷）
-  var tk=document.querySelector('meta[name=rb-token]');
-  if(tk&&dlg){
-    document.body.classList.add('live');
-    var ver=null;
-    // 顶栏的健康圆点：绿 = 已同步且各项正常；黄 = 有要留意的项；红 = 连不上服务（按钮变灰，页面内容可能过时）
-    var hp=document.querySelector('.hp'),hdot=hp&&hp.querySelector('.hdot'),htx=hp&&hp.querySelector('.ht'),
-        lastSync=Date.now(),offline=false,hdata=null;
-    function ago2(ms){var s=Math.max(0,Math.round(ms/1000));return s<60?s+' 秒前':s<3600?Math.floor(s/60)+' 分钟前':Math.floor(s/3600)+' 小时前'}
-    function paint(){if(!hp)return;var lv=offline?'bad':(hdata&&hdata.level==='warn'?'warn':'ok');hp.className='hp '+lv;
-      htx.textContent=offline?'服务已断开 · 最后同步 '+ago2(Date.now()-lastSync):(lv==='warn'?'需要留意 · ':'已同步 · ')+ago2(Date.now()-lastSync);
-      document.body.classList.toggle('offline',offline);if(openKey==='@health')renderHealth()}
-    function sync(){fetch('/v',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
-        offline=false;lastSync=Date.now();if(ver&&j.v!==ver&&!busy())reloadKeep();ver=j.v;paint()})
-      .catch(function(){offline=true;paint()})}
-    function checkHealth(){fetch('/health',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){hdata=j;paint()}).catch(function(){})}
-    setInterval(function(){if(!document.hidden)sync()},4000);
-    setInterval(function(){if(!document.hidden)checkHealth()},15000);
-    setInterval(paint,1000);sync();checkHealth();
-    function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
-      var h=document.createElement('div');h.className='dtt';h.textContent='服务健康';box.appendChild(h);
-      var sub=document.createElement('div');sub.className='dsub';
-      sub.textContent=offline?'连不上本机服务：drover-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.drover.board-serve'
-        :(hdata?(hdata.level==='ok'?'各项正常':'有需要留意的项')+' · 检查于 '+ago2(Date.now()-hdata.checked*1000):'正在检查…');
-      box.appendChild(sub);
-      var list=document.createElement('div');list.className='hlist';
-      ((hdata&&hdata.items)||[]).forEach(function(it){var row=document.createElement('div');row.className='hrow '+(it.ok?'ok':'warn');
-        var d=document.createElement('span');d.className='hdot';row.appendChild(d);
-        var n=document.createElement('b');n.textContent=it.name;row.appendChild(n);
-        var t=document.createElement('div');t.className='hdet';t.textContent=it.detail;row.appendChild(t);list.appendChild(row)});
-      box.appendChild(list)}
-    function openHealth(){if(!dr)return;renderHealth();dr.querySelector('.dhd span').textContent='服务健康 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@health';checkHealth()}
-    if(hp)hp.addEventListener('click',openHealth);
-    if(st.td==='@health')openHealth();
-    var f=dlg.querySelector('form'),t=dlg.querySelector('.rbd-t'),m=dlg.querySelector('.rbd-m'),
-        rs=dlg.querySelector('.rbd-r'),out=dlg.querySelector('.rbd-out'),ok=dlg.querySelector('.rbd-ok'),no=dlg.querySelector('.rbd-no'),cur=null;
-    document.addEventListener('click',function(e){var b=e.target.closest('[data-act]');if(!b)return;
-      e.preventDefault();e.stopPropagation();
-      if(b.dataset.act==='add'){openEditor(b.dataset.p);return}
-      if(b.dataset.act==='history'){openHistory(b.dataset.p);return}
-      if(b.dataset.act==='edit'){openEditor(b.dataset.p,JSON.parse(b.dataset.raw),+b.dataset.pos);return}
-      if(b.dataset.act==='up'||b.dataset.act==='down'){var n=+b.dataset.pos;moveTask(b.dataset.p,n,b.dataset.act==='up'?n-1:n+1);return}
-      if(b.dataset.act==='hold'){api('/api/hold',{project:b.dataset.p,pos:+b.dataset.pos,on:b.dataset.on!=='1',expect:qvOf(b.dataset.p)})
-        .then(function(j){if(j.ok)reloadKeep();else showFail('没标成',j.out||'')});return}
-      cur=b.dataset;
-      var go=cur.act==='go',drop=cur.act==='drop',pz=cur.act==='pause',lp=cur.act==='loop';
-      t.textContent=drop||go?(go?'放行 ':'放弃 ')+(cur.id?cur.id+' · ':'（未编号）')+cur.title:(lp?(cur.on==='1'?'关闭循环':'开启循环'):pz?'暂停发新任务':'恢复发新任务')+' · '+cur.p;
-      m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。'
-        :drop?'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。'
-        :lp?(cur.on==='1'?'关掉后回到原来的样子：做完按放行模式等你放行，写手停下后要你去叫。':'开启后写手做完直接领下一个；停在队列那一步（队列空了、暂停中）时，条件满足后自动叫醒它。随时可以暂停或关掉。')
-        :pz?'暂停后写手运行 drover next 领不到新任务；正在做的任务照常做完。'
-        :'恢复后写手运行 drover next 就能领到新任务。写手不会被自动叫醒：它停着的话，对它说「继续」。';
-      rs.hidden=!drop;rs.value='';out.hidden=true;out.textContent='';ok.hidden=false;ok.disabled=false;no.textContent='取消';
-      dlg.showModal();if(drop)rs.focus()},true);
-    f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
-      ok.disabled=true;
-      fetch('/api/'+cur.act,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify(cur.act==='drop'?{project:cur.p,pos:+cur.pos,reason:rs.value,expect:qvOf(cur.p)}:cur.act==='loop'?{project:cur.p,on:cur.on!=='1'}:{project:cur.p,id:cur.id,reason:rs.value})})
-        .then(function(r){return r.json()}).then(function(j){
-          out.hidden=false;out.textContent=j.out||'';out.className='rbd-out'+(j.ok?' ok':' bad');
-          ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
-        .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：drover-board serve 还在运行吗？';ok.disabled=false})});
-    dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
-    function qvOf(proj){var sec=[].filter.call(document.querySelectorAll('section.tasks[data-qv]'),function(x){return x.dataset.p===proj})[0];return sec?sec.dataset.qv:''}
-    function api(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},body:JSON.stringify(payload)})
-      .then(function(r){return r.json()}).catch(function(){return {ok:false,out:'服务没有响应：drover-board serve 还在运行吗？'}})}
-    function showFail(title,text){t.textContent=title;m.textContent='';rs.hidden=true;out.hidden=false;out.className='rbd-out bad';out.textContent=text;
-      ok.hidden=true;no.textContent='关闭';dlg.showModal()}
-    // 调整顺序：↑ ↓ 或拖动；带着页面生成时 queue.md 的指纹，队列被别人改过就不动并提示刷新
-    function moveTask(proj,from,to){if(from===to)return;
-      api('/api/move',{project:proj,from:from,to:to,expect:qvOf(proj)}).then(function(j){if(j.ok)reloadKeep();else showFail('没挪成',j.out||'')})}
-    var dragFrom=null,dragProj=null;
-    document.addEventListener('dragstart',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li)return;
-      dragFrom=+li.dataset.pos;dragProj=li.closest('section.tasks').dataset.p;li.classList.add('dragging');e.dataTransfer.effectAllowed='move';
-      try{e.dataTransfer.setData('text/plain',String(dragFrom))}catch(x){}});
-    document.addEventListener('dragend',function(){document.querySelectorAll('ol.q li.dragging,ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('dragging','drop-before','drop-after')});dragFrom=null});
-    document.addEventListener('dragover',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
-      e.preventDefault();var to=+li.dataset.pos;document.querySelectorAll('ol.q li.drop-before,ol.q li.drop-after').forEach(function(x){x.classList.remove('drop-before','drop-after')});
-      if(to!==dragFrom)li.classList.add(to<dragFrom?'drop-before':'drop-after')});
-    document.addEventListener('drop',function(e){var li=e.target.closest&&e.target.closest('ol.q li[draggable]');if(!li||dragFrom===null||li.closest('section.tasks').dataset.p!==dragProj)return;
-      e.preventDefault();var from=dragFrom,to=+li.dataset.pos;dragFrom=null;moveTask(dragProj,from,to)});
-    // 加任务：标题 + 正文；右边按抽屉同一套规则预览（### 小标题、- 列表、空行分段，全部当文本）
-    var ed=document.querySelector('dialog.rbe'),eT=ed.querySelector('.rbe-title'),
-        eB=ed.querySelector('.rbe-body'),ePv=ed.querySelector('.rbe-pv'),eOut=ed.querySelector('.rbe-out'),
-        eOk=ed.querySelector('.rbe-ok'),eNo=ed.querySelector('.rbe-no'),eProj=null,eEdit=null;
-    function dkey(){return 'rb.draft.'+eProj}
-    function el(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;return d}
-    // 正文 → 抽屉同一套排版（### 小标题、- 列表、空行分段），全部当文本；warnHdr 时把顶格 ## 标红
-    function bodyNode(text,warnHdr){var body=document.createElement('div');body.className='dbody';var last='';
-      (text||'').split('\\n').forEach(function(line){var s=line.trim(),m;
-        if(!s){if(last&&last!=='gap'){body.appendChild(el('dgap',''));last='gap'}return}
-        if(warnHdr&&/^##\\s/.test(line)){body.appendChild(el('dp bad','⚠ 顶格 ## 会变成另一个任务，改用 ###：'+s));last='p';return}
-        if((m=s.match(/^#{1,6}\\s+(.*)$/))){body.appendChild(el('dh4',m[1]));last='h';return}
-        if((m=s.match(/^[-*]\\s+(.*)$/))){body.appendChild(el('dli',m[1]));last='li';return}
-        body.appendChild(el('dp',s));last='p'});
-      if(!body.childNodes.length)body.appendChild(el('empty','没有正文'));return body}
-    function preview(){ePv.innerHTML='';
-      var head=document.createElement('div');head.className='dtt';head.textContent=eT.value.trim()||'（标题）';ePv.appendChild(head);
-      ePv.appendChild(bodyNode(eB.value,true));
-      if(!eEdit)try{localStorage.setItem(dkey(),JSON.stringify({t:eT.value,b:eB.value}))}catch(x){}}
-    function openEditor(proj,raw,pos){eProj=proj;var d={};
-      if(raw){eEdit={pos:pos,qv:qvOf(proj)};d={t:raw.title,b:raw.body}}
-      else{eEdit=null;try{d=JSON.parse(localStorage.getItem(dkey())||'{}')}catch(x){}}
-      eT.value=d.t||'';eB.value=d.b||'';eOut.hidden=true;eOk.hidden=false;eOk.disabled=false;eNo.textContent='关闭';
-      ed.querySelector('.rbe-t').textContent=raw?'改任务 '+(raw.id||'（未编号）'):'加任务';
-      ed.querySelector('.rbe-hint').textContent=raw?'整块改写队列第 '+pos+' 个，编号不变 · 小标题用 ###，别用 ##':'加到队列末尾，自动编号 · 小标题用 ###，别用 ##';
-      eOk.textContent=raw?'保存修改':'加入队列';
-      ed.querySelector('.rbe-p').textContent=proj;preview();ed.showModal();eT.focus()}
-    [eT,eB].forEach(function(x){x.addEventListener('input',preview)});
-    ed.querySelector('form').addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
-      eOk.disabled=true;
-      var payload={project:eProj,title:eT.value,body:eB.value};
-      if(eEdit){payload.pos=eEdit.pos;payload.expect=eEdit.qv}
-      fetch(eEdit?'/api/edit':'/api/add',{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},
-        body:JSON.stringify(payload)})
-        .then(function(r){return r.json()}).then(function(j){
-          eOut.hidden=false;eOut.textContent=j.out||'';eOut.className='rbe-out rbd-out'+(j.ok?' ok':' bad');
-          if(j.ok){if(!eEdit)try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
-        .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：drover-board serve 还在运行吗？';eOk.disabled=false})});
-    ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
-    // 已完成「查看全部」：点开时向服务取全部历史；列表可搜可筛，点一行看它的正文，「← 返回列表」保留搜索和筛选
-    var hist={p:null,data:null,q:'',f:'all',d:null};
-    function chip(cls,txt){var c=document.createElement('span');c.className=cls;c.textContent=txt;return c}
-    function histRender(){var box=dr.querySelector('.dct'),h=hist.data;box.innerHTML='';
-      if(!h){box.appendChild(el('empty','正在读取…'));return}
-      if(hist.d){var it=h.items.filter(function(x){return x.id===hist.d})[0];
-        var back=document.createElement('button');back.type='button';back.className='hback';back.textContent='← 返回列表';
-        back.addEventListener('click',function(){hist.d=null;histRender()});box.appendChild(back);
-        if(!it){box.appendChild(el('empty','这个任务不在历史里了'));return}
-        var tt=document.createElement('div');tt.className='dtt';tt.appendChild(chip('tid',it.id));tt.appendChild(document.createTextNode(it.title));box.appendChild(tt);
-        var sub=document.createElement('div');sub.className='dsub';
-        sub.appendChild(chip('dst',it.status==='done'?'已完成':'放弃'));
-        [it.date,it.span&&'用时 '+it.span,it.range,it.reason&&'原因：'+it.reason].forEach(function(x){if(x)sub.appendChild(chip('',x))});
-        box.appendChild(sub);box.appendChild(el('dsrc',it.source));box.appendChild(bodyNode(it.body,false));return}
-      var head=document.createElement('div');head.className='dtt';head.textContent='已完成的任务 · '+hist.p;box.appendChild(head);
-      var sm=h.summary,sub2=document.createElement('div');sub2.className='dsub';
-      ['完成 '+sm.done,'放弃 '+sm.dropped,sm.avg&&'平均用时 '+sm.avg].forEach(function(x){if(x)sub2.appendChild(chip('',x))});
-      box.appendChild(sub2);
-      var bar=document.createElement('div');bar.className='hbar';
-      var q=document.createElement('input');q.type='search';q.className='filter';q.placeholder='按编号或标题过滤…';q.value=hist.q;bar.appendChild(q);
-      [['all','全部'],['done','完成'],['dropped','放弃']].forEach(function(o){var b=document.createElement('button');b.type='button';
-        b.className='hf'+(hist.f===o[0]?' on':'');b.textContent=o[1];b.addEventListener('click',function(){hist.f=o[0];histRender()});bar.appendChild(b)});
-      box.appendChild(bar);
-      var list=document.createElement('div');list.className='hlist2';box.appendChild(list);
-      function fill(){list.innerHTML='';var kw=hist.q.trim().toLowerCase(),n=0;
-        h.items.forEach(function(it){if(hist.f!=='all'&&it.status!==hist.f)return;
-          if(kw&&(it.id+' '+it.title).toLowerCase().indexOf(kw)<0)return;n++;
-          var row=document.createElement('div');row.className='drow'+(it.status==='dropped'?' dropped':'');
-          row.appendChild(chip('tid',it.id));row.appendChild(chip('t',it.title));row.appendChild(chip('r',it.status==='done'?(it.span||''):'放弃'));
-          var s2=document.createElement('span');s2.className='s';
-          if(it.status!=='done'&&it.reason)s2.appendChild(chip('',it.reason));
-          if(it.date)s2.appendChild(chip('',it.date));if(it.range)s2.appendChild(chip('code',it.range));
-          row.appendChild(s2);row.addEventListener('click',function(){hist.d=it.id;histRender();dr.querySelector('.dct').scrollTop=0});list.appendChild(row)});
-        if(!n)list.appendChild(el('empty','没有符合条件的任务'))}
-      q.addEventListener('input',function(){hist.q=q.value;fill()});fill()}
-    function openHistory(proj,keep){if(!dr)return;
-      if(!keep||hist.p!==proj){hist={p:proj,data:null,q:'',f:'all',d:null}}
-      dr.querySelector('.dhd span').textContent='已完成的任务 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@history';histRender();
-      fetch('/history?project='+encodeURIComponent(proj),{cache:'no-store'}).then(function(r){return r.json()})
-        .then(function(j){hist.data=j.items?j:{items:[],summary:{done:0,dropped:0,avg:''}};histRender()})
-        .catch(function(){var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(el('empty','读取失败：drover-board serve 还在运行吗？'))})}
-    window.rbHist=function(){return {p:hist.p,q:hist.q,f:hist.f,d:hist.d}};
-    if(st.td==='@history'&&st.hs){hist={p:st.hs.p,data:null,q:st.hs.q||'',f:st.hs.f||'all',d:st.hs.d||null};openHistory(hist.p,true)}
-  }
-})();
-"""
-
-
-def state_badge(p):
-    """状态标签按「谁在等」配色：红 = 等你，琥珀 = 等主控，灰 = 没人在等。"""
-    cls = "me" if p["needs_me"] else ("wr" if p["waiting"] else "none")
-    return f'<span class="badge {cls}">{esc(p["state"])}</span>'
-
-
-def tilde(path):
-    """家目录下的路径显示成 ~/…，路径本身不变。"""
-    home = os.path.expanduser("~")
-    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
-
-
-def task_body_html(body):
-    """任务正文 → 抽屉里的排版：### 小标题、- 列表、空行分段，其余按行原样；全部转义，不当 markup 注入。"""
-    out = []
-    for line in (body or "").splitlines():
-        s = line.strip()
-        if not s:
-            if out and out[-1] != '<div class="dgap"></div>':
-                out.append('<div class="dgap"></div>')
-            continue
-        m = re.match(r'^#{1,6}\s+(.*)$', s)
-        if m:
-            out.append(f'<div class="dh4">{esc(m.group(1))}</div>')
-            continue
-        m = re.match(r'^[-*]\s+(.*)$', s)
-        out.append(f'<div class="dli">{esc(m.group(1))}</div>' if m else f'<div class="dp">{esc(s)}</div>')
-    return "".join(out) or '<div class="empty">没有正文</div>'
-
-
-def task_desc(key, tid, title, status, meta, body, source):
-    """一个任务的完整描述，嵌成 <template>；点任务时 JS 把它放进右侧抽屉，不占看板的地方。"""
-    return (f'<template id="td-{esc(key)}"><div class="dtt"><span class="tid">{esc(tid)}</span>{esc(title)}</div>'
-            f'<div class="dsub"><span class="dst">{esc(status)}</span>{meta}</div>'
-            f'<div class="dsrc">{esc(source)}</div><div class="dbody">{task_body_html(body)}</div></template>')
-
-
-def render_tasks(p, live=None):
-    """任务区：独立的框，队列 / 进行中（阶段条）/ 已完成三栏，队列和已完成各自滚动；点任务在右侧抽屉看全文。
-    只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 drover。"""
-    tv = p.get("tasks")
-    if not tv:
-        return ""
-    src_queue, src_snap = "queue.md 当前内容（还没发出，改了就生效）", "发出时的快照（写手收到的版本；之后改 queue.md 不影响它）"
-    descs = []
-    mode = ('<span class="mode paused">暂停中</span>' if tv["paused"] else '<span class="mode loop">循环中</span>' if tv["loop"] else
-            '<span class="mode gate">放行模式</span>' if tv["gate"] else '<span class="mode">自动模式</span>')
-    c = tv["card"]
-    doing_n = 1 if c and not c["waiting"] else 0
-    counts = f'队列 {len(tv["todo"])} · 进行中 {doing_n} · 已完成 {tv["done"]}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
-    q = []
-    for i, b in enumerate(tv["todo"]):
-        key = f'{p["name"]}:{b["id"] or f"q{i + 1}"}'
-        chips = []
-        if i == 0:
-            chips.append('<span class="next hold">下一个 · 等放行</span>' if tv["awaiting"] else
-                         '<span class="next hold">下一个 · 暂停中</span>' if tv["paused"] else '<span class="next">下一个</span>')
-        if not b["id"]:
-            chips.append('<span class="hand">手写 · 发出时编号</span>')
-        looping =tv["loop"] or not tv["gate"]          # 放行模式下每个任务做完本来就停，「做完停」没有意义，不显示
-        held = task_held(b, tv["holds"])
-        if looping and held:
-            chips.append('<span class="hold-tag">做完停</span>')
-        note = next((l.strip() for l in b["body"].splitlines() if l.strip() and not TASK_HOLD_LINE.match(l)), "")
-        if note:
-            chips.append(f'<span class="note">{esc(note)}</span>')
-        tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
-        acts, drag = "", ""
-        if live:
-            # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（drover drop），正在做的在终端里停
-            pn, pos = esc(p["name"]), i + 1
-            raw = json.dumps({"id": b["id"] or "", "title": b["title"], "body": b["body"]}, ensure_ascii=False)
-            acts = ('<span class="qa">'
-                    + (f'<button class="act mv" type="button" data-act="up" data-p="{pn}" data-pos="{pos}" title="上移">↑</button>' if i else "")
-                    + (f'<button class="act mv" type="button" data-act="down" data-p="{pn}" data-pos="{pos}" title="下移">↓</button>' if i < len(tv["todo"]) - 1 else "")
-                    + (f'<button class="act hold-btn{" on" if held else ""}" type="button" data-act="hold" data-p="{pn}" data-pos="{pos}" data-on="{1 if held else 0}" '
-                       f'title="{"取消：做完后不停" if held else "这个任务做完后停下等你放行"}">{"取消做完停" if held else "做完停"}</button>' if looping else "")
-                    + f'<button class="act edit" type="button" data-act="edit" data-p="{pn}" data-pos="{pos}" data-raw="{esc(raw)}">编辑</button>'
-                    + f'<button class="act drop" type="button" data-act="drop" data-p="{pn}" data-id="{esc(b["id"])}" data-pos="{pos}" data-title="{esc(b["title"])}">放弃</button>'
-                    + '</span>')
-            drag = f' draggable="true" data-pos="{pos}"'
-        q.append(f'<li data-td="{esc(key)}"{drag}><span class="t">{tid}{esc(b["title"])}</span>' + (f'<span class="sub">{"".join(chips)}</span>' if chips else "") + f'{acts}</li>')
-        descs.append(task_desc(key, b["id"] or "未编号", b["title"], f"队列第 {i + 1} 个", "", b["body"], src_queue))
-    queue = f'<ol class="q">{"".join(q)}</ol>' if q else '<div class="empty">空</div>'
-    if c:
-        rows = []
-        for name, cls, x in c["steps"]:
-            attr = f' class="{cls}"' if cls else ""
-            rows.append(f'<li{attr}>{name}<span class="x">{esc(x)}</span></li>')
-        if c["waiting"]:
-            nxt = tv["todo"][0]["title"] if tv["todo"] else ""
-            line = '<span>核对通过，等你放行</span>' + (f'<span class="dim">放行后发出：{esc(nxt)}</span>' if nxt else '<span class="dim">放行后队列就空了</span>')
-            if live:
-                line += (f'<span><button class="act go" type="button" data-act="go" data-p="{esc(p["name"])}" data-id="{esc(c["id"])}" '
-                         f'data-title="{esc(c["title"])}">放行 {esc(c["id"])}</button></span>')
-        else:
-            line = f'<span>{esc(p["state"])}</span>' + (f'<span class="dim">{esc(p["cycle_note"])}</span>' if p.get("cycle_note") else "")
-        label = "用时" if c["waiting"] else "已进行"
-        flow = '<span class="hold-tag">做完停</span>' if c.get("held") and (tv["loop"] or not tv["gate"]) else ""
-        key = f'{p["name"]}:{c["id"]}'
-        # 分支进展：main 上多了几个提交、最后一次多久前。一直是 0 个 + 很久没动，就是它卡住了。
-        prog = (f'<div class="prog"><span><code>{MAIN_BRANCH}</code> 上 <b>{c["on_main"]}</b> 个提交</span>'
-                + (f'<span>最后一次提交 {ago(c["last_at"])} 前</span>' if c["last_at"] else '<span class="mute">还没有提交落地</span>')
-                + '</div>') if c.get("main") else ''
-        # 完成判据过了几条。前两条纯 git，实时算；第 3 条可能是整套测试，页面 30 秒一刷，不在这里跑。
-        crit = [find_done_mark(p["repo"], c.get("main", ""), p.get("done_mark", ""))] + \
-            criteria(p["repo"], c.get("main", ""), p.get("branch_glob", ""),
-                     task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
-        graded = [r for r in crit if r["ok"] is not None]
-        bits = []
-        for r in crit:
-            cls = "ok" if r["ok"] else ("mute" if r["ok"] is None else "bad")
-            bits.append(f'<span class="{cls}" title="{esc(r["why"])}">{"✓" if r["ok"] else ("—" if r["ok"] is None else "✗")} {r["n"] or "依据"}</span>')
-        crit_html = (f'<div class="crit"><span class="k">判据 {sum(1 for r in graded if r["ok"])}/{len(graded)}</span>'
-                     + "".join(bits) + '</div>')
-        doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
-                 f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
-                 f'{prog}{crit_html}'
-                 f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
-        descs.append(task_desc(key, c["id"], c["title"], "做完了 · 等你放行" if c["waiting"] else "进行中",
-                               f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], src_snap))
-    else:
-        doing = f'<div class="empty">{"队列空了，写手会停下" if not tv["todo"] else "没有进行中的任务"}</div>'
-    lw = tv["loop_wait"]
-    if tv["loop"] and lw:
-        why = {"empty": "队列空了", "paused": "暂停中", "release": "等放行"}.get(lw.get("reason"), lw.get("reason", ""))
-        doing += (f'<div class="loopw bad">连着三次没送出去：{esc(lw.get("error", ""))}。查一下主控和 corral，再运行 drover next</div>' if lw.get("failed")
-                  else f'<div class="loopw">停着（{esc(why)}）· 条件满足后自动接着发</div>')
-    fin = []
-    for f in tv["finished"]:
-        key = f'{p["name"]}:{f["id"]}'
-        if f["dropped"]:
-            fin.append(f'<div class="drow dropped" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
-                       f'<span class="r">放弃</span><span class="s"><span>{esc(f["reason"] or "没写原因")}</span></span></div>')
-            descs.append(task_desc(key, f["id"], f["title"], "放弃", f'<span>原因：{esc(f["reason"] or "没写原因")}</span>',
-                                   f["body"], src_snap if f["body"] else "没发出过，队列里的原文已不在快照中"))
-            continue
-        rng = f'<code>{esc(f["range"])}</code>' if f["range"] else ""
-        fin.append(f'<div class="drow" data-td="{esc(key)}"><span class="tid">{esc(f["id"])}</span><span class="t">{esc(f["title"])}</span>'
-                   f'<span class="r">{esc(f["span"])}</span><span class="s">{rng}</span></div>')
-        descs.append(task_desc(key, f["id"], f["title"], "已完成", f'<span>用时 {esc(f["span"])}</span>{rng}', f["body"], src_snap))
-    fin_n = f'{tv["done"] - (1 if tv["awaiting"] else 0)}' + (f' · 放弃 {tv["dropped"]}' if tv["dropped"] else "")
-    add = (f'<button class="act lp{" on" if tv["loop"] else ""}" type="button" data-act="loop" data-p="{esc(p["name"])}" data-on="{1 if tv["loop"] else 0}">'
-           f'{"关闭循环" if tv["loop"] else "开启循环"}</button>'
-           f'<button class="act pz" type="button" data-act="{"resume" if tv["paused"] else "pause"}" data-p="{esc(p["name"])}">'
-           f'{"恢复发任务" if tv["paused"] else "暂停发任务"}</button>'
-           f'<button class="act add" type="button" data-act="add" data-p="{esc(p["name"])}">+ 加任务</button>') if live else ""
-    qattr = f' data-p="{esc(p["name"])}" data-qv="{esc(tv["qv"])}"' if live else ""
-    fin_total = tv["done"] + tv["dropped"]
-    hist = (f'<button class="act hist" type="button" data-act="history" data-p="{esc(p["name"])}">查看全部 {fin_total} 个'
-            f'（完成 {tv["done"]} · 放弃 {tv["dropped"]}）</button>') if live and fin_total else ""
-    return (f'<section class="tasks"{qattr}><div class="th"><h2>任务看板<span class="sub">{counts}</span></h2>{mode}'
-            f'<span class="src">点任务看全文 · queue.md · tasks.state</span>{add}</div><div class="lanes">'
-            f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
-            f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
-            f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div>{hist}</div>'
-            f'</div><div class="foot-note">只读。加任务：编辑 <code>{esc(tilde(tv["dir"]))}/queue.md</code>，或 <code>drover add "…"</code>；'
-            f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
-
-
-# 这里曾经有 crew_chips() 和 crew_html()：主控的状态块和派出去的 agent 块。**删掉了**，理由同上。
-def render_panel(p, live=None):
-    parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
-    badge = state_badge(p)
-    parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
-                 f'<span class="hd">HEAD <code>{esc(p["head"][:7])}</code></span></div>')
-    # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。
-    if p["human"]:
-        items = [f'<li>{esc(reason)}</li>' for _, _, _, _, reason in p["human"]]
-        body = f'<div class="wh">等你 · {len(items)}</div><ul>{"".join(items)}</ul>' if items else ""
-        parts.append(f'<div class="wait{"" if items else " calm"}" id="w-{esc(p["name"])}">{body}</div>')
-    parts.append(render_tasks(p, live))
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def wait_items(p):
-    """「等你」里卡住了那一档的条目 → [(key, 文字, 跳转锚点)]。横幅和通知共用，两边说的是同一件事。"""
-    out = []
-    for kind, fid, verb, sev, reason in p["human"]:
-        text = f"STOP · {reason}" if kind == "stop" else reason
-        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text, f"w-{p['name']}"))
-    return out
-
-
-NOTIFY_BIN = os.environ.get("DROVER_NOTIFY_BIN", "osascript")
-
-
-def applescript_str(s):
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def notify_new(projects, state_path):
-    """新出现的「等你」条目弹 macOS 通知：一个项目一条，写有几条新的和第一条的内容。
-    已通知过的 key 记在 state_path；条目解决后从记录里消失，再出现会重新通知。这是看板唯一自己存的东西，
-    删掉只会把还开着的条目再通知一次。只由 launchd 那次刷新（--notify）调用 —— 别的刷新不发，
-    两边同时刷新也不会重复弹。通知发不出去就跳过，不影响看板。"""
-    try:
-        seen = set(json.loads(read(state_path) or "[]"))
-    except ValueError:
-        seen = set()
-    current = []
-    for p in projects:
-        items = wait_items(p)
-        current += [k for k, _, _ in items]
-        new = [text for k, text, _ in items if k not in seen]
-        if not new:
-            continue
-        body = " ".join((new[0] if len(new) == 1 else f"{len(new)} 条新的：{new[0]}").split())[:220]
-        script = f"display notification {applescript_str(body)} with title {applescript_str('Review board · ' + p['name'] + ' 等你')}"
-        try:
-            subprocess.run([NOTIFY_BIN, "-e", script], capture_output=True, timeout=10)
-        except Exception:
-            pass
-    tmp = f"{state_path}.{os.getpid()}.tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(sorted(current), f, ensure_ascii=False)
-        os.replace(tmp, state_path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-
-
-def render(projects, live=None):
-    """live：本机服务打开时的 {"token": …}，页面多出令牌、放行 / 放弃按钮和确认框；静态文件为 None，和原来一样。"""
-    waits = [(p["name"], text, ago(p["since"]), anchor) for p in projects for _, text, anchor in wait_items(p)]
-    if waits:
-        banner = (f'<div class="banner"><div class="t">等你 · {len(waits)}</div><div class="items">' + "".join(
-            f'<a href="#{esc(a)}" onclick="return rbGo(\'{esc(n)}\',\'{esc(a)}\')"><b>{esc(n)}</b><span>{esc(w)}</span>'
-            f'<span class="age">{esc(t)}</span><span class="arr">→</span></a>' for n, w, t, a in waits) + "</div></div>")
-    else:
-        banner = '<div class="nowait">没有等你的</div>'
-    side = [f'<div class="cap">项目 · {len(projects)}</div>']
-    for p in projects:
-        status = state_badge(p)
-        side.append(f'<div class="proj{" needs" if p["needs_me"] else ""}" data-p="{esc(p["name"])}"><div class="row"><span class="nm">{esc(p["name"])}</span>'
-                    f'<span class="age">{ago(p["since"])}</span></div><div class="st">{status}<span class="who">{esc(p["waiting"])}</span></div></div>')
-    panels = "".join(render_panel(p, live) for p in projects)
-    gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    gen_html =('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
-                if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("DROVER_BOARD_PORT", "10086"))}/">'
-                             f'带按钮的版本 ↗</a></span>')
-    mast = (f'<div class="mast"><span class="brand">Review board</span>{gen_html}</div>')
-    token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
-    return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
-            f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
-            f'<div class="foot">生成于 {gen} · 只读，30s 自动刷新 · 来源：各项目 .drover.conf 指向的交接目录</div></div>'
-            + (DRAWER if 'data-td="' in panels or live else "") + (LIVE_DIALOG + LIVE_EDITOR if live else "") +
-            f'<script>{JS}</script></body></html>')
-
-
-# ============================================================ main
+# ============================================================ 项目发现
 def discover(list_path):
     """只认登记过的仓库：~/.drover/projects 一行一个（drover-init 会写进去）。
     不扫目录——「哪个目录下多了个 .drover.conf 就自动接进来」听着方便，实际是让看板去够它没被告知的东西。"""
@@ -1222,8 +505,8 @@ def discover(list_path):
 
 
 def collect(list_path):
-    """各项目的当前状态；生成静态页和本机服务共用。
-    NOW 每次重取：本机服务是常驻进程，停在启动那刻的 NOW 会让页面上「几分钟前」「已进行多久」越来越偏。"""
+    """各项目的当前状态。看板每刷新一次就整个重跑一遍——不存状态，刷新等于重跑。
+    NOW 每次重取：看板是常驻前台进程，停在启动那刻的 NOW 会让「几分钟前」「已进行多久」越来越偏。"""
     global NOW, _AGENTS
     NOW, _AGENTS = time.time(), None                 # corral 的 agent 列表同理：每页重查
     projects = []
@@ -1241,160 +524,290 @@ def collect(list_path):
     return projects
 
 
-# ============================================================ 本机服务（drover-board serve）
-# 静态看板改不了任何东西；这个服务只监听 127.0.0.1，页面上的放行 / 放弃发到这里，再原样转给 drover ——
-# 写入权仍只在 drover（它的核对一条不绕过）。防别的网页伪造请求：Host / Origin 只认本机这个端口，
-# 请求必须带启动时随机生成、嵌在页面里的令牌，而且是 JSON（跨源的 JSON POST 要先预检，这里不应答预检）。
-def live_version(list_path):
-    """交接目录和 git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
-    h = hashlib.sha1()
-    for repo in discover(list_path):
-        d = parse_conf(f"{repo}/.drover.conf").get("HANDOFF_DIR")
-        for base in (d,):
-            try:
-                for e in sorted(os.scandir(base), key=lambda e: e.name):
-                    h.update(f"{e.path}:{e.stat().st_mtime_ns}\n".encode())
-            except (OSError, TypeError):
-                pass
-        for f in (f"{repo}/.git/HEAD", f"{repo}/.git/logs/HEAD"):
-            try:
-                h.update(f"{f}:{os.stat(f).st_mtime_ns}\n".encode())
-            except OSError:
-                pass
-    return h.hexdigest()[:16]
+# ============================================================ 显示宽度
+def cell(c):
+    """一个字符在终端里占几格：东亚宽字符（W / F）两格，组合字符（声调符号之类）不占格。"""
+    return 0 if unicodedata.combining(c) else (2 if unicodedata.east_asian_width(c) in ("W", "F") else 1)
 
 
-LAUNCHCTL = os.environ.get("DROVER_LAUNCHCTL", "launchctl")
+def width(s):
+    """字符串占几格。curses 按字符数排版会错位：「把 CSS 导入改成流式」是 12 个字符、19 格。
+    所有排版都得过这里，一开始就算对，不然满屏是歪的。"""
+    return sum(cell(c) for c in s)
 
 
-def span_text(sec):
-    sec = max(0, int(sec))
-    if sec < 60:
-        return f"{sec} 秒"
-    if sec < 3600:
-        return f"{sec // 60} 分钟"
-    if sec < 86400:
-        return f"{sec // 3600} 小时 {(sec % 3600) // 60} 分"
-    return f"{sec // 86400} 天"
+def trunc(s, n):
+    """截到显示宽度不超过 n 格；截过就以 … 结尾（… 占 1 格）。"""
+    if n <= 0:
+        return ""
+    if width(s) <= n:
+        return s
+    out, w = [], 0
+    for c in s:
+        if w + cell(c) > n - 1:
+            break
+        out.append(c)
+        w += cell(c)
+    return "".join(out) + "…"
 
 
-def launchd_job(label):
-    """launchd 里这个任务的 {state, exit}；没加载（或查不了）返回 None。"""
-    try:
-        r = subprocess.run([LAUNCHCTL, "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True, timeout=5)
-    except Exception:
-        return None
-    if r.returncode:
-        return None
-    st = re.search(r'^\s*state = (.+)$', r.stdout, re.M)
-    ex = re.search(r'last exit code = (\S+)', r.stdout)
-    pid = re.search(r'^\s*pid = (\d+)', r.stdout, re.M)
-    return {"state": st.group(1).strip() if st else "", "exit": ex.group(1) if ex else "", "pid": int(pid.group(1)) if pid else None}
-
-
-def health(started, port):
-    """本机服务和看板周边是否在正常工作；只读检查。页面顶栏的圆点每 15 秒取一次，点开看每一项。"""
-    now, items = time.time(), []
-    add = lambda name, ok, detail: items.append({"name": name, "ok": bool(ok), "detail": detail})
-    here = os.path.dirname(os.path.realpath(__file__))
-    stale = [f for f in ("drover-board", "drover")
-             if os.path.exists(os.path.join(here, f)) and os.stat(os.path.join(here, f)).st_mtime > started + 1]
-    add("本机服务", not stale, f"pid {os.getpid()} · 端口 {port} · 已运行 {span_text(now - started)}"
-        + (f"；启动后 {'、'.join(stale)} 被更新过，还在跑旧代码：重新运行 install.sh，"
-           f"或 launchctl kickstart -k gui/{os.getuid()}/dev.drover.board-serve" if stale else " · 跑的是最新安装的代码"))
-    sj = launchd_job("dev.drover.board-serve")
-    if not sj:
-        add("服务守护（launchd）", False, "没由 launchd 托管：服务挂了不会自动拉起（手动启动的？运行 install.sh 装上）")
-    elif sj["pid"] not in (None, os.getpid()):
-        add("服务守护（launchd）", False, f"launchd 托管的是另一个进程（pid {sj['pid']}），不是这个页面连着的服务（pid {os.getpid()}）：这个是手动启动的？")
-    else:
-        add("服务守护（launchd）", True, "已由 launchd 托管，挂了会自动拉起")
-    bj = launchd_job("dev.drover.board")
-    nf = os.path.join(os.path.dirname(DEFAULT_OUT), "board-notified.json")
-    age = now - os.stat(nf).st_mtime if os.path.exists(nf) else None
-    if not bj:
-        add("看板定时生成", False, "定时任务没加载：board.html 不会每 30 秒刷新，「等你」通知也不会发（运行 install.sh）")
-    elif bj["exit"] not in ("", "0") and not bj["exit"].startswith("("):     # 「(never exited)」：刚装好还没跑完第一次
-        add("看板定时生成", False, f"上次退出码 {bj['exit']}：看生成出错记录")
-    elif age is None:
-        add("看板定时生成", False, "还没运行过（board-notified.json 不存在）")
-    elif age >= 120:
-        add("看板定时生成", False, f"上次运行是 {span_text(age)}前（应每 30 秒一次）：「等你」通知可能停了")
-    else:
-        add("看板定时生成", True, f"上次运行 {span_text(age)}前 · 退出码 0 · 通知正常")
-    ef = os.path.join(os.path.dirname(DEFAULT_OUT), "board.err")
-    est = os.stat(ef) if os.path.exists(ef) else None
-    if est and est.st_size and est.st_mtime > now - 600:
-        tail = "\n".join((read(ef) or "").strip().splitlines()[-3:])
-        add("生成出错记录", False, f"最近 10 分钟有新错误（{ef}）：\n{tail}")
-    else:
-        add("生成出错记录", True, "最近 10 分钟没有新错误" + (f"；上次出错是 {span_text(now - est.st_mtime)}前" if est and est.st_size else ""))
+# ============================================================ view_model：要显示什么
+def health():
+    """顶栏那句健康提示。数据源只剩 corral —— launchd 托管、静态页多久没刷、服务跑的是不是
+    旧代码，那几项跟着网页层一起删了：看板现在是你自己开的前台进程，这些一眼就看得见。"""
     code, _ = corral("ls", timeout=3)
-    add("corral", code == 0, "能连上" if code == 0
-        else "连不上：主控的状态显示不出来，任务也送不出去（corral 装了吗？）")
-    return {"level": "ok" if all(i["ok"] for i in items) else "warn", "items": items, "checked": int(now)}
+    return {"ok": code == 0,
+            "text": "corral 正常" if code == 0 else "corral 连不上：主控状态显示不出来，任务也送不出去"}
 
 
-def live_action(list_path, act, body):
-    """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 drover。"""
-    projects = collect(list_path)
-    p = next((x for x in projects if x["name"] == body.get("project")), None)
-    if not p:
-        return 404, {"ok": False, "out": "找不到这个项目"}
+def wait_items(p):
+    """「等你」的条目 → [(去重用的 key, 给人看的一句话)]。看板和系统通知共用，两边说的是同一件事。"""
+    return [(f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}",
+             f"STOP · {reason}" if kind == "stop" else reason)
+            for kind, fid, verb, sev, reason in p["human"]]
+
+
+def card_vm(p, tv):
+    """「当前这件活」：分支进展 + 判据过了几条。**依据（收尾记号）排最前**，三条门跟在后面。
+
+    第 3 条不在这里跑（`do_check=False`）：它可能是整套测试，而看板每刷新一次就要算一遍。
+    前两条是纯 git，便宜，照算。"""
+    c = tv["card"]
+    if not c:
+        return None
+    rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""))] + \
+        criteria(p["repo"], c["main"], p.get("branch_glob", ""),
+                 task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
+    last = ago(c["last_at"])
+    return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],
+            "span": c["span"], "commits": c["commits"], "on_main": c["on_main"],
+            # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
+            # 判据第 1 条看的是同一个 sha，两处说的是同一件事。
+            "progress": (f'{MAIN_BRANCH} 上 {c["on_main"]} 个提交' + (f'，最后一次 {last} 前' if last else ""))
+                        if c["on_main"] else f"{MAIN_BRANCH} 上 0 个提交，还没有提交落地",
+            "criteria": [{"name": r["name"], "ok": r["ok"], "why": r["why"]} for r in rows],
+            "met": f'{sum(1 for r in rows if r["ok"] is True)}/{sum(1 for r in rows if r["ok"] is not None)}'}
+
+
+def queue_vm(p, tv):
+    c = tv["card"]
+    return {"mode": "暂停中" if tv["paused"] else "循环中" if tv["loop"] else "放行模式" if tv["gate"] else "自动模式",
+            "loop": tv["loop"], "paused": tv["paused"], "gate": tv["gate"], "awaiting": tv["awaiting"],
+            "counts": {"todo": len(tv["todo"]), "doing": 1 if c and not c["waiting"] else 0,
+                       "done": tv["done"], "dropped": tv["dropped"]},
+            "card": card_vm(p, tv),
+            "todo": [{"id": b["id"] or "", "title": b["title"], "next": i == 0,
+                      "held": task_held(b, tv["holds"])} for i, b in enumerate(tv["todo"])],
+            "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
+                          "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", "")}
+                         for f in tv["finished"]]}
+
+
+def project_vm(p):
     tv = p.get("tasks")
-    if not tv:
-        return 409, {"ok": False, "out": "这个项目没有接任务队列"}
-    task_bin = task_bin_path()
-    expect = ["--expect", str(body.get("expect") or "")]
-    if act in ("add", "edit"):
-        title = str(body.get("title") or "").strip()
-        lines = str(body.get("body") or "").replace("\r\n", "\n").rstrip().split("\n") if str(body.get("body") or "").strip() else []
-        if not title or "\n" in title or len(title) > 200:
-            return 400, {"ok": False, "out": "标题要是一行非空的文字（200 字以内）"}
-        bad = [l for l in lines if TASK_HDR.match(l)]
-        if bad:
-            return 400, {"ok": False, "out": f"正文里顶格的「## 」会被当成另一个任务：{bad[0][:40]}…；小标题请用 ###"}
-        # 「验收：<命令>」会被当成 shell 命令跑（判据第 3 条）。ROADMAP 写的是「人在 queue.md 里写
-        # 这件活算完的标准」——那就只让它从文件进来，网页表单里不收，免得一个输入框变成任意命令执行。
-        if any(TASK_CHECK.match(l) for l in lines):
-            return 400, {"ok": False, "out": "「验收：」那行会被当成命令执行，网页上不收；要改验收命令请直接编辑 queue.md"}
-        if len("\n".join(lines)) > 20000:
-            return 400, {"ok": False, "out": "正文太长（2 万字以内）"}
-        text = [title, *lines]
-        cmd = [task_bin, "add", *text] if act == "add" else [task_bin, "edit", str(body.get("pos") or ""), *text, *expect]
-    elif act == "hold":
-        cmd = [task_bin, "hold", str(body.get("pos") or ""), "on" if body.get("on") else "off", *expect]
-    elif act == "loop":
-        on = bool(body.get("on"))
-        if tv["loop"] == on:
-            return 409, {"ok": False, "out": ("循环已经开着" if on else "循环本来就关着") + "（页面可能是旧的，刷新看看）"}
-        cmd = [task_bin, "loop", "on" if on else "off"]
-    elif act in ("pause", "resume"):
-        if tv["paused"] == (act == "pause"):
-            return 409, {"ok": False, "out": ("已经是暂停状态" if act == "pause" else "没有暂停") + "（页面可能是旧的，刷新看看）"}
-        cmd = [task_bin, act]
-    elif act == "move":
-        cmd = [task_bin, "move", str(body.get("from") or ""), str(body.get("to") or ""), *expect]
-    elif act == "go":
-        if not tv["awaiting"]:
-            return 409, {"ok": False, "out": "没有在等放行的任务（页面可能是旧的，刷新看看）"}
-        cmd = [task_bin, "go"]
-    else:
-        reason = " ".join(str(body.get("reason") or "").split())[:300]
-        if body.get("pos"):                                          # 按队列位置（没编号的也行），带指纹防冲突
-            cmd = [task_bin, "drop", "--pos", str(body.get("pos")), reason, *expect]
-        else:
-            tid = str(body.get("id") or "")
-            if tid not in [b["id"] for b in tv["todo"] if b["id"]]:
-                return 409, {"ok": False, "out": f"{tid or '这个任务'} 不在队列里还没开始的任务中：页面上只能放弃还没开始的任务"}
-            cmd = [task_bin, "drop", tid, reason]
-    r = subprocess.run([sys.executable, *cmd], cwd=p["repo"], capture_output=True, text=True, timeout=60)
-    out = (r.stdout + r.stderr).strip()
-    if r.returncode == 2 and (act in ("move", "edit", "hold") or body.get("pos")):
-        return 400, {"ok": False, "code": 2, "out": out.split("\n\n")[0]}
-    return (200 if r.returncode == 0 else 409), {"ok": r.returncode == 0, "code": r.returncode, "out": out}
+    return {"name": p["name"], "repo": p["repo"], "dir": p["dir"], "head": p["head"][:7],
+            "state": p["state"], "waiting": p["waiting"], "needs_me": p["needs_me"],
+            # 按「谁在等」分档：me = 等你，wr = 等主控，none = 没人在等
+            "badge": "me" if p["needs_me"] else ("wr" if p["waiting"] else "none"),
+            "age": ago(p["since"]),
+            "waits": [text for _, text in wait_items(p)],
+            "queue": queue_vm(p, tv) if tv else None}
 
 
+def view_model(projects):
+    """看板要显示的一切，一份纯数据 —— 不碰 curses，也不管怎么画。
+
+    分 view_model / draw 两层是为了能验：断言全打在这份字典上，比 grep 画面结实（换个排版、
+    换个配色不会挂）。画那一层薄到只补一条「画进很窄的假屏幕不崩、不越界」的冒烟就够。"""
+    return {"health": health(),
+            "waits": [{"project": p["name"], "text": text, "age": ago(p["since"])}
+                      for p in projects for _, text in wait_items(p)],
+            "projects": [project_vm(p) for p in projects]}
+
+
+# ============================================================ draw：怎么画
+RAIL = 24            # 左边项目列表的宽度上限
+COLORS = {}          # 样式名 → curses 属性。TUI 启动时填；没填（测试里画进假屏幕）就一律 0
+
+
+def init_colors():
+    """深色：只设前景色，背景交给终端自己（use_default_colors）。看板一直是深色的，不为浅色折中。"""
+    try:
+        curses.start_color()
+        curses.use_default_colors()
+    except curses.error:
+        return
+    for i, (kind, fg) in enumerate([("h1", curses.COLOR_WHITE), ("h2", curses.COLOR_CYAN),
+                                    ("wait", curses.COLOR_RED), ("bad", curses.COLOR_RED),
+                                    ("ok", curses.COLOR_GREEN), ("sel", curses.COLOR_YELLOW),
+                                    ("dim", -1), ("line", -1)], start=1):
+        try:
+            curses.init_pair(i, fg, -1)
+        except curses.error:
+            continue
+        COLORS[kind] = curses.color_pair(i)
+    for kind in ("h1", "h2", "sel"):
+        COLORS[kind] = COLORS.get(kind, 0) | curses.A_BOLD
+    for kind in ("dim", "line"):
+        COLORS[kind] = COLORS.get(kind, 0) | curses.A_DIM
+
+
+def put(stdscr, y, x, text, h, w, kind=""):
+    """写一行，截到屏幕里。右下角那一格 curses 写不得，最后一行少用一格。"""
+    if y < 0 or y >= h or x < 0 or x >= w:
+        return
+    t = trunc(text, w - x - (1 if y == h - 1 else 0))
+    if t:
+        stdscr.addstr(y, x, t, COLORS.get(kind, 0))
+
+
+def detail_lines(pv):
+    """选中项目的详情，从上到下：等你 → 当前这件活 → 队列 → 做完的。
+    → [(样式, 缩进, 文字)]，draw 照着画就行。"""
+    out = [("h1", 0, f'{pv["name"]}  {pv["state"]}  HEAD {pv["head"]}')]
+    if pv["waits"]:
+        out.append(("wait", 0, f'等你 · {len(pv["waits"])}'))
+        out += [("wait", 2, f"· {t}") for t in pv["waits"]]
+    q = pv["queue"]
+    if not q:
+        out.append(("dim", 0, "没接任务队列：交接目录里还没有 queue.md。按 a 写一个"))
+        return out
+    c = q["card"]
+    out.append(("h2", 0, "当前这件活" + ("" if c else " · 空着")))
+    if c:
+        out.append(("", 2, " ".join(x for x in (c["id"], c["title"]) if x)))
+        out.append(("dim", 2, f'{c["commits"]} 个提交 · 已进行 {c["span"]}'
+                              + ("  · 核对通过，等你按 g 放行" if c["waiting"] else "")
+                              + ("  · 做完停" if c["held"] else "")))
+        out.append(("dim", 2, c["progress"]))
+        out.append(("", 2, f'判据 {c["met"]}'))
+        for r in c["criteria"]:
+            mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
+            out.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 3,
+                        f'{mark} {r["name"]}：{" ".join(r["why"].split())}'))
+    out.append(("h2", 0, f'队列 · {q["counts"]["todo"]}   {q["mode"]}'))
+    for i, t in enumerate(q["todo"]):
+        out.append(("", 2, f'{i + 1}. ' + ("下一个 · " if t["next"] else "") + (f'{t["id"]} ' if t["id"] else "手写 ")
+                           + t["title"] + ("  · 做完停" if t["held"] else "")))
+    if not q["todo"]:
+        out.append(("dim", 2, "空了。按 a 加任务"))
+    out.append(("h2", 0, f'做完的 · {q["counts"]["done"]}'
+                         + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else "")))
+    for f in q["finished"]:
+        out.append(("dim", 2, f'{f["id"]} {f["title"]}  '
+                              + (f'放弃：{f["reason"]}' if f["dropped"] else f["span"])))
+    if not q["finished"]:
+        out.append(("dim", 2, "还没有"))
+    return out
+
+
+def draw(stdscr, vm, state):
+    """把 view_model 画出来。薄薄一层：只有排版，没有判断——要显示什么全在 view_model 里定了。"""
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+    if h < 5 or w < 20:
+        put(stdscr, 0, 0, "窗口太小", h, w)
+        return
+    ps = vm["projects"]
+    sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
+    head = f'drover · {len(ps)} 个项目 · {vm["health"]["text"]}' + (f' · 等你 {len(vm["waits"])}' if vm["waits"] else "")
+    put(stdscr, 0, 0, head, h, w, "h1" if vm["health"]["ok"] else "bad")
+    put(stdscr, 1, 0, "─" * w, h, w, "line")
+    top, bot = 2, h - 2                                  # 正文占的行，含 bot
+    rail = min(RAIL, max(12, w // 3))
+    if w < rail + 16 or not ps:
+        rail = 0                                         # 窄屏（或一个项目都没有）：只画详情
+    if rail:
+        rows = bot - top + 1
+        first = max(0, min(sel - rows + 1, len(ps) - rows)) if len(ps) > rows else 0
+        for i in range(first, min(len(ps), first + rows)):
+            pv = ps[i]
+            put(stdscr, top + i - first, 0,
+                ("▸" if i == sel else " ") + ("●" if pv["needs_me"] else " ") + pv["name"],
+                h, rail, "sel" if i == sel else ("bad" if pv["needs_me"] else ""))
+        for y in range(top, bot + 1):
+            put(stdscr, y, rail, "│", h, w, "line")
+    x = rail + 2 if rail else 0
+    lines = detail_lines(ps[sel]) if ps else [("dim", 0, "没有登记过的项目。到仓库里运行 drover init <短名>")]
+    room = bot - top + 1
+    shown = lines[:room - 1] if len(lines) > room else lines
+    for i, (kind, indent, text) in enumerate(shown):
+        put(stdscr, top + i, x + indent, text, h, w, kind)
+    if len(lines) > room:
+        put(stdscr, top + len(shown), x, f"… 还有 {len(lines) - len(shown)} 行，窗口再高些", h, w, "dim")
+    put(stdscr, h - 1, 0, state.get("msg", ""), h, w, "dim")
+
+
+# ============================================================ 按键
+REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重跑，看板不存自己的状态
+HELP = "↑↓/jk 选项目 · g 放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
+
+
+def run_drover(repo, *args):
+    """所有写操作都转给 bin/drover —— 判据和队列的解析只能有一份实现，TUI 自己不动交接文件。
+    → 给人看的一行（drover 的第一行输出，成了也好、拒了也好，它自己会说清楚）。"""
+    try:
+        r = subprocess.run([sys.executable, task_bin_path(), *args], cwd=repo,
+                           capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        return f"drover {' '.join(args)}：没跑起来（{e}）"
+    out = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()]
+    return out[0] if out else f"drover {' '.join(args)}：退出码 {r.returncode}"
+
+
+def edit_queue(stdscr, pv):
+    """加任务 = 拿 $EDITOR 编这个项目的 queue.md，关掉就生效。队列本来就是个 markdown 文件，
+    在看板里重新实现一个文本编辑器没有意义（网页版那个带实时预览的编辑框正是那么长出来的）。"""
+    path = os.path.join(pv["dir"], "queue.md")
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    curses.endwin()
+    try:
+        subprocess.call(f'{editor} "{path}"', shell=True)     # EDITOR 可能带参数，过一层 shell
+    finally:
+        stdscr.clear()
+        stdscr.refresh()
+        curses.curs_set(0)
+    return f"编辑完 {path}"
+
+
+def tui(stdscr, list_path):
+    curses.curs_set(0)
+    init_colors()
+    stdscr.timeout(REFRESH_MS)
+    state = {"sel": 0, "msg": HELP}
+    vm = view_model(collect(list_path))
+    while True:
+        draw(stdscr, vm, state)
+        stdscr.refresh()
+        try:
+            k = stdscr.getch()
+        except KeyboardInterrupt:
+            return
+        ps = vm["projects"]
+        pv = ps[min(state["sel"], len(ps) - 1)] if ps else None
+        if k == ord("q"):
+            return
+        if k in (curses.KEY_UP, ord("k")):
+            state["sel"] = max(0, state["sel"] - 1)
+            continue
+        if k in (curses.KEY_DOWN, ord("j")):
+            state["sel"] = min(len(ps) - 1, state["sel"] + 1) if ps else 0
+            continue
+        if k == ord("a") and pv:
+            state["msg"] = edit_queue(stdscr, pv)
+        elif k in (ord("g"), ord("n"), ord("p"), ord("l")) and pv:
+            q = pv["queue"] or {}
+            state["msg"] = run_drover(pv["repo"], *{"g": ("go",), "n": ("next",),
+                                                    "p": ("resume",) if q.get("paused") else ("pause",),
+                                                    "l": ("loop", "off") if q.get("loop") else ("loop", "on")}[chr(k)])
+        elif k == ord("r"):
+            state["msg"] = HELP
+        elif k not in (-1, curses.KEY_RESIZE):
+            continue                                          # 不认识的键：不动，也不重跑
+        vm = view_model(collect(list_path))                   # 刷新等于重跑
+
+
+# ============================================================ 外层循环的一跳
 def task_bin_path():
     """和看板装在一起的那个 drover。两个工具必须成对，不然解析交接文件的函数对不上。"""
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover")
@@ -1491,107 +904,24 @@ def loop_tick(list_path):
             os.replace(tmp, mf)
 
 
-def serve(args):
-    port = int(args[args.index("--port") + 1]) if "--port" in args else int(os.environ.get("DROVER_BOARD_PORT", "10086"))
-    list_path = args[args.index("--projects") + 1] if "--projects" in args else None
-    token = secrets.token_urlsafe(24)
-    started = time.time()
-    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def reply(self, code, body, ctype="application/json; charset=utf-8"):
-            data = body if isinstance(body, bytes) else (json.dumps(body, ensure_ascii=False) if not isinstance(body, str) else body).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
-
-        def do_GET(self):
-            if self.headers.get("Host", "") not in hosts:
-                return self.reply(403, {"ok": False, "out": "只接受本机访问"})
-            path = self.path.split("?", 1)[0]
-            if path in ("/", "/index.html"):
-                return self.reply(200, render(collect(list_path), live={"token": token}), "text/html; charset=utf-8")
-            if path == "/v":
-                return self.reply(200, {"v": live_version(list_path)})
-            if path == "/health":
-                return self.reply(200, health(started, port))
-            if path == "/history":
-                from urllib.parse import parse_qs, urlsplit
-                name = (parse_qs(urlsplit(self.path).query).get("project") or [""])[0]
-                p = next((x for x in collect(list_path) if x["name"] == name), None)
-                if not p or not p.get("tasks"):
-                    return self.reply(404, {"ok": False, "out": "找不到这个项目，或它没有接任务队列"})
-                return self.reply(200, task_history(p["repo"], parse_conf(f"{p['repo']}/.drover.conf")))
-            return self.reply(404, {"ok": False, "out": "没有这个地址"})
-
-        def do_POST(self):
-            origin = self.headers.get("Origin")
-            if self.headers.get("Host", "") not in hosts or (origin and origin not in {f"http://{h}" for h in hosts}):
-                return self.reply(403, {"ok": False, "out": "只接受本机页面的请求"})
-            if not hmac.compare_digest(self.headers.get("X-RB-Token", ""), token):
-                return self.reply(403, {"ok": False, "out": "令牌不对：刷新页面再试"})
-            if not self.headers.get("Content-Type", "").startswith("application/json"):
-                return self.reply(415, {"ok": False, "out": "只接受 JSON"})
-            act = {"/api/go": "go", "/api/drop": "drop", "/api/add": "add", "/api/move": "move", "/api/edit": "edit",
-                   "/api/pause": "pause", "/api/resume": "resume", "/api/loop": "loop", "/api/hold": "hold"}.get(self.path)
-            if not act:
-                return self.reply(404, {"ok": False, "out": "没有这个操作"})
-            try:
-                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
-                assert isinstance(body, dict)
-            except (ValueError, AssertionError):
-                return self.reply(400, {"ok": False, "out": "请求格式不对"})
-            code, res = live_action(list_path, act, body)
-            return self.reply(code, res)
-
-    # 这里曾经起过一个跑 loop_tick 的守护线程。**拆掉了**：外层循环的引擎是独立进程
-    # `drover loop`，看板只是观察者，开不开都不影响循环转不转。留在这里的话，「无人值守」
-    # 就等于「得一直开着一个网页服务」——那是把常驻的理由安在了错的东西上。
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"drover-board serve: http://127.0.0.1:{port}/", flush=True)
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-
-
+# ============================================================ 入口
 def main():
     args = sys.argv[1:]
     if args[:1] in (["-h"], ["--help"], ["help"]):
         print(__doc__.strip())
         return
-    if args[:1] == ["serve"]:
-        return serve(args[1:])
-    bad = [a for a in args if a.startswith("-") and a not in ("--open", "--quiet", "--notify", "--out", "--projects")]
-    if bad:
-        print(f"不认识的参数：{bad[0]}\n\n{__doc__.strip()}")
+    list_path, rest = None, list(args)
+    while rest:
+        a = rest.pop(0)
+        if a == "--projects" and rest:
+            list_path = rest.pop(0)
+        else:
+            print(f"不认识的参数：{a}\n\n{__doc__.strip()}")
+            sys.exit(2)
+    if not sys.stdout.isatty():
+        print("drover board 是个 TUI，要在终端里跑。")
         sys.exit(2)
-    out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
-    list_path = args[args.index("--projects") + 1] if "--projects" in args else None
-    projects = collect(list_path)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    # 先写临时文件再改名：浏览器 30 秒一刷，直接覆盖会有一瞬读到空文件。临时文件名带进程号：launchd 的定时刷新
-    # 和别的刷新会同时跑，共用一个名字时后到的那个改名会扑空。写失败就删掉自己的，不留残留。
-    tmp = f"{out_path}.{os.getpid()}.tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(render(projects))
-        os.replace(tmp, out_path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-    if "--notify" in args:
-        notify_new(projects, os.path.join(os.path.dirname(out_path), "board-notified.json"))
-    if "--quiet" not in args:
-        print(out_path)
-    if "--open" in args:
-        subprocess.run(["open", out_path])
+    curses.wrapper(tui, list_path)
 
 
 if __name__ == "__main__":

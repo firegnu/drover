@@ -102,3 +102,94 @@ ROADMAP：「**推进靠按键，不靠敲命令**」。至少要有：
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-20，drover/dev-tui 做完，在 `m5-tui` 上。
+
+### 做了什么
+
+1. **`bin/drover-board` 1598 → 927 行**。数据模块那部分（`collect` / `discover` / `parse_conf` /
+   `criteria` / `find_done_mark` / `task_*` / `wants_human` / `agents_of` / `corral*` / `loop_tick` /
+   `close_if_done` …）原样留着，一个函数名、一个返回值都没动。删掉的：`CSS`、`DRAWER`、
+   `LIVE_DIALOG`、`LIVE_EDITOR`、页面 JS、`render*`、`serve`、`live_action`、`live_version`、
+   `health(started, port)`、`launchd_job`、`span_text`、`notify_new`、`esc`、`state_badge`、
+   `tilde`、`task_body_html`、`task_desc`、`task_history`、令牌 / Host / Origin 校验、
+   `/v` `/health` `/history` `/api/*`，以及 `hashlib` 之外的 HTTP 相关 import。
+   `tests/browser-smoke.mjs`（168 行）一起删了。
+2. **`view_model()` / `draw()` 两层**。`view_model(projects) → dict`（顶栏健康、跨项目「等你」
+   汇总、每个项目的 waits / card / todo / finished / counts / mode），不碰 curses；
+   `draw(stdscr, vm, state)` 只排版，内容判断一个没有。验收全打在 `view_model()` 上。
+3. **界面**：顶栏（项目数 + corral 健康 + 等你几条）→ 左边项目列表 / 右边详情，详情从上到下是
+   等你（每条带 `corral attach <名字>`）→ 当前这件活（分支进展 + 判据，**收尾记号排最前**）→
+   队列 → 做完的。深色（`use_default_colors`，只设前景色）。
+4. **按键**：`↑↓`/`jk` 选项目、`g` 放行、`n` 发下一件、`p` 暂停 / 恢复、`a` 开 `$EDITOR` 编
+   `queue.md`、`l` 循环开 / 关、`r` 刷新、`q` 退出。所有写操作走 `run_drover()`，`subprocess`
+   转给 `bin/drover`，TUI 自己不碰交接文件；drover 的第一行输出显示在最底下那条消息栏里。
+5. **中文宽度**：`cell()` / `width()` / `trunc()`（`unicodedata.east_asian_width`，`W`/`F` 算两格，
+   组合字符不占格），所有排版都过 `put()` → `trunc()`。
+6. **系统通知挪到 `bin/drover`**：`NOTIFY_BIN` / `applescript_str` / `notify_new` 照搬过去，
+   新增 `tick()`，`cmd_loop_run` 每跳先 `B.loop_tick` 再通知。记录文件仍是
+   `~/.drover/board-notified.json`（名字没改，老记录接着用）。看板里现在一个 notify 字样都没有。
+
+### 测试
+
+```
+bash tests/drover-board.sh   PASS（8 块）
+bash tests/drover.sh         PASS（一行没改）
+bash tests/criteria.sh       PASS（一行没改）
+```
+
+`tests/drover-board.sh` 632 行改动：渲染相关的 15 块断言改成打在 `view_model()` 的返回值上
+（`q`/`is` 两个辅助函数把 JSON 化的 vm 拿来求表达式）；serve / HTTP / 令牌 / 加任务 / 调顺序 /
+history / hold / health 那几块整块删掉；并发写临时文件那块删掉（没有文件输出了）；
+「等你」通知那块留在本文件里，改成 `drover loop --once` 触发、`HOME` 指到临时目录；
+循环开关那块改成走 CLI（`drover loop on|off` / `pause` / `resume`），原来它是拿 HTTP 驱动的
+——顺手修掉一个老 bug：那块拿 `/api/pause {"on":false}` 当恢复用，实际那个端点只会暂停，
+返回 409 被 `|| true` 吃掉了，于是「循环关掉后不发」其实是靠「还暂停着」才通过的。
+新增三块：HTML / HTTP 层删干净了（对源码 grep 一串关键字）、`width()` / `trunc()`、
+`draw()` 画进 40x10 / 20x6 / 12x3 假屏幕不崩不越界（假屏幕连 curses「右下角那一格写不得」
+也一起守着）。
+
+先写测试、确认红（`AttributeError: module 'rb' has no attribute 'view_model'`）再实现。
+另外真开了一次 TUI 验收：pty 里跑起来、按 `l` 和 `p`，交接目录里确实出现了 `loop` 和
+`paused` 文件，消息栏显示 drover 的回话，按 `q` 正常退出。
+
+### 遇到的问题
+
+- 任务书里「`width("把 CSS 导入改成流式")` 要等于 16 不是 11」这两个数字对不上：那串是
+  **12 个字符、19 格**（7 个汉字 ×2 + `CSS` + 两个空格）。16/11 是 ROADMAP 里算岔了的，
+  意思（宽度 ≠ 字符数）没错。测试按真值断言 19 和 12。
+- `criteria(do_check=False)` 第 3 条的 `why` 里那句「没在页面上跑」现在没有页面了，读着别扭。
+  它是被保护的返回值，**没动**，留给主控定（改一个词的事）。
+- `README.md` 第 24 行还写着「只读看板（HTML，深色）」、第 46 行还把「看板改 TUI」列在待办里。
+  文件不在本任务的改动范围内（而且 `drover/dev-install` 可能也要动 README），**没动**。
+- `docs/ROADMAP.md` D1 第 5 步第 3 项「看板改 TUI」还没标做完——改 ROADMAP 要先问人，留给主控。
+
+### 没做的事
+
+- 详情区不滚动：内容超出窗口时截断，最后一行显示「… 还有 N 行，窗口再高些」。任务书的按键表
+  里没有滚动键，没有自作主张加。
+- 长行（判据的 `why`、「等你」那句）按显示宽度截断，不折行。
+- 「做完的」那一栏仍然不显示「派了几个 agent、返工几轮」，最底下的「记账」也仍然没有——
+  这两样在 ROADMAP 里等待定项 3，不在本任务范围。
+
+### 实现时的取舍
+
+1. **通知每跳都跑一次 `collect()`**。任务书写的是「挪到 `cmd_loop_run` 里，每跳发一次」，照做了。
+   但 `collect()` 要对每个项目问一次 corral、跑几次 git，而引擎默认 5 秒一跳——老看板是
+   launchd 每 30 秒一次。`board-notified.json` 那套去重保证**不会重复弹**，多出来的只是开销。
+   要省的话，要么调 `--interval`，要么给通知单独加个节流（没加：任务书没说，也不想擅自加常量）。
+2. **健康提示只剩 corral 一项**。老的 `/health` 有五项（本机服务、launchd 托管、看板定时生成、
+   出错记录、corral），前四项全是围着 HTTP 服务和 launchd 定时生成转的，那两样都没了；
+   ROADMAP 也写着「健康检查留，数据源换成 `corral ls`」。「引擎 `drover loop` 在不在跑」没做成
+   一项：要靠扫进程认，而 AGENTS.md 明确不许按项目名匹配进程。
+3. **`wait_items()` 的返回值从三元组改成二元组**（丢掉 HTML 锚点那一项）。它不在任务书的保护
+   名单里，锚点是网页独有的东西。用它的两处（看板、通知）都跟着改了。
+4. **`a` 键直接开 `$EDITOR` 编 `queue.md`**（`shell=True`，因为 `EDITOR` 可能带参数）。这是
+   任务书和 ROADMAP 都写明的做法：队列本来就是人的 markdown 文件，「写操作转给 drover」那条
+   规矩管的是判据和队列**解析**，编辑文件本身不经解析。
+5. **窄屏退化**：宽度不够（`w < rail + 16`）时不画左边的项目列表，只画选中项目的详情；
+   `h < 5` 或 `w < 20` 时只写「窗口太小」。
+6. **顶栏不显示主控状态**，只有项目数 + 健康 + 等你几条。主控状态块在 `f03efec` 已经删了，
+   是 corral board 的活，没加回来。
