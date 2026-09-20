@@ -202,16 +202,30 @@ rt drop --pos 9 "x"; code 2 'a position past the queue'
 rt list; has '手写戊' 'list shows the dropped unnumbered task'
 rt next; code 0 'next after reordering'; has '手写丁（改）' 'next issues the task now at the front'
 
-# ---- 外层循环：loop 文件在交接目录，默认没有 = 关。开着时做完直接发下一件（不管 TASK_GATE），
-# 停在队列那一步（队列空 / 暂停 / 主控在忙）时留下 .loop-wait，条件满足后由看板服务再跑一次 next
+# ---- 外层循环：loop 文件在交接目录，默认没有 = 关。三档：关 / 开着但放行模式（自动核对、下一件等人）/
+# 开着且自动模式（做完直接发下一件）。停在队列那一步（队列空 / 暂停 / 主控在忙）时留下 .loop-wait，
+# 条件满足后由看板服务再跑一次 next
 [ ! -f "${D}/loop" ] || fail 'the loop is off by default'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 grep -v '^TASK_GATE=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"   # 回到放行模式
 rt loop on; code 0 'loop on'; [ -f "${D}/loop" ] || fail 'loop on creates the loop file'
 rt list; has '循环' 'list shows the loop is on'
+
+# 中间档：循环开着 + 放行模式。自动核对判据、自动记 done，但下一件等人放行——TASK_GATE 不再被循环旁路
 edit loop.py 'work for the looping task'
-rt done "${TID}"; code 0 'with the loop on, done issues the next task even in release mode'; has 'TASK ' 'the next task follows right away'
-grep -q '"ev": "done".*"gate": false' "${D}/tasks.state" || fail 'the done event is not gated while looping'
+rt done "${TID}"; code 8 'loop on + release mode: done stops for release'; has '放行模式' 'says it is waiting for release, not that a mark was set'
+grep -q '"ev": "done".*"gate": true' "${D}/tasks.state" || fail 'the done event is gated in release mode even while looping'
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="release", m' "${D}/.loop-wait" || fail 'the wake marker says release'
+rt next; code 8 'the loop does not issue while awaiting release'
+rt go; code 0 'go releases'
+rt next; code 0 'next issues after release'; has 'TASK ' 'the next task goes out'
+TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
+
+# 自动档：TASK_GATE=0，做完直接发下一件
+printf 'TASK_GATE=0\n' >> "${REPO}/.drover.conf"
+edit loop.py 'work for the auto task'
+rt done "${TID}"; code 0 'loop on + auto mode: done issues the next task'; has 'TASK ' 'the next task follows right away'
+grep -q '"ev": "done".*"gate": false' "${D}/tasks.state" || fail 'the done event is not gated in auto mode'
 n=0
 while grep -q '^TASK ' "${TMP}/out"; do
   n=$((n + 1)); edit loop.py "work ${n}"          # 每个任务都要让 main 前进，否则判据第 1 条不过
@@ -229,6 +243,7 @@ python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=
 rt resume; rt_pane next; code 0 'next after resume'; has '循环里新加的任务' 'the new task is issued'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 [ ! -f "${D}/.loop-wait" ] || fail 'issuing a task clears the wake marker'
+grep -v '^TASK_GATE=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"   # 回到放行模式
 rt loop off; code 0 'loop off'; [ ! -f "${D}/loop" ] || fail 'loop off removes the loop file'
 edit loop.py 'work for the last task'
 rt done "${TID}"; code 8 'with the loop off, release mode stops again'; has '等人放行' 'back to waiting for release'
@@ -238,7 +253,9 @@ rt go
 
 # ---- 做完停：给队列里还没开始的任务打标记（记进 tasks.state，不改 queue.md），循环里做完它就停下等放行，放行后接着转；
 # 正文里手写一行「做完：等我放行」效果一样（给 agent 建任务用）
+# 这一段用自动模式（TASK_GATE=0）：放行模式下本来每件都停，看不出标记起没起作用
 rt loop on
+printf 'TASK_GATE=0\n' >> "${REPO}/.drover.conf"
 rt add "做完要看一眼的甲"; rt add "甲之后的乙"
 QB=$(cat "${D}/queue.md")
 rt hold 1 on --expect 000000000000; code 10 'a stale --expect refuses the hold'
@@ -353,6 +370,12 @@ got = [os.path.realpath(l.strip()) for l in open(sys.argv[2], encoding="utf-8") 
 assert want in got, (want, got)' "${NEW}" "${H2}/.drover/projects" || fail 'init registers the repo in the project list'
 [ -d "${H2}/.drover/inksample" ] || fail 'init creates the handoff dir'
 grep -q '^MAIN_AGENT=$' "${NEW}/.drover.conf" || fail 'MAIN_AGENT starts empty for the human to fill in'
+grep -q '^DONE_MARK=收尾$' "${NEW}/.drover.conf" || fail 'DONE_MARK gets a default the project can change'
+# 收尾记号要在项目自己的 AGENTS.md 里也写一遍（给主控看的那一份）。init 是唯一知道该提醒的时机，
+# 所以它把那一行原样打出来让人贴——模板只管新项目，已有的项目全靠这一步。
+has 'AGENTS.md' 'init tells you to add the wrap-up line to the project AGENTS.md'
+has '收尾记号：' 'and prints the line itself, ready to paste'
+has 'git commit --allow-empty' 'the printed line carries the command'
 # 目标仓库里除了那两个文件，一个字节都没动
 [ "$(git -C "${NEW}" status --porcelain | wc -l | tr -d ' ')" = 1 ] || { git -C "${NEW}" status --porcelain; fail 'init touched more than .gitignore'; }
 # 幂等：再跑一次什么都不覆盖

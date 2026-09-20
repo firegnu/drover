@@ -67,12 +67,12 @@ def load_board():
 
 
 B = load_board()
-REPO = D = Q = S = PAUSED = LOOP = ""
+REPO = D = Q = S = PAUSED = LOOP = DONE_MARK = ""
 GATE = True
 
 
 def setup():
-    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD, MAIN_AGENT
+    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD, MAIN_AGENT, DONE_MARK
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 drover。")
@@ -87,6 +87,7 @@ def setup():
     BRANCH_GLOB = conf.get("BRANCH_GLOB", "")        # 判据第 2 条；空 = 这个项目不用里程碑分支
     CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条的默认值；队列条目的「验收：」行可覆盖
     MAIN_AGENT = conf.get("MAIN_AGENT", "")          # 送给谁；空 = 不自动送，打出来让人粘
+    DONE_MARK = conf.get("DONE_MARK", "收尾").strip()  # 收尾记号的前缀；空 = 这个项目不打记号，判不出完成
 
 
 def sh(*args):
@@ -368,10 +369,11 @@ def cmd_done(tid):
     for line in criteria_report(current):
         print(line)
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
-    gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
+    gate = GATE or held                          # 循环开不开都听 TASK_GATE；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
     if gate and loop_on():
-        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：等人放行（drover go）。")
+        why = "人标了「做完停」" if held else "放行模式"
+        return loop_stop("release", f"DONE {tid}：核对通过。{why}：等人放行（drover go）。")
     if gate:
         return stop(f"DONE {tid}：核对通过。放行模式：等人放行（drover go）。")
     print(f"DONE {tid}：核对通过。")
@@ -430,8 +432,9 @@ def cmd_loop(on):
     if on:
         with open(LOOP, "w", encoding="utf-8") as f:     # 重写一遍：修改时间就是这次开循环的时刻（「连续做了几个」从这里数）
             f.write(f"{int(time.time())}\n")
-        print("循环已开：做完直接领下一个；写手停在队列那一步（队列空 / 暂停）时，条件满足后看板服务会叫醒它。"
-              "drover loop off 关掉。")
+        print("循环已开：主控空闲下来自动核对判据、自动记 done。下一件发不发看 TASK_GATE——"
+              "放行模式（默认）等人 drover go，自动模式直接发。停在队列那一步（队列空 / 暂停 / 等放行）时，"
+              "条件满足后看板服务会叫醒它。drover loop off 关掉。")
     else:
         for f in (LOOP, f"{D}/.loop-wait"):
             if os.path.exists(f):
@@ -461,7 +464,9 @@ def span(a, b):
 def cmd_list():
     tasks, current, awaiting = fold()
     todo = pending(tasks)
-    print(f"模式：{'循环（做完直接领下一个，停下后自动叫醒）' if loop_on() else '放行模式' if GATE else '自动模式'}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
+    mode = ("循环 + 放行模式（自动核对判据，下一件等人放行）" if GATE else "循环 + 自动模式（做完直接领下一个）") if loop_on() \
+        else ("放行模式" if GATE else "自动模式")
+    print(f"模式：{mode}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
           + (f"；{awaiting} 已完成，等人放行" if awaiting else ""))
     print("\n进行中：")
     print(f"  {current['id']} {current['title']}（开始于 {current['start'][:7]}）" if current else "  （无）")
@@ -519,10 +524,19 @@ def cmd_init(short):
 
     os.makedirs(d, exist_ok=True)
     print("  ✓ 交接目录就绪")
+    mark = B.parse_conf(conf).get("DONE_MARK", "收尾").strip()
     print(f"\n接好了。下一步：\n"
           f"  1. 编辑 {conf}，填上 MAIN_AGENT（主控在 corral 里的名字）\n"
           f"  2. 自己开主控：corral start <名字> …    —— drover 不开、不关、不接入\n"
           f'  3. drover add "标题" …  然后  drover next')
+    if mark:
+        print(f"\n还有一件要你自己做：把下面这一行加进 {repo}/AGENTS.md 的「开发方式（主控分派）」那一节，\n"
+              f"挨着「合并：」那行。drover 靠它判断一件活完没完，不加就判不出来：\n\n"
+              f"  - 收尾记号：一件活合并完、worktree 和分支清干净之后，在 main 上补一条空提交\n"
+              f"    （git commit --allow-empty），首行写「{mark}: 」加一句话说明这件活是什么。\n"
+              f"    只记真正落地的活；说好不合并、停在审查的不记。\n\n"
+              f"（新项目按 corral 的 项目AGENTS模板.md 建的话本来就有这条，核对一下前缀是不是 {mark}。\n"
+              f" 这个项目不想用收尾记号，就把 .drover.conf 里的 DONE_MARK 留空。）")
     return 0
 
 
@@ -546,7 +560,17 @@ BRANCH_GLOB=
 # 「验收：<命令>」可以按任务覆盖。例：CHECK_CMD=uv run pytest -q
 CHECK_CMD=
 
+# 收尾记号的前缀。主控一件活收尾时在 main 上打一条空提交，首行「<前缀>: 一句话」，
+# drover 认出它才算这件活完了。**同一个值要在项目自己的 AGENTS.md 里也写一遍**
+# （那份是给主控看的，drover 不去解析它），两处别写岔了。
+# 留空 = 这个项目不打收尾记号：drover 判不出完成，循环开着也不会自动记 done，停下等人 drover go。
+DONE_MARK=收尾
+
 # 放行模式：1（默认）每个任务做完等人 go；0 自动模式，做完直接发下一件。
+# 和 `drover loop on/off` 两个开关叠起来是三档，默认全关：
+#   loop off            什么都不自动（默认）
+#   loop on + GATE=1    自动核对判据、自动记 done，下一件等人放行
+#   loop on + GATE=0    全自动，无人值守
 # TASK_GATE=1
 """
 
