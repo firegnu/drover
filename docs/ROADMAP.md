@@ -53,7 +53,7 @@
 
 ## 完成判据：纯 git，零解析
 
-drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条：
+drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。**「反复查」由 `loop_tick` 的 `close_if_done` 做：只在主控 idle（且够久、这一轮不是它自己开的、状态不是 `unknown`）时查，两次之间至少隔 `CHECK_EVERY`（5 分钟）。** 判定本身交给 `review-task done`——那是这套判据的唯一实现，循环引擎只决定「什么时候问」。过了就记 done，自动模式下顺手把下一件送出去；`done` 退出码 9（判据没满足）是常态不是故障。三条是：
 
 1. `main` 前进了（sha 变了）；
 2. 所有里程碑分支都已经是 `main` 的祖先（对每个 `git branch --list '<BRANCH_GLOB>'` 跑 `git merge-base --is-ancestor <分支> main`，`main` 自己永远不算）；

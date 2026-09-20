@@ -1497,18 +1497,55 @@ def task_bin_path():
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
 
 
+CHECK_EVERY = 300       # 两次完整核对之间至少隔这么久。第 3 条可能是整套测试，不能每跳都跑
+
+
+def close_if_done(repo, conf, d, current):
+    """这件活干完没有：主控空闲下来时核对一次三条判据，过了就记 done（自动模式下 done 会顺手发下一件）。
+    判定交给 `review-task done` —— 它本来就是这套判据的唯一实现，这里只决定「什么时候问」：
+
+      - 只在主控 idle 时问。它还在干活时这件活当然没完，而第 3 条可能是整套测试，白跑。
+      - idle 还要够久、且这一轮不是主控自己开的（契约：idle 不代表它不会再动），同 wants_human。
+      - state 是 unknown 就不问：状态无从得知时不猜，让人去看。
+      - 两次之间至少隔 CHECK_EVERY，记在交接目录里的一个空文件上（看它的修改时间）。
+
+    done 退出码 9 = 判据没满足，是常态不是故障：记下时间，下一轮再问。看板那边同时会把
+    「主控空闲着但判据没满足」挂进「等你」，两边说的是同一件事。"""
+    a = agents_of(repo, conf.get("MAIN_AGENT", "")).get("writer")
+    if not a or a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
+        return
+    stamp = f"{d}/.criteria-checked"
+    if NOW - (mtime(stamp) or 0) < CHECK_EVERY:
+        return
+    open(stamp, "w").close()
+    r = subprocess.run([task_bin_path(), "done", current["id"]], cwd=repo,
+                       capture_output=True, text=True, timeout=CHECK_TIMEOUT + 60)
+    with open(f"{d}/.loop.log", "a", encoding="utf-8") as f:
+        head = (r.stdout or r.stderr or "").strip().splitlines()[:1]
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} done {current['id']} exit {r.returncode} {head[0] if head else ''}\n")
+
+
 def loop_tick(list_path):
-    """外层循环的推进：循环开着、上一次停在队列那一步留了 .loop-wait 的项目，等条件重新满足
-    （有待办、没暂停、没有进行中的、不等放行）就跑一次 `review-task next`，由它把任务正文送进主控。
+    """外层循环的一跳。循环开着的项目，看它处在哪一头：
+
+      有进行中的任务 → 主控空闲下来时核对三条判据，过了就记 done（见 close_if_done）。
+      没有进行中的   → 上一次停在队列那一步留了 .loop-wait，条件重新满足（有待办、没暂停、
+                       不等放行）就跑一次 `review-task next`，由它把任务正文送进主控。
+
+    `.loop-wait` 只管后一头——它的意思就是「停在队列那一步」。有任务在做时本来就没有这个标记，
+    所以核对判据那一头不能被它挡住（踩过一次）。
 
     和老 herdsman 的区别：老的往写手的 pane 里注入固定那句「运行 review-task next」，让写手去跑外层
     循环的命令——那是内依赖外。现在 drover 自己跑 next，送出去的是任务正文本身，和人手动粘一段
-    任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字，实例变没变由
-    review-task 自己对 corral status 的 instance。"""
+    任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字。"""
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
         d = conf.get("HANDOFF_DIR")
         if not d or not os.path.exists(f"{d}/loop"):
+            continue
+        tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
+        if current:
+            close_if_done(repo, conf, d, current)
             continue
         mf = f"{d}/.loop-wait"
         try:
@@ -1517,8 +1554,7 @@ def loop_tick(list_path):
             m = None
         if not isinstance(m, dict) or m.get("failed"):
             continue
-        tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
-        if current or awaiting or os.path.exists(f"{d}/paused") or not task_pending(task_blocks(read(f"{d}/queue.md")), tasks):
+        if awaiting or os.path.exists(f"{d}/paused") or not task_pending(task_blocks(read(f"{d}/queue.md")), tasks):
             continue
         before = read(mf)                    # 跑 next 期间可能又停下、写了新标记：删之前核对还是这一份
         r = subprocess.run([task_bin_path(), "next"], cwd=repo, capture_output=True, text=True, timeout=120)

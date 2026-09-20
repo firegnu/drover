@@ -41,6 +41,9 @@ case "$1 $2" in
                           "$(cat "${MOCK_DIR}/eta.idle_for" 2>/dev/null || echo 600)" \
                           "$(cat "${MOCK_DIR}/eta.src" 2>/dev/null || echo send)";;
   'status theta/main') st theta/main "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)";;
+  'status iota/main')  st iota/main "$(cat "${MOCK_DIR}/iota.state" 2>/dev/null || echo idle)";;
+  'send iota/main')    printf '%s\n' "$3" >> "${MOCK_DIR}/sent-iota"
+                       printf '{"ok":true,"name":"iota/main","instance":1,"confirmed":true}\n';;
   # ls 里有三个：alpha 的主控、eta 的主控、以及 eta 派出去的那个（cwd 在 eta 的 worktree 里）
   'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"},{"name":"eta/main","instance":1,"kind":"claude","cwd":"%s"},{"name":"eta/m1-backend","instance":2,"kind":"codex","cwd":"%s"}]}\n' \
            "${MOCK_ALPHA}" "${MOCK_ETA}" "${MOCK_ETA_WT}";;
@@ -570,6 +573,49 @@ rm -f "${TMP}/prompts.log"; mark; sleep 2.5
 [ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent with the loop off'
 rm -f "${TMP}/theta/review/.loop-wait"
 echo 'PASS review-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
+
+# ---- 外层循环闭合：主控空闲下来时，循环引擎自己核对三条判据，过了就记 done 并发下一件。
+# 直接调 loop_tick，不等常驻服务，省得看时序。
+IO="${TMP}/iota"; mkdir -p "${IO}/repo" "${IO}/review"
+git -C "${IO}/repo" init -q -b main
+git -C "${IO}/repo" config user.name t; git -C "${IO}/repo" config user.email t@example.com
+printf 'a\n' > "${IO}/repo/a.py"; git -C "${IO}/repo" add .; git -C "${IO}/repo" commit -qm base
+IOB=$(git -C "${IO}/repo" rev-parse main)
+# 验收命令留下痕迹，好断言「主控在忙时一次都没跑过」
+printf 'HANDOFF_DIR=%s\nMAIN_AGENT=iota/main\nTASK_GATE=0\nCHECK_CMD=echo ran >> %s/check.log\n' \
+  "${IO}/review" "${TMP}" > "${IO}/repo/.drover.conf"
+printf '## T1 头一件\n\n## T2 第二件\n' > "${IO}/review/queue.md"
+printf '{"t": %s, "ev": "start", "id": "T1", "title": "头一件", "body": "", "key": "头一件", "sha": "%s", "main": "%s"}\n' \
+  "$((now - 600))" "$IOB" "$IOB" > "${IO}/review/tasks.state"
+: > "${IO}/review/loop"
+printf '%s/iota/repo\n' "${TMP}" > "${TMP}/projects-iota"
+tick() { python3 - "${BOARD}" "${TMP}/projects-iota" <<'PY2'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+B.loop_tick(sys.argv[2])
+PY2
+}
+done_ev() { grep -c '"ev": "done", "id": "T1"' "${IO}/review/tasks.state" 2>/dev/null | head -1; }
+
+# 主控在忙：一次都不许核对——第 3 条可能是整套测试，不能因为它在干活就反复跑
+printf 'working\n' > "${TMP}/iota.state"; rm -f "${TMP}/check.log"; tick
+[ ! -f "${TMP}/check.log" ] || { cat "${TMP}/check.log"; fail 'must not run the check command while the 主控 is working'; }
+[ "$(done_ev)" = 0 ] || fail 'nothing is marked done while the 主控 is working'
+# 主控空闲了，但 main 还没前进（判据第 1 条不过）：核对了，但不标做完
+printf 'idle\n' > "${TMP}/iota.state"; tick
+[ "$(done_ev)" = 0 ] || fail 'a task whose criteria are unmet must not be marked done'
+# main 前进了 → 三条都过 → 自动记 done，并且（自动模式）把下一件送出去
+printf 'b\n' >> "${IO}/repo/a.py"; git -C "${IO}/repo" add .; git -C "${IO}/repo" commit -qm work
+rm -f "${TMP}/iota.checked" "${IO}/review/.criteria-checked"     # 清掉节流记录，立刻再查一次
+: > "${TMP}/sent-iota"; tick
+[ "$(done_ev)" = 1 ] || { cat "${IO}/review/.loop.log" 2>/dev/null || true; fail 'the loop closes the task itself once the criteria are met'; }
+grep -q '"ev": "start", "id": "T2"' "${IO}/review/tasks.state" || fail 'and the next task goes out right after'
+# 节流：刚查过就再来一跳，不许再跑一次验收命令
+N=$(wc -l < "${TMP}/check.log"); tick
+[ "$(wc -l < "${TMP}/check.log")" = "$N" ] || fail 'the check command is throttled, not run on every tick'
+echo 'PASS loop engine: checks the criteria only when the 主控 is idle, closes the task itself, throttled'
 
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
 # 放在最后：它最后会停掉 ${SERVE}。没有 node 或 Chrome 就跳过，不算失败。
