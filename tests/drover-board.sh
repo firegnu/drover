@@ -54,8 +54,9 @@ case "$1 $2" in
 esac
 MOCK
 chmod +x "${TMP}/corral"
-# eta 派出去的那个 agent 跑在一个 worktree 里（corral-dispatch 就是这么干的）：
-# corral ls 给的 cwd 是 worktree 路径，不是仓库根，看板要用 git worktree list 映射回来
+# eta 派出去的那个 agent 跑在一个 worktree 里（corral-dispatch 就是这么干的）。
+# 看板以前会把 corral ls 报的 cwd 顺着 git worktree list 映射回项目，现在不了；这个 worktree
+# 留着是给判据第 2 条用的（里程碑分支有提交、还没合回 main）
 git -C "${TMP}/eta/repo" worktree add -q -b m1-backend "${TMP}/eta/wt-m1" >/dev/null 2>&1
 # 里程碑分支上有提交、还没合回 main —— 判据第 2 条应当不过
 printf 'wip\n' >> "${TMP}/eta/wt-m1/a.py"
@@ -68,7 +69,9 @@ printf 'MAIN_AGENT=alpha/main\n' >> "${TMP}/alpha/repo/.drover.conf"
 printf 'MAIN_AGENT=zeta/main\n'  >> "${TMP}/zeta/repo/.drover.conf"
 printf 'MAIN_AGENT=eta/main\n'   >> "${TMP}/eta/repo/.drover.conf"
 printf 'MAIN_AGENT=theta/main\n' >> "${TMP}/theta/repo/.drover.conf"
-# zeta：主控卡在审批对话框（假 corral 里 blocked）→「等你」里出现一条 STOP
+# zeta 的主控在假 corral 里是 blocked。以前这会在「等你」里挂一条 STOP，现在不会了——
+# 「主控卡在对话框」这条删了，corral 的 board 本来就把 blocked 显在最显眼处。zeta 留着当对照：
+# 主控 blocked 但队列没事的项目，drover 这边一条「等你」都不该有。
 
 # 任务区 —— eta：T8 进行中（1 个提交）；队列里一个手写未编号的排在最前；
 # 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
@@ -95,14 +98,10 @@ python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" >/dev/null
 for n in alpha beta gamma delta epsilon zeta eta theta; do has "data-p=\"$n/repo\"" "project $n listed"; done
 has '项目 · 8' 'project count'
 has '<div class="mast"><span class="brand">Review board</span>' 'masthead'
-has '<b>主控</b> claude' 'masthead names the kind corral status reports'
 
 # 活动条：全部来自 corral status 的结构化字段（state / last_tool / turn_started）。
 # 老的做法是跑 herdr agent read、再从输出里正则抠「Working (12m 03s · esc to interrupt)」那句话；
 # corral 契约明写 read「只作排查用，不要解析」，所以那段整个删了，换成这两个字段。
-has '<span class="dot st-working"></span><b>写手</b><span class="st st-working">working</span><span class="activity">正在调 Edit · 这一轮 12m</span>' 'alpha 主控 chip shows the tool and the turn length'
-# 按钮的样式名是 act、默认隐藏；agent 正在做什么的那段文字不能用同一个名字，否则被一起藏掉
-lacks '<span class="act">' 'crew activity text is not styled as a hidden button'
 
 # 「等人」的识别：eta 的主控空闲着，但 T8 的判据没满足（main 还停在发任务那一刻）
 # —— 它停在某处等人拍板。判据第 1、2 条是纯 git，渲染时照算；第 3 条可能是整套测试，不在这里跑。
@@ -110,8 +109,9 @@ has '主控空闲着，但这件活的判据还没满足' 'an idle 主控 with u
 has 'T8' 'the 等人 item names the task'
 has '送任务之后没有前进' 'it says which criterion is unmet'
 
-# 横幅：zeta blocked 一条 + eta 等人一条 + theta 做完等放行一条
-has '等你 · 3' 'banner count: zeta 1 + eta 1 + theta 1'
+# 横幅：eta 等人一条 + theta 做完等放行一条（zeta 的主控 blocked 不再算一条）
+has '等你 · 2' 'banner count: eta 1 + theta 1'
+lacks 'id="w-zeta/repo"' 'a blocked 主控 alone must not raise 等你: that is corral board的活'
 seen_plain=0
 for c in $(grep -o 'class="proj[^"]*" data-p' "${OUT}" | sed 's/class="proj needs" data-p/needs/;s/class="proj" data-p/plain/'); do
   if [ "$c" = plain ]; then seen_plain=1; elif [ "${seen_plain}" = 1 ]; then fail 'a project that needs you sorted after a quiet one'; fi
@@ -142,9 +142,9 @@ has '还没有提交落地' 'a stuck task shows nothing landed yet'
 has 'class="crit"' 'the card shows how many criteria are met'
 has '判据 0/2' 'eta: neither cheap criterion is met yet'
 has '没在页面上跑' 'the check command is named but not run while rendering'
-# 派出去的 agent：corral ls 里 cwd 落在这个仓库的 worktree 上的，都算这件活派出去的
-has '<b>派出去</b>' 'dispatched agents get their own chips'
-has 'eta/m1-backend' 'the dispatched agent is named'
+# 派出去的 agent 一个字都不该出现在页面上：那是 corral board + --viewer 的活。
+# eta/m1-backend 在假 corral 的 ls 里、cwd 就落在 eta 的 worktree 上——正是以前会被认出来的那种。
+lacks 'eta/m1-backend' 'dispatched agents are not drover的事: no chips, no names'
 
 # 评审协议的东西一律不该再出现
 lacks 'Round 1' 'no review rounds'
@@ -154,11 +154,8 @@ lacks '等你裁决' 'no pending decisions'
 lacks 'request-review' 'no request-review anywhere on the page'   # 老 herdsman 的命令，页面上不该再提
 
 # 「等你」栏：每个项目一栏，横幅只是汇总
-has 'id="w-zeta/repo"' 'zeta has its own 等你 section'
-has '主控停在审批或提问对话框：去看看：corral attach zeta/main' 'blocked 主控 listed with how to attach'
 # 每条「等你」都带接入命令。drover 自己不跑 attach——只用 send / status / ls，这只是给人抄的一句话。
 has 'corral attach eta/main' 'the 等人 item also says how to attach'
-has 'class="proj needs" data-p="zeta/repo"' 'zeta highlighted in the sidebar'
 
 # 任务区：只有接了队列的项目才有；三栏、阶段条、手写未编号、放弃带原因、做完等放行
 [ "$(grep -o 'class="tasks"' "${OUT}" | wc -l | tr -d ' ')" = 2 ] || fail 'task section only on projects with a queue'
@@ -271,17 +268,17 @@ nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr 
 board "${TMP}/notifier"
 [ "$(nlines)" = 0 ] || fail 'the board must not notify without --notify'
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 3 ] || fail "first --notify run: one per project waiting on you (zeta blocked, eta 等人, theta awaiting release), got $(nlines)"
-grep -q 'zeta/repo' "${TMP}/notify.log" || fail 'the blocked 主控 is notified'
+[ "$(nlines)" = 2 ] || fail "first --notify run: one per project waiting on you (eta 等人, theta awaiting release), got $(nlines)"
+grep -q 'zeta/repo' "${TMP}/notify.log" && fail 'a blocked 主控 is not drover的事'
 grep -q '做完了' "${TMP}/notify.log" || fail 'waiting for release is notified'
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 3 ] || fail 'an unchanged board must not notify again'
+[ "$(nlines)" = 2 ] || fail 'an unchanged board must not notify again'
 mv "${TMP}/theta/review/tasks.state" "${TMP}/theta/state.bak"
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 3 ] || fail 'an item going away sends nothing'
+[ "$(nlines)" = 2 ] || fail 'an item going away sends nothing'
 mv "${TMP}/theta/state.bak" "${TMP}/theta/review/tasks.state"
 board "${TMP}/notifier" --notify
-[ "$(nlines)" = 4 ] || fail 'an item that comes back is notified again'
+[ "$(nlines)" = 3 ] || fail 'an item that comes back is notified again'
 tail -1 "${TMP}/notify.log" | grep -q '做完了' || fail 'the renewed notification carries the item text'
 tail -1 "${TMP}/notify.log" | grep -qF '\"引号\"' || fail 'double quotes are escaped for AppleScript'
 rm -f "${TMP}/board-notified.json"
@@ -533,15 +530,9 @@ health ok '服务守护（launchd）' true '已由 launchd 托管'
 grep -qF "document.body.classList.contains('offline')" "${TMP}/live.html" || fail 'no full-page refresh while the service is unreachable'
 python3 -c 'import os,sys,time; t=time.time()+5; os.utime(sys.argv[1], (t, t))' "${TMP}/code/drover"
 health warn 本机服务 false '旧代码'
-# ---- agent 状态随轮询更新：GET /crew 返回各项目的 agent 状态块，页面每 8 秒换上，不用等整页刷新
-grep -qF 'data-crew="alpha/repo"' "${TMP}/live.html" || fail 'the live page has a crew slot per project'
-curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
-python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" in c["alpha/repo"] and "正在调 Edit" in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew shows the working 主控'; }
-: > "${TMP}/corral.down"; sleep 3
-curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
-python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows corral without a page reload'; }
-rm "${TMP}/corral.down"
-echo 'PASS drover-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed; crew polled'
+# 这里曾经验过 GET /crew：主控和派出去的 agent 的状态块，页面每 8 秒轮询换上。
+# 连同端点一起删了——那是 corral board + --viewer 的活，drover 是任务看板不是 agent 看板。
+echo 'PASS drover-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed'
 
 # ---- 外层循环：页面上的开关只管开关；**推动循环的是引擎进程 `drover loop`，不是这个服务**。
 # 引擎看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次 drover next，由它把

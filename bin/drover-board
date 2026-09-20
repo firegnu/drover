@@ -98,43 +98,10 @@ def corral_status(name):
     return j if code == 0 and j.get("ok") else None
 
 
-def activity_of(st):
-    """「正在调什么工具 · 这一轮多久」。status 的 last_tool / turn_started，只在 working 时有意义。"""
-    if not st or st.get("state") != "working":
-        return ""
-    tool, t0 = st.get("last_tool") or "", st.get("turn_started")
-    span = f"这一轮 {ago(t0)}" if t0 else ""
-    return " · ".join(x for x in (f"正在调 {tool}" if tool else "", span) if x)[:80]
-
-
-def repo_dirs(repo):
-    """这个仓库「算自己人」的目录：仓库根 + 它所有的 worktree。
-    corral-dispatch 把派出去的 agent 开在 worktree 里，`corral ls` 给的 cwd 是 worktree 路径，
-    不是仓库根——要认出「这个 agent 是这件活派出去的」，得先把 worktree 映射回来。
-    纯 git，只读；不问 corral 要任何它没承诺的东西。"""
-    out = {os.path.realpath(repo)}
-    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
-        if line.startswith("worktree "):
-            out.add(os.path.realpath(line[len("worktree "):].strip()))
-    return out
-
-
-def crew_of(repo, main_agent):
-    """派出去的 agent：cwd 落在这个仓库或它的 worktree 里、又不是主控的，都算。
-    → [{name, instance, kind, status, activity}]，按名字排。"""
-    dirs, out = repo_dirs(repo), []
-    for a in corral_agents():
-        name = a.get("name") or ""
-        if not name or name == main_agent or a.get("starting") or a.get("incompatible"):
-            continue
-        if os.path.realpath(a.get("cwd") or "/nonexistent") not in dirs:
-            continue
-        st = corral_status(name) or {}
-        out.append({"name": name, "instance": a.get("instance", ""), "kind": a.get("kind", ""),
-                    "status": st.get("state") or "unknown", "activity": activity_of(st)})
-    return sorted(out, key=lambda x: x["name"])
-
-
+# 这里曾经有 repo_dirs() 和 crew_of()：把 `corral ls` 报的 cwd 顺着 `git worktree list` 映射回
+# 项目，算出「这件活派出去了哪几个 agent」。**删掉了**：corral 的 board + --viewer 已经把「谁在忙、
+# 在调什么工具、卡住没有、接入去看」做完了，而且比这里准——drover 只能靠 worktree 路径反推归属。
+# drover 是任务看板，不是 agent 看板。要找回来看 git log。
 def agents_of(repo, main_agent=""):
     """{"writer": info}：主控。配了 MAIN_AGENT 就按名字问 corral status（权威）；
     没配就退回「cwd 是这个仓库的 agent」——项目还没接上 corral 时看板照样能显示点东西。"""
@@ -145,13 +112,9 @@ def agents_of(repo, main_agent=""):
         st = corral_status(hit.get("name")) if hit else None
     if st is None:
         return {}
-    title = (st.get("title") or "").strip()
-    if title == os.path.basename(repo):
-        title = ""
-    return {"writer": {"status": st.get("state") or "unknown", "title": title,
-                       "name": st.get("name", ""), "instance": st.get("instance", ""),
-                       "kind": st.get("kind", ""), "activity": activity_of(st),
-                       # 下面两个只给「等人」的识别用，见 wants_human
+    return {"writer": {"status": st.get("state") or "unknown", "name": st.get("name", ""),
+                       # 后两个只给「等人」的识别用，见 wants_human；title / kind / instance / activity
+                       # 随主控状态块一起删了——那些是 corral board 的活
                        "idle_for": st.get("idle_for") or 0, "src": st.get("last_input_source", "")}}
 
 
@@ -218,11 +181,11 @@ def wants_human(p):
 
 
 def add_waits(p):
-    """把「等你」补全：主控卡在对话框、主控停下等人、以及队列做完等放行。"""
+    """把「等你」补全：主控停下等人、以及队列做完等放行。
+
+    「主控卡在审批对话框」那条删了：corral 的 board 本来就把 blocked 显在最显眼处，drover 跟着报
+    一遍只是重复造轮子。留下的这两条都是只有 drover 算得出来的。"""
     new = []
-    a = (p.get("agents") or {}).get("writer")
-    if a and a["status"] == "blocked":
-        new.append(("stop", "", "blocked", "", f"主控停在审批或提问对话框：{attach_hint(a['name'])}"))
     unmet = wants_human(p)
     if unmet:
         card = p["tasks"]["card"]
@@ -544,7 +507,6 @@ def project_state(repo, conf):
     p["done_mark"] = conf.get("DONE_MARK", "收尾").strip()
     p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
-    p["crew"] = crew_of(repo, p["main_agent"])
     p["tasks"] = task_view(repo, conf, p)
     add_waits(p)
     return p
@@ -567,9 +529,6 @@ summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:n
 .wrap{min-height:100vh;display:flex;flex-direction:column;min-width:1200px}
 .mast{display:flex;align-items:center;gap:20px;padding:0 24px;height:46px;background:linear-gradient(var(--mast-hi),var(--mast));color:var(--t2);border-bottom:1px solid rgba(0,0,0,.6);box-shadow:0 1px 0 rgba(255,255,255,.06);position:sticky;top:0;z-index:5}
 .mast .brand{font-weight:700;font-size:var(--fs4);letter-spacing:.01em;color:#fff}
-.mast .agents{display:flex;align-items:center;gap:8px;font-size:var(--fs2);flex-wrap:wrap}.mast .ag{padding:0 11px;line-height:24px;border:1px solid rgba(255,255,255,.1);border-radius:999px;background:rgba(255,255,255,.04)}.mast .ag b{font-weight:600;margin-right:6px}
-.mast .ag.wr{color:var(--amber-t)}.mast .ag.rv{color:var(--blue-t)}.mast .ag.pl{color:var(--purple-t)}.mast .ag .off{color:var(--t5)}
-.mast .agents .mute{color:var(--t4)}
 .mast .gen{margin-left:auto;font-size:var(--fs2);color:var(--t4);font-variant-numeric:tabular-nums}.mast .golive{color:var(--blue-t)}
 .banner{background:linear-gradient(90deg,rgba(200,55,90,.12),rgba(200,55,90,.04));border-bottom:1px solid rgba(200,55,90,.35);box-shadow:inset 3px 0 0 var(--red);padding:12px 24px;display:flex;gap:20px;align-items:flex-start}
 .banner .t{font-weight:700;color:var(--red-t);font-size:var(--fs4);flex:none;line-height:30px}
@@ -697,24 +656,12 @@ ol.q .sub .note{flex-basis:100%;display:-webkit-box;-webkit-line-clamp:2;-webkit
 .head h1{margin:0 4px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--t1);line-height:1.2}
 .head .badge{transform:translateY(1px)}.head>.mute{font-size:var(--fs2);font-variant-numeric:tabular-nums}
 .head .hd{margin-left:auto;color:var(--t4);font-size:var(--fs1);font-family:var(--mono);letter-spacing:.02em;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:var(--r1);padding:0 9px;line-height:22px}.head .hd code{color:var(--t3);font-size:var(--fs2)}
-.crew{display:flex;flex-wrap:wrap;gap:8px 10px;padding:14px 0 2px;font-size:var(--fs3);color:var(--t2)}
-.crew.sub{padding:8px 0 0;font-size:var(--fs2)}.crew.sub .nm{color:var(--t3);font-family:var(--mono)}
 .prog,.crit{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-top:8px;font-size:var(--fs2);color:var(--t3)}
 .prog b{color:var(--t1);font-weight:700}
 .crit .k{color:var(--t2);font-weight:600}
 .crit .ok{color:var(--green-t)}.crit .bad{color:var(--red)}.crit .mute{color:var(--t4)}
-.crew .agent{display:inline-flex;align-items:center;gap:10px;padding:0 14px;line-height:32px;border-radius:var(--r2);background:var(--s1);border:1px solid var(--line)}
-.crew .agent.st-working{border-color:#356243;background:var(--green-bg)}
-.crew .agent.st-blocked{border-color:#803733;background:#352628}
-.crew .agent b{font-weight:600}
-.crew .st{font-family:var(--mono);font-size:var(--fs2);color:var(--t3)}
-.crew .st.st-working{color:var(--green-t)}.crew .st.st-blocked{color:#f0776a}
-.crew .ttl{color:var(--t2)}.crew .activity{color:var(--t3)}.crew:empty{display:none}
-.crew .ttl::before,.crew .activity::before{content:"·";color:var(--t5);margin-right:10px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--t5);flex:none}
 .planning .age{color:var(--t3);font-size:var(--fs2)}.planning .task{color:var(--t2)}.planning .dim{color:var(--t4);font-size:var(--fs2)}
 details.lastrun .age{color:var(--t3);font-size:var(--fs2)}
-.dot.st-working{background:#5fb36a;box-shadow:0 0 0 3px rgba(95,179,106,.25)}.dot.st-blocked{background:#e5533d;box-shadow:0 0 0 3px rgba(229,83,61,.25)}.dot.st-idle,.dot.st-done{background:var(--t4)}
 .idle{padding:16px 0;color:var(--t4)}
 .cycle.s-me{border-left-color:var(--red)}
 .cycle .title{font-size:var(--fs4);font-weight:700;letter-spacing:-.01em;margin-bottom:2px}
@@ -759,7 +706,7 @@ h2 .sub{font-weight:400;color:var(--t4);font-size:var(--fs2);margin-left:8px}
 .foot{padding:14px 24px;color:var(--t4);font-size:var(--fs1);border-top:1px solid var(--line)}
 .empty{color:var(--t4);padding:8px 0;font-size:var(--fs2)}
 .tasks,.sec,.round,.cycle,details.prev,.wait,.planning,details.lastrun{box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 10px 28px -16px rgba(0,0,0,.6)}
-ol.q li,.drow,.card,.bhead,.crew .agent,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+ol.q li,.drow,.card,.bhead,.proj.sel{box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .lanes .empty{border-color:rgba(255,255,255,.12)}
 """
 
@@ -854,11 +801,6 @@ JS = """
       .catch(function(){offline=true;paint()})}
     function checkHealth(){fetch('/health',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){hdata=j;paint()}).catch(function(){})}
     setInterval(function(){if(!document.hidden)sync()},4000);
-    // agent 状态（working / idle / blocked、正在做什么）不改文件，/v 看不到：单独每 8 秒取一次，只换状态块
-    setInterval(function(){if(document.hidden||offline)return;
-      fetch('/crew',{cache:'no-store'}).then(function(r){return r.json()}).then(function(c){
-        document.querySelectorAll('[data-crew]').forEach(function(x){var h=c[x.dataset.crew];if(h!==undefined&&x.innerHTML!==h)x.innerHTML=h})})
-      .catch(function(){})},8000);
     setInterval(function(){if(!document.hidden)checkHealth()},15000);
     setInterval(paint,1000);sync();checkHealth();
     function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
@@ -1127,7 +1069,7 @@ def render_tasks(p, live=None):
                      + "".join(bits) + '</div>')
         doing = (f'<div class="card{" s-me" if c["waiting"] else ""}" data-td="{esc(key)}"><div class="tt"><span class="tid">{esc(c["id"])}</span>{esc(c["title"])}</div>'
                  f'<div class="meta"><span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{label} {esc(c["span"])}</span><span>{c["commits"]} 个提交</span>{flow}</div>'
-                 f'{prog}{crit_html}{crew_html(p)}'
+                 f'{prog}{crit_html}'
                  f'<ol class="steps">{"".join(rows)}</ol><div class="nowl">{line}</div></div>')
         descs.append(task_desc(key, c["id"], c["title"], "做完了 · 等你放行" if c["waiting"] else "进行中",
                                f'<span>开始于 <code>{esc(c["start"][:7])}</code></span><span>{c["commits"]} 个提交</span>', c["body"], src_snap))
@@ -1170,49 +1112,12 @@ def render_tasks(p, live=None):
             f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
 
-def crew_chips(p):
-    """主控的状态块（corral status 报的状态、标题、正在调什么工具）；静态页、本机服务页和 /crew 共用。"""
-    ag = p.get("agents") or {}
-    chips = []
-    for role, label in (("writer", "写手"),):
-        a = ag.get(role)
-        if not a:
-            continue
-        st = esc(a["status"])
-        bits = [f'<span class="dot st-{st}"></span><b>{label}</b><span class="st st-{st}">{st}</span>']
-        if a["title"]:
-            bits.append(f'<span class="ttl">{esc(a["title"])}</span>')
-        if a["activity"]:
-            bits.append(f'<span class="activity">{esc(a["activity"])}</span>')
-        tip = f'{a["name"]} #{a["instance"]}' if a.get("name") else ""
-        chips.append(f'<span class="agent st-{st}" title="{esc(tip)}">{"".join(bits)}</span>')
-    return "".join(chips)
-
-
-def crew_html(p):
-    """这件活派出去的 agent，各自一块。没派出去就不占地方。"""
-    cw = p.get("crew") or []
-    if not cw:
-        return ""
-    chips = []
-    for a in cw:
-        st = esc(a["status"])
-        act = f'<span class="activity">{esc(a["activity"])}</span>' if a["activity"] else ""
-        chips.append(f'<span class="agent st-{st}" title="{esc(a["name"])} #{esc(str(a["instance"]))}">'
-                     f'<span class="dot st-{st}"></span><b>派出去</b><span class="nm">{esc(a["name"])}</span>'
-                     f'<span class="st st-{st}">{st}</span>{act}</span>')
-    return f'<div class="crew sub">{"".join(chips)}</div>'
-
-
+# 这里曾经有 crew_chips() 和 crew_html()：主控的状态块和派出去的 agent 块。**删掉了**，理由同上。
 def render_panel(p, live=None):
     parts = [f'<div class="panel" data-p="{esc(p["name"])}" id="p-{esc(p["name"])}">']
     badge = state_badge(p)
     parts.append(f'<div class="head"><h1>{esc(p["name"])}</h1>{badge}<span class="mute">{ago(p["since"])}</span>'
                  f'<span class="hd">HEAD <code>{esc(p["head"][:7])}</code></span></div>')
-    chips = crew_chips(p)
-    if chips or live:          # 本机服务页总留一个位置，agent 状态随轮询换上（空的时候不占地方）
-        slot = f' data-crew="{esc(p["name"])}"' if live else ""
-        parts.append(f'<div class="crew"{slot}>{chips}</div>')
     # 「等你」栏：这个项目里卡在你身上的事一处看全；横幅是跨项目的汇总，点一下跳到这里。
     if p["human"]:
         items = [f'<li>{esc(reason)}</li>' for _, _, _, _, reason in p["human"]]
@@ -1287,12 +1192,10 @@ def render(projects, live=None):
                     f'<span class="age">{ago(p["since"])}</span></div><div class="st">{status}<span class="who">{esc(p["waiting"])}</span></div></div>')
     panels = "".join(render_panel(p, live) for p in projects)
     gen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    kind = next((k for k in (((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects) if k), "")
-    agents = f'<span class="ag wr"><b>主控</b> {esc(kind) if kind else "未在运行"}</span>'
     gen_html =('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
                 if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("DROVER_BOARD_PORT", "10086"))}/">'
                              f'带按钮的版本 ↗</a></span>')
-    mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
+    mast = (f'<div class="mast"><span class="brand">Review board</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><title>Review board</title>{token}<style>{CSS}</style></head><body>'
             f'<div class="wrap">{mast}{banner}<div class="grid"><div class="side">{"".join(side)}</div><div class="main">{panels}</div></div>'
@@ -1618,8 +1521,6 @@ def serve(args):
                 return self.reply(200, {"v": live_version(list_path)})
             if path == "/health":
                 return self.reply(200, health(started, port))
-            if path == "/crew":
-                return self.reply(200, {x["name"]: crew_chips(x) for x in collect(list_path)})
             if path == "/history":
                 from urllib.parse import parse_qs, urlsplit
                 name = (parse_qs(urlsplit(self.path).query).get("project") or [""])[0]

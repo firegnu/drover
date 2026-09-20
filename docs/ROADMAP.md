@@ -250,7 +250,7 @@ corral 主控提过第三条路：drover 别判断完成，把下一件直接送
       **2026-09-20 做完。** 原先 `loop_tick` 寄生在 `drover board serve` 这个进程里（`loop_worker` 线程）——不开着那个网页服务，外循环一跳都不转，「无人值守」根本不成立。现在引擎是独立命令 `drover loop`（默认常驻，`--once` 跑一跳，`--projects` 指清单），`serve` 里那个线程删掉了，看板退回纯观察者：开不开都不影响循环。
 
       拆的过程里揪出一个**只有常驻进程才会暴露的 bug**：`NOW` 和 corral 的 agent 清单原先只在 `collect()`（渲染页面）里刷新，线程靠页面渲染顺带蹭。没有渲染之后，停在启动那刻的 `NOW` 会让 `close_if_done` 的节流 `NOW - mtime(stamp) < CHECK_EVERY` 一路算出负数——**永远在节流窗口里，查一次之后再也不查**。修法是 `loop_tick` 每跳自己重取；测试在 `tests/drover-board.sh` 里连跑两跳验这个不变量（去掉修复会红）。
-   2. **砍掉看板里的 agent 块**（见「看板」那一节）
+   2. **砍掉看板里的 agent 块**（见「看板」那一节）——**2026-09-20 做完**。删掉的：主控状态块（`crew_chips`）、派出去的 agent 块（`crew_html` + `crew_of` + `repo_dirs` 那套 worktree 反推）、顶栏的 agent 行、`/crew` 端点和它 8 秒一次的轮询、「主控停在对话框」那条「等你」，以及对应的 CSS。`agents_of` 留着但瘦了一圈（只剩 `status` / `name` / `idle_for` / `src`），因为循环引擎的 `wants_human` 和 `close_if_done` 还要用。净减约 100 行。
    3. **看板改 TUI**
    4. **安装脚本 + launchd plist**，Label 不能再叫 `dev.herdsman.*`（老 herdsman 正用着）。`install.sh` 和两个 plist 已经在 `9a48774` 之后删掉了。**写是这一步的活，跑要人点头**——往 `~/.local/bin` 拷东西、动 launchd 都在 AGENTS.md「先问人」那一节里。
    5. **QUICKSTART（纯步骤）和手册**。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
