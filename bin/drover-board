@@ -1542,7 +1542,14 @@ def loop_tick(list_path):
 
     和老 herdsman 的区别：老的往写手的 pane 里注入固定那句「运行 review-task next」，让写手去跑外层
     循环的命令——那是内依赖外。现在 drover 自己跑 next，送出去的是任务正文本身，和人手动粘一段
-    任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字。"""
+    任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字。
+
+    **每跳先把 NOW 和 corral 的 agent 清单重取一遍**，和 collect() 开头做的事一样。以前这个函数是
+    `drover board serve` 里的一个线程，靠页面渲染顺带刷新；拆成独立进程之后没有渲染这回事了，
+    停在启动那刻的 NOW 会让 close_if_done 的节流 `NOW - mtime(stamp) < CHECK_EVERY` 一路算出负数
+    ——永远在节流窗口里，查一次之后再也不查。agent 清单同理：主控重开换了 instance 就认不出来。"""
+    global NOW, _AGENTS
+    NOW, _AGENTS = time.time(), None
     for repo in discover(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
         d = conf.get("HANDOFF_DIR")
@@ -1642,17 +1649,9 @@ def serve(args):
             code, res = live_action(list_path, act, body)
             return self.reply(code, res)
 
-    def loop_worker():
-        tick = float(os.environ.get("DROVER_LOOP_TICK", "5"))
-        while True:
-            try:
-                loop_tick(list_path)
-            except Exception as e:                     # 叫醒出错不能把服务带崩
-                print(f"loop_tick: {e}", file=sys.stderr, flush=True)
-            time.sleep(tick)
-
-    import threading
-    threading.Thread(target=loop_worker, daemon=True).start()
+    # 这里曾经起过一个跑 loop_tick 的守护线程。**拆掉了**：外层循环的引擎是独立进程
+    # `drover loop`，看板只是观察者，开不开都不影响循环转不转。留在这里的话，「无人值守」
+    # 就等于「得一直开着一个网页服务」——那是把常驻的理由安在了错的东西上。
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"drover-board serve: http://127.0.0.1:{port}/", flush=True)
     try:

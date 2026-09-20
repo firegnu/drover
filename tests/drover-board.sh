@@ -543,9 +543,10 @@ python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working"
 rm "${TMP}/corral.down"
 echo 'PASS drover-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed; crew polled'
 
-# ---- 外层循环：页面开关；服务看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次
-# drover next，由它把**任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句
-# 「运行 drover next」——内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
+# ---- 外层循环：页面上的开关只管开关；**推动循环的是引擎进程 `drover loop`，不是这个服务**。
+# 引擎看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次 drover next，由它把
+# **任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句「运行 drover next」——
+# 内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
 curl -s "http://127.0.0.1:${HP}/" > "${TMP}/live2.html"
 TOKEN2=$(sed -n 's/.*<meta name="rb-token" content="\([^"]*\)".*/\1/p' "${TMP}/live2.html")
 grep -qF 'data-act="loop" data-p="theta/repo" data-on="0"' "${TMP}/live2.html" || fail 'loop switch (off) on the task board'
@@ -554,25 +555,28 @@ lpost() { curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: a
 [ -f "${TMP}/theta/review/loop" ] || fail 'the page switch goes through drover loop on'
 [ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 409 ] || fail 'loop on refused when already on'
 mark() { printf '{"reason": "empty", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
-waitfor() { for _ in $(seq 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
+engine() { python3 "$(dirname "${BOARD}")/drover" loop --once --projects "${TMP}/projects"; }
 [ "$(lpost /api/go '{"project":"theta/repo"}')" = 200 ] || true     # T3 还等着放行，先放掉
-rm -f "${TMP}/prompts.log"; mark
-waitfor '[ -s "${TMP}/prompts.log" ]' || { cat "${TMP}/serve2.err"; cat "${TMP}/theta/review/.loop.log" 2>/dev/null; fail 'the loop sends the next task when one is pending'; }
+# 服务自己一跳都不转：开着循环、标记也在，光等它不会有任何动静
+rm -f "${TMP}/prompts.log"; mark; sleep 2.5
+[ ! -s "${TMP}/prompts.log" ] || fail 'the board server must not drive the loop: that is drover loop'
+engine
+[ -s "${TMP}/prompts.log" ] || { cat "${TMP}/theta/review/.loop.log" 2>/dev/null; fail 'the engine sends the next task when one is pending'; }
 # 送出去的是任务正文本身，不是「运行 drover …」那种指令
 grep -q 'T4' "${TMP}/prompts.log" || { cat "${TMP}/prompts.log"; fail 'the sent text is the task itself'; }
 grep -q 'drover' "${TMP}/prompts.log" && { cat "${TMP}/prompts.log"; fail 'the sent text must never tell the agent to run drover'; }
-waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared once the task went out'
+[ ! -f "${TMP}/theta/review/.loop-wait" ] || fail 'the marker is cleared once the task went out'
 # 暂停中：不发
 [ "$(lpost /api/pause '{"project":"theta/repo","on":true}')" = 200 ] || true
-rm -f "${TMP}/prompts.log"; mark; sleep 2.5
+rm -f "${TMP}/prompts.log"; mark; engine
 [ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent while paused'
 [ "$(lpost /api/pause '{"project":"theta/repo","on":false}')" = 200 ] || true
 # 循环关：标记作废，不发
 [ "$(lpost /api/loop '{"project":"theta/repo","on":false}')" = 200 ] || fail 'turn the loop off from the page'
-rm -f "${TMP}/prompts.log"; mark; sleep 2.5
+rm -f "${TMP}/prompts.log"; mark; engine
 [ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent with the loop off'
 rm -f "${TMP}/theta/review/.loop-wait"
-echo 'PASS drover-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
+echo 'PASS drover-board serve: the loop switch is a switch; driving the loop is drover loop, not the server'
 
 # ---- 外层循环闭合：主控空闲下来、且 main 上出现收尾记号时，循环引擎核对三条门，过了就记 done 并发下一件。
 # 直接调 loop_tick，不等常驻服务，省得看时序。
@@ -589,14 +593,8 @@ printf '{"t": %s, "ev": "start", "id": "T1", "title": "头一件", "body": "", "
   "$((now - 600))" "$IOB" "$IOB" > "${IO}/review/tasks.state"
 : > "${IO}/review/loop"
 printf '%s/iota/repo\n' "${TMP}" > "${TMP}/projects-iota"
-tick() { python3 - "${BOARD}" "${TMP}/projects-iota" <<'PY2'
-import importlib.machinery, importlib.util, sys
-sys.dont_write_bytecode = True
-l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
-B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
-B.loop_tick(sys.argv[2])
-PY2
-}
+# 走真入口：drover loop --once。引擎不需要待在某个仓库里，所以不走 setup()。
+tick() { python3 "$(dirname "${BOARD}")/drover" loop --once --projects "${TMP}/projects-iota"; }
 done_ev() { grep -c '"ev": "done", "id": "T1"' "${IO}/review/tasks.state" 2>/dev/null | head -1; }
 
 # 主控在忙：一次都不许核对——第 3 条可能是整套测试，不能因为它在干活就反复跑
@@ -622,6 +620,37 @@ grep -q '"ev": "start", "id": "T2"' "${IO}/review/tasks.state" || fail 'and the 
 # 节流：刚查过就再来一跳，不许再跑一次验收命令
 N=$(wc -l < "${TMP}/check.log"); tick
 [ "$(wc -l < "${TMP}/check.log")" = "$N" ] || fail 'the check command is throttled, not run on every tick'
+
+# ---- 常驻进程：同一个进程里连跑两跳，NOW 和 corral 的 agent 列表都必须每跳重取 ----
+# 以前 loop_tick 是 `drover board serve` 里的一个线程，NOW / _AGENTS 只在 collect()（渲染页面）
+# 里刷新——没人开页面就永远停在启动那一刻。拆成独立进程之后没有渲染这回事了，这条得自己成立。
+printf 'working\n' > "${TMP}/iota.state"
+printf 'c\n' >> "${IO}/repo/a.py"; git -C "${IO}/repo" add .; git -C "${IO}/repo" commit -qm 'work 2'
+git -C "${IO}/repo" commit -q --allow-empty -m '收尾: 第二件做完了'
+rm -f "${IO}/review/.criteria-checked"
+python3 - "${BOARD}" "${TMP}/projects-iota" "${TMP}/iota.state" <<'PY2'
+import importlib.machinery, importlib.util, sys, time
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+B.loop_tick(sys.argv[2])                     # 第一跳：主控在忙
+t1 = B.NOW
+open(sys.argv[3], "w", encoding="utf-8").write("idle\n")
+time.sleep(1.1)
+STALE = ["假的：上一跳留下的 agent 清单"]
+B._AGENTS = STALE
+B.loop_tick(sys.argv[2])                     # 第二跳：必须看见新状态
+
+# 两个不变量，只有独立进程才会碰上：
+# NOW 每跳重取 —— 停在启动那刻的话，close_if_done 的节流 `NOW - mtime(stamp) < CHECK_EVERY`
+# 会一路算出负数，也就是「永远在节流窗口里」：查一次之后再也不查了。
+assert B.NOW > t1, f"NOW 没有重取：{B.NOW} <= {t1}"
+# corral 的 agent 清单同理：缓存住的话，主控重开换了 instance、新开的 agent，都认不出来。
+assert B._AGENTS is not STALE, "corral 的 agent 清单被跨跳缓存了"
+PY2
+grep -q '"ev": "done", "id": "T2"' "${IO}/review/tasks.state" \
+  || { cat "${IO}/review/.loop.log" 2>/dev/null || true; fail 'a long-running loop must re-read corral every tick, not cache the agent list'; }
+
 echo 'PASS loop engine: checks the criteria only when the 主控 is idle, closes the task itself, throttled'
 
 # ---- 浏览器冒烟：真开一个无头 Chrome 点一遍（抽屉、编辑框预览、放弃确认、查看全部、↓ 调整顺序、断开变红）。
