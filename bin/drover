@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""review-task —— 外层循环的队列：人往 queue.md 里写任务，本工具一件接一件送进主控。
+"""drover —— 外层循环的队列：人往 queue.md 里写任务，本工具一件接一件送进主控。
 
 **这是 drover 侧的工具，不在主控里跑。** 它做的只有两件事（见 ROADMAP「全部动作」）：
 用 `corral send` 往主控送一句话（任务正文），以及只读核对 git。送出去的就是任务正文本身，
@@ -9,23 +9,25 @@
               编号可省（发出时补上），文件里的先后就是执行顺序。
   tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
 「做完了」由本工具只读核对 git，不听主控一句话。交接文件的解析和三条判据都复用看板
-（review-board）里的函数，两边用同一套。
+（drover-board）里的函数，两边用同一套。
 
 在仓库目录里运行：
-  review-task add "标题" [说明行 …]   人：加到队列末尾，自动编号
-  review-task list                    看进行中、队列、已完成
-  review-task next                    把下一件送进主控；有进行中的就重发它
-  review-task done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
-  review-task go                      人：放行（放行模式）
-  review-task drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
-  review-task drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
-  review-task pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
-  review-task loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接发下一件；
+  drover init <短名>             人：把这个仓库接上 drover（写 .drover.conf、建交接目录、登记）
+  drover board [--out P] …       生成 / 伺服看板（参数原样转给 drover-board，见它的 --help）
+  drover add "标题" [说明行 …]   人：加到队列末尾，自动编号
+  drover list                    看进行中、队列、已完成
+  drover next                    把下一件送进主控；有进行中的就重发它
+  drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
+  drover go                      人：放行（放行模式）
+  drover drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
+  drover drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
+  drover pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
+  drover loop on | off           人：外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时做完直接发下一件；
                                       停在队列那一步（队列空 / 暂停 / 主控在忙）时留下 .loop-wait，条件满足后由看板服务再跑一次 next
-  review-task hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
+  drover hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
                                       （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
-  review-task move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
-  review-task edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
+  drover move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
+  drover edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
                                       --expect：queue.md 的指纹（看板页面带着），对不上说明队列刚被改过，不写（move / edit / drop --pos）
 退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
         2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
@@ -55,11 +57,11 @@ def stop(msg):
 
 
 def load_board():
-    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-board")
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover-board")
     if not os.path.exists(path):
-        die(2, f"ERROR: 找不到 {path}。review-task 用看板的函数读交接文件，两者要装在一起（install.sh 会一起装）。")
-    loader = importlib.machinery.SourceFileLoader("review_board", path)
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("review_board", loader))
+        die(2, f"ERROR: 找不到 {path}。drover 用看板的函数读交接文件和算判据，两个文件必须装在同一个目录里。")
+    loader = importlib.machinery.SourceFileLoader("drover_board", path)
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("drover_board", loader))
     loader.exec_module(mod)
     return mod
 
@@ -73,7 +75,7 @@ def setup():
     global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD, MAIN_AGENT
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
-        die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 review-task。")
+        die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 drover。")
     REPO = r.stdout.strip()
     conf = B.parse_conf(f"{REPO}/.drover.conf")
     if not conf.get("HANDOFF_DIR"):
@@ -144,8 +146,8 @@ def start_task(t, again):
 def task_text(t, again=False):
     """送进主控的那段话 —— 就是任务正文本身，和人手动粘一段任务进去一模一样。
 
-    **这里绝不能出现「运行 review-task …」这类话。** 老 herdsman 往写手窗格里注入的是
-    「运行 review-task next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
+    **这里绝不能出现「运行 drover …」这类话。** 老 herdsman 往写手窗格里注入的是
+    「运行 drover next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
     主控甚至不需要知道有 drover 这个东西（见 ROADMAP「全部动作」）。"""
     out = [f"TASK {t['id']}: {t['title']}"]
     if t.get("body"):
@@ -195,7 +197,7 @@ def task_check_cmd(body):
 
 def check_done(task):
     """→ 问题列表。只读核对 git，不听主控一句话。
-    三条完成判据见 docs/ROADMAP.md；求值在 review-board.criteria 里，看板和这里用同一份。
+    三条完成判据见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
     「不适用」的那几条（没配 BRANCH_GLOB、没有验收命令）不算不过，但会照原样报出来——
     3 条里过了几条要看得见，不能让跳过的悄悄混成通过。"""
     probs = []
@@ -341,9 +343,9 @@ def cmd_next():
     if current:
         return issue(current, again=True)
     if os.path.exists(PAUSED):
-        return loop_stop("paused", "PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 review-task resume 之后，再运行 review-task next。")
+        return loop_stop("paused", "PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 drover resume 之后，再运行 drover next。")
     if awaiting:
-        return loop_stop("release", f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 review-task go 之后，再运行 review-task next。")
+        return loop_stop("release", f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 drover go 之后，再运行 drover next。")
     todo = pending(tasks)
     if not todo:
         return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。往 {Q} 里加了任务之后会自动接着发。")
@@ -360,7 +362,7 @@ def cmd_done(tid):
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
             print(f"  - {p}")
-        print(f"处理完再运行 review-task done {tid}。")
+        print(f"处理完再运行 drover done {tid}。")
         return 9
     print(f"核对通过 {tid}：")
     for line in criteria_report(current):
@@ -369,9 +371,9 @@ def cmd_done(tid):
     gate = (GATE and not loop_on()) or held       # 循环开着做完直接领下一个；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
     if gate and loop_on():
-        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：等人放行（review-task go）。")
+        return loop_stop("release", f"DONE {tid}：核对通过。人标了「做完停」：等人放行（drover go）。")
     if gate:
-        return stop(f"DONE {tid}：核对通过。放行模式：等人放行（review-task go）。")
+        return stop(f"DONE {tid}：核对通过。放行模式：等人放行（drover go）。")
     print(f"DONE {tid}：核对通过。")
     return cmd_next()
 
@@ -382,7 +384,7 @@ def cmd_go():
         die(2, "ERROR: 没有在等放行的任务")
     append({"ev": "go", "id": awaiting})
     print(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
-                                          else "运行 review-task next 发下一件。"))
+                                          else "运行 drover next 发下一件。"))
     return 0
 
 
@@ -429,7 +431,7 @@ def cmd_loop(on):
         with open(LOOP, "w", encoding="utf-8") as f:     # 重写一遍：修改时间就是这次开循环的时刻（「连续做了几个」从这里数）
             f.write(f"{int(time.time())}\n")
         print("循环已开：做完直接领下一个；写手停在队列那一步（队列空 / 暂停）时，条件满足后看板服务会叫醒它。"
-              "review-task loop off 关掉。")
+              "drover loop off 关掉。")
     else:
         for f in (LOOP, f"{D}/.loop-wait"):
             if os.path.exists(f):
@@ -441,11 +443,11 @@ def cmd_loop(on):
 def cmd_pause(on):
     if on:
         open(PAUSED, "a").close()
-        print("已暂停：不再发新任务，正在做的会做完。运行 review-task resume 恢复。")
+        print("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。")
     else:
         if os.path.exists(PAUSED):
             os.remove(PAUSED)
-        print("已恢复：写手下次运行 review-task next 会拿到新任务。")
+        print("已恢复：写手下次运行 drover next 会拿到新任务。")
     return 0
 
 
@@ -480,10 +482,84 @@ def cmd_list():
     return 0
 
 
+def cmd_init(short):
+    """把当前仓库接上 drover。只写两处：仓库里的 .drover.conf（并加进 .gitignore），
+    和 ~/.drover/ 下的交接目录与项目清单。不建 worktree、不开 agent、不碰目标仓库的源码。
+    幂等：已经存在的不覆盖，只报告。"""
+    if not short or not re.fullmatch(r'[a-z0-9-]+', short):
+        die(2, "ERROR: 短名只允许小写字母、数字和连字符。例如：drover init inksample")
+    r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if r.returncode:
+        die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 drover init。")
+    repo = r.stdout.strip()
+    home = os.path.expanduser("~/.drover")
+    d = f"{home}/{short}"
+    print(f"仓库:     {repo}\n交接目录: {d}\n")
+
+    conf = f"{repo}/.drover.conf"
+    if os.path.exists(conf):
+        print("  = .drover.conf 已存在，跳过（要改直接编辑它）")
+    else:
+        with open(conf, "w", encoding="utf-8") as f:
+            f.write(CONF_TEMPLATE.format(dir=d))
+        print("  ✓ 写好 .drover.conf")
+
+    gi = f"{repo}/.gitignore"
+    if ".drover.conf" not in (B.read(gi) or "").splitlines():
+        with open(gi, "a", encoding="utf-8") as f:
+            f.write(".drover.conf\n")
+        print("  ✓ .drover.conf 加入 .gitignore")
+
+    os.makedirs(home, exist_ok=True)
+    plist = f"{home}/projects"
+    if repo not in (B.read(plist) or "").splitlines():
+        with open(plist, "a", encoding="utf-8") as f:
+            f.write(repo + "\n")
+        print("  ✓ 登记到 ~/.drover/projects（看板的项目清单，不登记就看不见）")
+
+    os.makedirs(d, exist_ok=True)
+    print("  ✓ 交接目录就绪")
+    print(f"\n接好了。下一步：\n"
+          f"  1. 编辑 {conf}，填上 MAIN_AGENT（主控在 corral 里的名字）\n"
+          f"  2. 自己开主控：corral start <名字> …    —— drover 不开、不关、不接入\n"
+          f'  3. drover add "标题" …  然后  drover next')
+    return 0
+
+
+CONF_TEMPLATE = """# drover 的项目配置。一行一个 `键=值`，# 开头是注释。这个文件不进 git。
+
+# 交接目录：queue.md（归人）和 tasks.state（归 drover）都在这里。
+HANDOFF_DIR={dir}
+
+# 主控的 corral 名字，`corral ls` 里看得到的那个。drover 只对它 send / status，
+# 不开、不关、不接入。留空就是不自动送：drover next 会把任务正文打出来让你自己粘。
+MAIN_AGENT=
+
+# 里程碑分支的匹配模式，原样交给 `git branch --list`。完成判据第 2 条用它找分支，
+# 再逐个问「合进 main 了没有」。留空 = 这个项目不用里程碑分支，第 2 条跳过。
+# 真实项目长这样：owlet 是 m8-2-backend，jb-finetune 是 m3/implementation，
+# 两边都能用 `m[0-9]*` 匹配到。别写 `m*` —— 它会把 main 自己也匹配进来。
+# 匹配到 0 个分支时第 2 条判**不过**（不是空过），因为「写错了」和「没建分支」从 git 看一样。
+BRANCH_GLOB=
+
+# 默认验收命令。完成判据第 3 条跑它，退出码 0 才算过。队列条目里写一行
+# 「验收：<命令>」可以按任务覆盖。例：CHECK_CMD=uv run pytest -q
+CHECK_CMD=
+
+# 放行模式：1（默认）每个任务做完等人 go；0 自动模式，做完直接发下一件。
+# TASK_GATE=1
+"""
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
         return 0 if argv else 2
+    if argv[0] == "board":                  # drover board … → 转给看板，参数原样透传
+        board = os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover-board")
+        os.execv(sys.executable, [sys.executable, board, *argv[1:]])
+    if argv[0] == "init":
+        return cmd_init(argv[1] if len(argv) > 1 else "")
     setup()
     cmd, rest = argv[0], argv[1:]
     expect = None
@@ -518,7 +594,7 @@ def main(argv):
         return cmd_loop(rest[0] == "on")
     if cmd in ("pause", "resume") and not rest:
         return cmd_pause(cmd == "pause")
-    die(2, f"ERROR: 用法不对：review-task {' '.join(argv)}\n\n{__doc__.strip()}")
+    die(2, f"ERROR: 用法不对：drover {' '.join(argv)}\n\n{__doc__.strip()}")
 
 
 if __name__ == "__main__":

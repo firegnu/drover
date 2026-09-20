@@ -1,5 +1,5 @@
 // 看板本机服务的浏览器冒烟测试：不装任何 npm 包，用 Node 自带的 WebSocket 走 Chrome DevTools 协议驱动无头 Chrome。
-// 用法：node tests/browser-smoke.mjs <服务地址> <服务 pid>   —— 由 tests/review-board.sh 在它搭好的样例项目上调用。
+// 用法：node tests/browser-smoke.mjs <服务地址> <服务 pid>   —— 由 tests/drover-board.sh 在它搭好的样例项目上调用。
 // 页面上每个按钮都点到「提交」为止，同时监听页面里所有未捕获的脚本错误：任何一个报错都算失败（只打开再取消测不出提交那段的错）。
 // 最后一步会停掉那个服务，检查页面变成「服务已断开」。没有 Chrome 时退出码 77（调用方当作跳过）。
 import { spawn } from "node:child_process";

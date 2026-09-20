@@ -11,8 +11,8 @@
 
 **只剩 D1 第 5 步**：装出去、脚本改名、写文档。所以现在：
 
-- 脚本名字还是 herdsman 时代的（`herdsman-init`、`review-task`、`review-board`）。改名方案已经定了（待定项 1：单命令 `drover`，队列动词提到顶层），**和「装到哪」一起做**，别单独先改。
-- 没有任何安装路径，只能用仓库里的相对路径跑：`python3 ./bin/review-task add "标题"`。
+- 脚本已经改名（第 5 步）：只剩两个可执行文件，`bin/drover`（队列 + 推进 + 判据 + `init`）和 `bin/drover-board`（面板）。`drover board …` 转给后者。
+- **还没有安装路径**，只能用仓库里的相对路径跑：`python3 ./bin/drover add "标题"`。装到哪、用不用 launchd 是第 5 步剩下的事。
 - 要查被删掉的东西当初为什么那么设计，`git log` 全在，别凭空猜。
 
 ## 硬规矩
@@ -38,7 +38,7 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 ## 技术约束
 
 - **只用 Python 标准库**，不装第三方包。不依赖 tmux、herdr 或其他终端工具——herdr 的依赖在第 3 步全换成 corral 了。
-- 两个脚本 `review-task`、`review-board` 都是 Python，新写的也用 Python。
+- 两个脚本 `drover`、`drover-board` 都是 Python，新写的也用 Python。
 - 看板不存自己的状态，**刷新等于重跑**。这条是它一直好用的原因，不要为了性能破例。
 - 看板是深色（`color-scheme:dark` 那套 CSS 变量），不为浅色折中。
 
@@ -78,7 +78,7 @@ drover ──只依赖──> corral-dispatch（很薄：只依赖「活干完�
 - **写**新的安装脚本是 D1 第 5 步的活（装到哪、叫什么、用不用 launchd，连同脚本改名一起定）。但**跑**它是另一回事：往 `~/.local/bin` 拷东西、动 launchd，在「先问人」那一节里，写完也要人点头才能执行。
 - 不要 `launchctl load / unload / bootstrap / bootout` 任何东西。
 - 不要往 `~/.local/bin` 拷任何文件，不要改 PATH。
-- 开发中要跑这些脚本，用仓库里的相对路径：`./bin/review-task …`。
+- 开发中要跑这些脚本，用仓库里的相对路径：`python3 ./bin/drover …`。
 
 老的那三个文件在 git 历史里（`git log --all -- install.sh`），要参考 launchd 怎么写可以去看，但不要照抄 Label 和路径。
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# review-task 测试：队列归人（queue.md），进度归工具（tasks.state），「做完了」由工具只读核对。
-# 造一个假仓库和交接目录 + 一个假 corral；review-task 只用 send / status / ls，也不许写目标仓库一个字节。
+# drover 测试：队列归人（queue.md），进度归工具（tasks.state），「做完了」由工具只读核对。
+# 造一个假仓库和交接目录 + 一个假 corral；drover 只用 send / status / ls，也不许写目标仓库一个字节。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-RT=${REVIEW_TASK_BIN:-${ROOT}/bin/review-task}
+RT=${DROVER_BIN:-${ROOT}/bin/drover}
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 REPO="${TMP}/repo"; D="${TMP}/review"
@@ -68,9 +68,9 @@ PY
 # ---- next：发第一个没做的；给手写的补编号；记下开始时 main 的 sha ----
 rt next; code 0 'next issues a task'
 has 'TASK T3: 修一下登录页的超时' 'hand-written block goes first and is numbered after the highest ID'
-# 送出去的是任务正文本身。里面绝不能有「运行 review-task …」——那是内循环依赖外循环，
+# 送出去的是任务正文本身。里面绝不能有「运行 drover …」——那是内循环依赖外循环，
 # 正是老 herdsman 注入 LOOP_PROMPT 的做法，ROADMAP 明确要求改掉。
-grep -q 'review-task' "${TMP}/out" && fail 'the task text must never tell the agent to run review-task'
+grep -q 'drover' "${TMP}/out" && fail 'the task text must never tell the agent to run drover'
 grep -q 'drover' "${TMP}/out" && fail 'the task text must not mention drover at all'
 grep -q "$(hsha)" "${D}/tasks.state" || fail 'start sha recorded in tasks.state'
 python3 -c 'import json,sys
@@ -90,7 +90,7 @@ has '✓ 1 main 前进了' 'the passing criteria are printed'
 has '— 2 里程碑分支都合进去了' 'a skipped criterion is shown as skipped, not as passed'
 rt next; code 8 'next before release'; has '等人放行' 'next refuses until released'
 rt go; code 0 'go'
-has 'review-task next' 'go says how to send the next one'
+has 'drover next' 'go says how to send the next one'
 rt go; code 2 'go when nothing waits for release'
 rt next; code 0 'next after release'; has 'TASK T1: 给导出加进度条' 'the finished hand-written block is not issued again'
 
@@ -145,7 +145,7 @@ qv() { python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb")
 pending() { python3 - "${RT}" <<'PY2'
 import importlib.machinery, importlib.util, os, sys
 sys.dont_write_bytecode = True
-p = os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "review-board")
+p = os.path.join(os.path.dirname(os.path.realpath(sys.argv[1])), "drover-board")
 l = importlib.machinery.SourceFileLoader("rb", p); B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
 q = open(os.environ["Q"], encoding="utf-8").read(); st = open(os.environ["S"], encoding="utf-8").read()
 print("|".join(b["title"] for b in B.task_pending(B.task_blocks(q), B.task_fold(B.task_events(st))[0])))
@@ -220,7 +220,7 @@ done
 code 8 'the loop runs until the queue is empty'; has '队列空了' 'says the queue is empty'
 # 标记里只有原因和时间：送给谁看配置的 MAIN_AGENT，不再记 pane，也不再核对 pane 身份
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["reason"]=="empty" and m["t"] and "pane" not in m, m' "${D}/.loop-wait" || fail 'the wake marker records the reason only'
-rt_pane() { rt "$@"; }        # 老的「在不在写手窗格里」没有意义了：review-task 只在 drover 这边跑
+rt_pane() { rt "$@"; }        # 老的「在不在写手窗格里」没有意义了：drover 只在 drover 这边跑
 rt_pane next; code 8 'empty queue stops'
 has '自动接着往下发' 'says the loop will pick it up again'
 rt add "循环里新加的任务"; rt pause
@@ -289,7 +289,7 @@ rt go || true                      # 上一块结束时可能还有一件在等�
 rt add "送出去的任务" "范围：只动 a.py"; rt next; code 0 'next sends the task'
 [ "$(sent_to)" = "owlet/main" ] || fail "sent to the wrong agent: $(sent_to)"
 sent_txt | grep -q '范围：只动 a.py' || fail 'the body travels with the task'
-sent_txt | grep -q 'review-task' && fail 'the sent text must never mention review-task'
+sent_txt | grep -q 'drover' && fail 'the sent text must never mention drover'
 has '已送给 owlet/main' 'next reports where it went'
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${D}/../out" 2>/dev/null || true)
 TID=$(python3 -c 'import json,sys
@@ -321,7 +321,7 @@ printf '0\n' > "${TMP}/corral.code"
 grep -v '^MAIN_AGENT=' "${REPO}/.drover.conf" > "${TMP}/conf" && cp "${TMP}/conf" "${REPO}/.drover.conf"
 
 # ---- docs/queue-example.md 本身是合法的队列：四个任务 ----
-python3 - "${ROOT}/bin/review-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
+python3 - "${ROOT}/bin/drover-board" "${ROOT}/docs/queue-example.md" <<'PY' || fail 'docs/queue-example.md drifted from the queue format'
 import importlib.machinery, importlib.util, sys
 sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
@@ -332,5 +332,35 @@ assert "不走规划" in blocks[1]["body"] and "不走规划" in blocks[2]["body
 PY
 
 # 只许用 send / status / ls 三个 corral 命令（AGENTS.md 硬规矩），别的一个都不许出现
-grep -vE '^(send|status|ls)$' "${TMP}/cmds" 2>/dev/null | grep -q . && { cat "${TMP}/cmds"; fail 'review-task used a corral command outside send / status / ls'; }
-echo 'PASS review-task queue, release gate, read-only done check, pause and drop'
+grep -vE '^(send|status|ls)$' "${TMP}/cmds" 2>/dev/null | grep -q . && { cat "${TMP}/cmds"; fail 'drover used a corral command outside send / status / ls'; }
+echo 'PASS drover queue, release gate, read-only done check, pause and drop'
+
+# ---- drover init：把一个新仓库接上。幂等；只写 .drover.conf + .gitignore + ~/.drover 下两处 ----
+NEW="${TMP}/fresh"; mkdir -p "${NEW}"
+git -C "${NEW}" init -q -b main
+git -C "${NEW}" config user.name t; git -C "${NEW}" config user.email t@example.com
+git -C "${NEW}" commit -q --allow-empty -m base
+H2="${TMP}/home2"; mkdir -p "${H2}"
+ini() { set +e; ( cd "${NEW}" && HOME="${H2}" python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
+ini init 'Bad Name'; code 2 'init refuses a short name with spaces and capitals'
+ini init inksample; code 0 'init'
+[ -f "${NEW}/.drover.conf" ] || fail 'init writes .drover.conf'
+grep -qx '.drover.conf' "${NEW}/.gitignore" || fail 'init keeps the conf out of git'
+# 登记的是 git 给的仓库根（macOS 上 /var 是 /private/var 的软链，两边写法不同）
+python3 -c 'import os,sys
+want = os.path.realpath(sys.argv[1])
+got = [os.path.realpath(l.strip()) for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+assert want in got, (want, got)' "${NEW}" "${H2}/.drover/projects" || fail 'init registers the repo in the project list'
+[ -d "${H2}/.drover/inksample" ] || fail 'init creates the handoff dir'
+grep -q '^MAIN_AGENT=$' "${NEW}/.drover.conf" || fail 'MAIN_AGENT starts empty for the human to fill in'
+# 目标仓库里除了那两个文件，一个字节都没动
+[ "$(git -C "${NEW}" status --porcelain | wc -l | tr -d ' ')" = 1 ] || { git -C "${NEW}" status --porcelain; fail 'init touched more than .gitignore'; }
+# 幂等：再跑一次什么都不覆盖
+cp "${NEW}/.drover.conf" "${TMP}/conf.before"
+ini init inksample; code 0 'init again'
+cmp -s "${NEW}/.drover.conf" "${TMP}/conf.before" || fail 'a second init must not overwrite the conf'
+[ "$(grep -c . "${H2}/.drover/projects")" = 1 ] || fail 'a second init must not register the repo twice'
+# 没接过的仓库上跑别的子命令 → 说清楚要先 init
+rm -f "${NEW}/.drover.conf"; ini list; code 2 'a repo without .drover.conf is refused'
+has '还没接入 drover' 'and says so'
+echo 'PASS drover init: idempotent, registers the repo, leaves the target repo alone'

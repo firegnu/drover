@@ -38,7 +38,7 @@ D1 做完到哪了：drover 已经能自己转一圈——从 `queue.md` 取任�
 | 观察：看板 | 审不审、怎么审 |
 | 记账：耗时、返工轮数、路由的实际表现 | 合不合得了 |
 
-`bin/review-task` 今天的队列语义（add / next / done / go / pause / hold / move / edit / drop，放行模式 vs 自动模式）整套落在左栏，**一条都不改语义**，只换传输层。
+`bin/drover` 的队列语义（add / next / done / go / pause / hold / move / edit / drop，放行模式 vs 自动模式）整套落在左栏，**一条都不改语义**，只换传输层。
 
 ## 全部动作
 
@@ -56,7 +56,7 @@ D1 做完到哪了：drover 已经能自己转一圈——从 `queue.md` 取任�
 
 ## 完成判据：纯 git，零解析
 
-drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。**「反复查」由 `loop_tick` 的 `close_if_done` 做：只在主控 idle（且够久、这一轮不是它自己开的、状态不是 `unknown`）时查，两次之间至少隔 `CHECK_EVERY`（5 分钟）。** 判定本身交给 `review-task done`——那是这套判据的唯一实现，循环引擎只决定「什么时候问」。过了就记 done，自动模式下顺手把下一件送出去；`done` 退出码 9（判据没满足）是常态不是故障。三条是：
+drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。**「反复查」由 `loop_tick` 的 `close_if_done` 做：只在主控 idle（且够久、这一轮不是它自己开的、状态不是 `unknown`）时查，两次之间至少隔 `CHECK_EVERY`（5 分钟）。** 判定本身交给 `drover done`——那是这套判据的唯一实现，循环引擎只决定「什么时候问」。过了就记 done，自动模式下顺手把下一件送出去；`done` 退出码 9（判据没满足）是常态不是故障。三条是：
 
 1. `main` 前进了（sha 变了）；
 2. 所有里程碑分支都已经是 `main` 的祖先（对每个 `git branch --list '<BRANCH_GLOB>'` 跑 `git merge-base --is-ancestor <分支> main`，`main` 自己永远不算）；
@@ -105,14 +105,14 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。
 
 0. **收拾半成品**（2026-09-20 做完，但只做了一半，另一半挪到第 5 步）。原计划是「一次把名字全改了」，实际拆成了两段：
    - **隔离改名先做**（`388a42a`）：`.review.conf` → `.drover.conf`、`~/.review/` → `~/.drover/`、`dev.herdsman.*` → `dev.drover.*`。这三个是和正在跑的老 herdsman **共用**的名字，不先换掉，后面砍代码时一旦把 `discover()` 改坏就会扫到真 jb-finetune。换完这台机器上没有任何项目配了 `.drover.conf`，安全边界是结构性的而不是靠小心。
-   - **脚本改名推到第 5 步**：`review-task` / `review-board` / `herdsman-init` 现在还是 herdsman 时代的名字。待定项 1 已经定了方案（**单命令 `drover`，队列动词提到顶层**：`drover add` / `drover go` / `drover board` / `drover init`），但没执行——它和「装到哪」是同一件事，一起做才不会改两遍。
+   - **脚本改名在第 5 步做了**：`review-task` → `bin/drover`，`review-board` → `bin/drover-board`，`herdsman-init` 收进 `drover init`（少一个文件、少一种语言）。六个 `REVIEW_*` 环境变量一并换成 `DROVER_*`。
    - 「`install.sh` 和 `tests/` 里引用已删文件的地方」这半句作废：`install.sh` 在 `9a48774` 之后已经删了；`tests/` 里那些引用不是坏的，它们随第 3、4 步的改造一起改掉了。
 1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`BRANCH_GLOB`（里程碑分支的匹配模式，第 2 步从 `BRANCH_PREFIX` 改过来的，理由见完成判据那一节）、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
-2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `review-board.criteria` 里，看板和队列共用；队列条目用正文里一行「验收：`<命令>`」覆盖 `CHECK_CMD`（只认 `queue.md` 里写的，网页表单拒收——那行会被当 shell 命令跑）；「等人」的识别见 `wants_human`。合成测试在 `tests/criteria.sh`。
+2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `drover-board.criteria` 里，看板和队列共用；队列条目用正文里一行「验收：`<命令>`」覆盖 `CHECK_CMD`（只认 `queue.md` 里写的，网页表单拒收——那行会被当 shell 命令跑）；「等人」的识别见 `wants_human`。合成测试在 `tests/criteria.sh`。
    **渲染页面时只算前两条。** 第 3 条可能是整套测试，而页面 30 秒一刷、每个项目都渲染，全算一遍等于每半分钟把所有项目的测试跑一遍（`criteria(..., do_check=False)`）。前两条是纯 git，便宜，「等人」的识别靠它们就够——主控停下等人时，main 基本都还没前进。
-3. **`review-task` 换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：`review-task` 现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `review-task` 和 `drover` 这两个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
+3. **换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：这个工具现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `drover` 这个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
 4. **看板改造**（2026-09-20 做完大半）：按上面的留 / 改 / 删；`loop_tick` 换 corral 在第 3 步一起做了。「当前这件活」块齐了：主控状态 / 正在调什么工具 / 这一轮多久、派出去的 agent 各自状态、分支进展（`main` 上几个提交、最后一次多久前）、完成判据过了几条。「等你」每条带 `corral attach <名字>`（只是给人抄的一句话，drover 自己不跑 attach）。
-   **判据第 3 条在页面上只显示命令、标「没在页面上跑」**，理由见完成判据那一节。轮询本身已经有了（`close_if_done`，见上面完成判据那一节），但它只是跑一次 `review-task done`、往 `.loop.log` 写一行，**没有把三条各自的结果记成看板读得了的形式**。要让第 3 条也上页面，还差这一步：把那次核对的结果写进交接目录（像 `.loop-wait` 那样归循环引擎所有，看板只读——这样不算「看板存自己的状态」）。
+   **判据第 3 条在页面上只显示命令、标「没在页面上跑」**，理由见完成判据那一节。轮询本身已经有了（`close_if_done`，见上面完成判据那一节），但它只是跑一次 `drover done`、往 `.loop.log` 写一行，**没有把三条各自的结果记成看板读得了的形式**。要让第 3 条也上页面，还差这一步：把那次核对的结果写进交接目录（像 `.loop-wait` 那样归循环引擎所有，看板只读——这样不算「看板存自己的状态」）。
    **还欠**：「做完的」那一栏要显示「派了几个 agent、返工几轮」，以及最底下的「记账」整块——两者都要先定待定项 3（记账记什么）。
 5. **安装方式和文档重写**：`install.sh` 和两个 launchd plist 已经在 `9a48774` 之后删掉了（它们会顶掉正在跑的老 herdsman），要写新的先定第 1 步那些名字和路径，Label 不能再叫 `dev.herdsman.*`。文档方面：QUICKSTART（纯步骤）和手册。老手册 5296 行已删，要重写的话从 `git show 4545f68^:docs/HANDBOOK.md` 取回参考，其中第 6c 部分（任务队列）和第 12 部分（止损点的论述）仍然有价值。
 
@@ -128,8 +128,8 @@ drover 在送出任务**之前**记下 `main` 的 sha，之后反复查三条。
 
 - 三条判据的各种组合：`main` 没动 / 分支残留 / 验收失败 / 全满足 / 验收命令本身崩了
 - 送任务：主控不是 idle（退出码 7）、30 秒内有人在打字（退出码 8）、主控不存在、送达确认超时
-- 队列语义：`tests/review-task.sh` 现有的 292 行改完传输层后仍要全过
-- 看板渲染：`tests/review-board.sh` 现有的 752 行，删掉周期相关的，加上新的
+- 队列语义：`tests/drover.sh` 里那一整套（add / next / done / go / pause / hold / move / edit / drop、放行 vs 自动、`--expect` 冲突）改完传输层后仍要全过
+- 看板渲染：`tests/drover-board.sh`，周期相关的已删，换成队列 / 「等你」/ 主控状态 / 判据进度
 
 **它证明什么**：三条都满足时返回 true。**它证明不了**：三条都满足时活真的干完了。
 

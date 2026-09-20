@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""review-board —— 外层循环的只读看板。
+"""drover-board —— 外层循环的只读看板。
 
 读 ~/.drover/projects 里登记过的仓库，从各自的交接目录（HANDOFF_DIR）生成一个静态
 HTML，写到 ~/.drover/board.html。不存任何自己的状态，不接 agent，刷新等于重跑。
 
 用法:
-  review-board            生成
-  review-board --open     生成后用浏览器打开
-  review-board --quiet    生成，不打印路径
-  review-board --out P    写到 P
-  review-board --projects F   改用 F 当项目清单（一行一个）；测试用
+  drover-board            生成
+  drover-board --open     生成后用浏览器打开
+  drover-board --quiet    生成，不打印路径
+  drover-board --out P    写到 P
+  drover-board --projects F   改用 F 当项目清单（一行一个）；测试用
 
 项目发现: ~/.drover/projects，一行一个仓库路径，drover-init 会写进去。不扫目录。
 """
@@ -231,7 +231,7 @@ def add_waits(p):
     tv = p.get("tasks")
     if tv and tv["awaiting"] and tv["card"]:
         new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} 做完了，核对已通过。"
-                    "运行 review-task go 放行，下一件会自动送进主控"))
+                    "运行 drover go 放行，下一件会自动送进主控"))
         p["state"] = "等你放行"
     if new:
         p["human"].extend(new)
@@ -241,7 +241,7 @@ def add_waits(p):
 
 
 
-# ============================================================ 任务队列（review-task 与看板共用这份解析）
+# ============================================================ 任务队列（drover 与看板共用这份解析）
 TASK_HDR = re.compile(r'^##\s+(?:(T\d+)\s+)?(.+?)\s*$')
 
 
@@ -400,7 +400,7 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     if not check_cmd:
         rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
     elif not do_check:
-        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在页面上跑（可能是整套测试）；review-task done 时才跑"})
+        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在页面上跑（可能是整套测试）；drover done 时才跑"})
     else:
         code, tail = run_check(repo, check_cmd)
         rows.append({"n": 3, "name": name3, "ok": code == 0,
@@ -432,7 +432,7 @@ def task_view(repo, conf, p):
         n = len(commits)
         steps = [
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
-            ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "review-task done"),
+            ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "drover done"),
         ]
         # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
         # 纯 git，便宜；判据第 1 条看的也是这个 sha，两处说的是同一件事。
@@ -768,7 +768,7 @@ ol.q li,.drow,.card,.bhead,.crew .agent,.proj.sel{box-shadow:inset 0 1px 0 rgba(
 DRAWER = ('<div class="scrim" hidden></div><aside class="drawer" hidden><div class="dhd"><span>任务描述 · Esc 关闭</span>'
           '<button class="dx" type="button">关闭</button></div><div class="dct"></div></aside>')
 
-# 本机服务打开时的确认框：放行 / 放弃都先确认，结果原样显示 review-task 的输出
+# 本机服务打开时的确认框：放行 / 放弃都先确认，结果原样显示 drover 的输出
 LIVE_DIALOG = ('<dialog class="rbd"><form method="dialog"><div class="rbd-t"></div><div class="rbd-m"></div>'
                '<input class="rbd-r" type="text" maxlength="300" placeholder="原因（可留空）"><pre class="rbd-out" hidden></pre>'
                '<div class="rbd-b"><button value="cancel" class="rbd-no">取消</button><button value="ok" class="rbd-ok">确认</button></div></form></dialog>')
@@ -865,7 +865,7 @@ JS = """
     function renderHealth(){var box=dr.querySelector('.dct');box.innerHTML='';
       var h=document.createElement('div');h.className='dtt';h.textContent='服务健康';box.appendChild(h);
       var sub=document.createElement('div');sub.className='dsub';
-      sub.textContent=offline?'连不上本机服务：review-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.drover.board-serve'
+      sub.textContent=offline?'连不上本机服务：drover-board serve 停了？页面内容停在 '+ago2(Date.now()-lastSync)+'。重新运行 install.sh，或 launchctl kickstart -k gui/$UID/dev.drover.board-serve'
         :(hdata?(hdata.level==='ok'?'各项正常':'有需要留意的项')+' · 检查于 '+ago2(Date.now()-hdata.checked*1000):'正在检查…');
       box.appendChild(sub);
       var list=document.createElement('div');list.className='hlist';
@@ -893,8 +893,8 @@ JS = """
       m.textContent=go?'确认这个任务做完了。放行后对写手说「继续」，它会领下一个任务。'
         :drop?'这个任务还没开始，放弃后不会再发给写手（记进 tasks.state，可在已完成里看到原因）。'
         :lp?(cur.on==='1'?'关掉后回到原来的样子：做完按放行模式等你放行，写手停下后要你去叫。':'开启后写手做完直接领下一个；停在队列那一步（队列空了、暂停中）时，条件满足后自动叫醒它。随时可以暂停或关掉。')
-        :pz?'暂停后写手运行 review-task next 领不到新任务；正在做的任务照常做完。'
-        :'恢复后写手运行 review-task next 就能领到新任务。写手不会被自动叫醒：它停着的话，对它说「继续」。';
+        :pz?'暂停后写手运行 drover next 领不到新任务；正在做的任务照常做完。'
+        :'恢复后写手运行 drover next 就能领到新任务。写手不会被自动叫醒：它停着的话，对它说「继续」。';
       rs.hidden=!drop;rs.value='';out.hidden=true;out.textContent='';ok.hidden=false;ok.disabled=false;no.textContent='取消';
       dlg.showModal();if(drop)rs.focus()},true);
     f.addEventListener('submit',function(e){if(e.submitter&&e.submitter.value!=='ok')return;e.preventDefault();
@@ -904,11 +904,11 @@ JS = """
         .then(function(r){return r.json()}).then(function(j){
           out.hidden=false;out.textContent=j.out||'';out.className='rbd-out'+(j.ok?' ok':' bad');
           ok.hidden=true;no.textContent=j.ok?'完成':'关闭';if(j.ok)dlg.dataset.done='1'})
-        .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：review-board serve 还在运行吗？';ok.disabled=false})});
+        .catch(function(){out.hidden=false;out.className='rbd-out bad';out.textContent='服务没有响应：drover-board serve 还在运行吗？';ok.disabled=false})});
     dlg.addEventListener('close',function(){if(dlg.dataset.done){delete dlg.dataset.done;reloadKeep()}});
     function qvOf(proj){var sec=[].filter.call(document.querySelectorAll('section.tasks[data-qv]'),function(x){return x.dataset.p===proj})[0];return sec?sec.dataset.qv:''}
     function api(path,payload){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-RB-Token':tk.content},body:JSON.stringify(payload)})
-      .then(function(r){return r.json()}).catch(function(){return {ok:false,out:'服务没有响应：review-board serve 还在运行吗？'}})}
+      .then(function(r){return r.json()}).catch(function(){return {ok:false,out:'服务没有响应：drover-board serve 还在运行吗？'}})}
     function showFail(title,text){t.textContent=title;m.textContent='';rs.hidden=true;out.hidden=false;out.className='rbd-out bad';out.textContent=text;
       ok.hidden=true;no.textContent='关闭';dlg.showModal()}
     // 调整顺序：↑ ↓ 或拖动；带着页面生成时 queue.md 的指纹，队列被别人改过就不动并提示刷新
@@ -961,7 +961,7 @@ JS = """
         .then(function(r){return r.json()}).then(function(j){
           eOut.hidden=false;eOut.textContent=j.out||'';eOut.className='rbe-out rbd-out'+(j.ok?' ok':' bad');
           if(j.ok){if(!eEdit)try{localStorage.removeItem(dkey())}catch(x){}eOk.hidden=true;eNo.textContent='完成';ed.dataset.done='1'}else eOk.disabled=false})
-        .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：review-board serve 还在运行吗？';eOk.disabled=false})});
+        .catch(function(){eOut.hidden=false;eOut.className='rbe-out rbd-out bad';eOut.textContent='服务没有响应：drover-board serve 还在运行吗？';eOk.disabled=false})});
     ed.addEventListener('close',function(){if(ed.dataset.done){delete ed.dataset.done;reloadKeep()}});
     // 已完成「查看全部」：点开时向服务取全部历史；列表可搜可筛，点一行看它的正文，「← 返回列表」保留搜索和筛选
     var hist={p:null,data:null,q:'',f:'all',d:null};
@@ -1003,7 +1003,7 @@ JS = """
       dr.querySelector('.dhd span').textContent='已完成的任务 · Esc 关闭';dr.hidden=false;sc.hidden=false;openKey='@history';histRender();
       fetch('/history?project='+encodeURIComponent(proj),{cache:'no-store'}).then(function(r){return r.json()})
         .then(function(j){hist.data=j.items?j:{items:[],summary:{done:0,dropped:0,avg:''}};histRender()})
-        .catch(function(){var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(el('empty','读取失败：review-board serve 还在运行吗？'))})}
+        .catch(function(){var box=dr.querySelector('.dct');box.innerHTML='';box.appendChild(el('empty','读取失败：drover-board serve 还在运行吗？'))})}
     window.rbHist=function(){return {p:hist.p,q:hist.q,f:hist.f,d:hist.d}};
     if(st.td==='@history'&&st.hs){hist={p:st.hs.p,data:null,q:st.hs.q||'',f:st.hs.f||'all',d:st.hs.d||null};openHistory(hist.p,true)}
   }
@@ -1050,7 +1050,7 @@ def task_desc(key, tid, title, status, meta, body, source):
 
 def render_tasks(p, live=None):
     """任务区：独立的框，队列 / 进行中（阶段条）/ 已完成三栏，队列和已完成各自滚动；点任务在右侧抽屉看全文。
-    只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 review-task。"""
+    只读 —— 加任务、调顺序在 queue.md 里，放行、暂停用 drover。"""
     tv = p.get("tasks")
     if not tv:
         return ""
@@ -1080,7 +1080,7 @@ def render_tasks(p, live=None):
         tid = f'<span class="tid">{esc(b["id"])}</span>' if b["id"] else ""
         acts, drag = "", ""
         if live:
-            # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（review-task drop），正在做的在终端里停
+            # 还没开始的任务：上移 / 下移 / 编辑按位置认（没编号的也行）；放弃按编号认（drover drop），正在做的在终端里停
             pn, pos = esc(p["name"]), i + 1
             raw = json.dumps({"id": b["id"] or "", "title": b["title"], "body": b["body"]}, ensure_ascii=False)
             acts = ('<span class="qa">'
@@ -1136,7 +1136,7 @@ def render_tasks(p, live=None):
     lw = tv["loop_wait"]
     if tv["loop"] and lw:
         why = {"empty": "队列空了", "paused": "暂停中", "release": "等放行"}.get(lw.get("reason"), lw.get("reason", ""))
-        doing += (f'<div class="loopw bad">连着三次没送出去：{esc(lw.get("error", ""))}。查一下主控和 corral，再运行 review-task next</div>' if lw.get("failed")
+        doing += (f'<div class="loopw bad">连着三次没送出去：{esc(lw.get("error", ""))}。查一下主控和 corral，再运行 drover next</div>' if lw.get("failed")
                   else f'<div class="loopw">停着（{esc(why)}）· 条件满足后自动接着发</div>')
     fin = []
     for f in tv["finished"]:
@@ -1166,7 +1166,7 @@ def render_tasks(p, live=None):
             f'<div class="lane"><div class="lh"><span>队列</span><span class="n">{len(tv["todo"])}</span></div><div class="lb">{queue}</div></div>'
             f'<div class="lane"><div class="lh"><span>{"刚做完" if c and c["waiting"] else "进行中"}</span><span class="n">{1 if c else 0}</span></div>{doing}</div>'
             f'<div class="lane"><div class="lh"><span>已完成</span><span class="n">{fin_n}</span></div><div class="lb">{"".join(fin) or "<div class=\"empty\">还没有</div>"}</div>{hist}</div>'
-            f'</div><div class="foot-note">只读。加任务：编辑 <code>{esc(tilde(tv["dir"]))}/queue.md</code>，或 <code>review-task add "…"</code>；'
+            f'</div><div class="foot-note">只读。加任务：编辑 <code>{esc(tilde(tv["dir"]))}/queue.md</code>，或 <code>drover add "…"</code>；'
             f'写在最上面的，就是当前任务之后的下一个。</div>{"".join(descs)}</section>')
 
 
@@ -1232,7 +1232,7 @@ def wait_items(p):
     return out
 
 
-NOTIFY_BIN = os.environ.get("REVIEW_NOTIFY_BIN", "osascript")
+NOTIFY_BIN = os.environ.get("DROVER_NOTIFY_BIN", "osascript")
 
 
 def applescript_str(s):
@@ -1290,7 +1290,7 @@ def render(projects, live=None):
     kind = next((k for k in (((p.get("agents") or {}).get("writer") or {}).get("kind") for p in projects) if k), "")
     agents = f'<span class="ag wr"><b>主控</b> {esc(kind) if kind else "未在运行"}</span>'
     gen_html =('<button class="hp" type="button" title="服务健康：点开看每一项"><span class="hdot"></span><span class="ht">连接中…</span></button>'
-                if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("REVIEW_BOARD_PORT", "10086"))}/">'
+                if live else f'<span class="gen">生成于 {gen[11:]} · <a class="golive" href="http://127.0.0.1:{esc(os.environ.get("DROVER_BOARD_PORT", "10086"))}/">'
                              f'带按钮的版本 ↗</a></span>')
     mast = (f'<div class="mast"><span class="brand">Review board</span><span class="agents">{agents}</span>{gen_html}</div>')
     token = f'<meta name="rb-token" content="{esc(live["token"])}">' if live else ""
@@ -1338,9 +1338,9 @@ def collect(list_path):
     return projects
 
 
-# ============================================================ 本机服务（review-board serve）
-# 静态看板改不了任何东西；这个服务只监听 127.0.0.1，页面上的放行 / 放弃发到这里，再原样转给 review-task ——
-# 写入权仍只在 review-task（它的核对一条不绕过）。防别的网页伪造请求：Host / Origin 只认本机这个端口，
+# ============================================================ 本机服务（drover-board serve）
+# 静态看板改不了任何东西；这个服务只监听 127.0.0.1，页面上的放行 / 放弃发到这里，再原样转给 drover ——
+# 写入权仍只在 drover（它的核对一条不绕过）。防别的网页伪造请求：Host / Origin 只认本机这个端口，
 # 请求必须带启动时随机生成、嵌在页面里的令牌，而且是 JSON（跨源的 JSON POST 要先预检，这里不应答预检）。
 def live_version(list_path):
     """交接目录和 git HEAD 的修改时间合成一个短版本号；页面轮询它，变了才整页刷新。"""
@@ -1361,7 +1361,7 @@ def live_version(list_path):
     return h.hexdigest()[:16]
 
 
-LAUNCHCTL = os.environ.get("REVIEW_LAUNCHCTL", "launchctl")
+LAUNCHCTL = os.environ.get("DROVER_LAUNCHCTL", "launchctl")
 
 
 def span_text(sec):
@@ -1394,7 +1394,7 @@ def health(started, port):
     now, items = time.time(), []
     add = lambda name, ok, detail: items.append({"name": name, "ok": bool(ok), "detail": detail})
     here = os.path.dirname(os.path.realpath(__file__))
-    stale = [f for f in ("review-board", "review-task")
+    stale = [f for f in ("drover-board", "drover")
              if os.path.exists(os.path.join(here, f)) and os.stat(os.path.join(here, f)).st_mtime > started + 1]
     add("本机服务", not stale, f"pid {os.getpid()} · 端口 {port} · 已运行 {span_text(now - started)}"
         + (f"；启动后 {'、'.join(stale)} 被更新过，还在跑旧代码：重新运行 install.sh，"
@@ -1433,7 +1433,7 @@ def health(started, port):
 
 
 def live_action(list_path, act, body):
-    """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 review-task。"""
+    """→ (HTTP 状态码, 结果)。先按当前状态把关（页面可能是旧的），再调用 drover。"""
     projects = collect(list_path)
     p = next((x for x in projects if x["name"] == body.get("project")), None)
     if not p:
@@ -1493,8 +1493,8 @@ def live_action(list_path, act, body):
 
 
 def task_bin_path():
-    """和看板装在一起的那个 review-task。两个工具必须成对，不然解析交接文件的函数对不上。"""
-    return os.path.join(os.path.dirname(os.path.realpath(__file__)), "review-task")
+    """和看板装在一起的那个 drover。两个工具必须成对，不然解析交接文件的函数对不上。"""
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover")
 
 
 CHECK_EVERY = 300       # 两次完整核对之间至少隔这么久。第 3 条可能是整套测试，不能每跳都跑
@@ -1502,7 +1502,7 @@ CHECK_EVERY = 300       # 两次完整核对之间至少隔这么久。第 3 条
 
 def close_if_done(repo, conf, d, current):
     """这件活干完没有：主控空闲下来时核对一次三条判据，过了就记 done（自动模式下 done 会顺手发下一件）。
-    判定交给 `review-task done` —— 它本来就是这套判据的唯一实现，这里只决定「什么时候问」：
+    判定交给 `drover done` —— 它本来就是这套判据的唯一实现，这里只决定「什么时候问」：
 
       - 只在主控 idle 时问。它还在干活时这件活当然没完，而第 3 条可能是整套测试，白跑。
       - idle 还要够久、且这一轮不是主控自己开的（契约：idle 不代表它不会再动），同 wants_human。
@@ -1530,12 +1530,12 @@ def loop_tick(list_path):
 
       有进行中的任务 → 主控空闲下来时核对三条判据，过了就记 done（见 close_if_done）。
       没有进行中的   → 上一次停在队列那一步留了 .loop-wait，条件重新满足（有待办、没暂停、
-                       不等放行）就跑一次 `review-task next`，由它把任务正文送进主控。
+                       不等放行）就跑一次 `drover next`，由它把任务正文送进主控。
 
     `.loop-wait` 只管后一头——它的意思就是「停在队列那一步」。有任务在做时本来就没有这个标记，
     所以核对判据那一头不能被它挡住（踩过一次）。
 
-    和老 herdsman 的区别：老的往写手的 pane 里注入固定那句「运行 review-task next」，让写手去跑外层
+    和老 herdsman 的区别：老的往写手的 pane 里注入固定那句「运行 drover next」，让写手去跑外层
     循环的命令——那是内依赖外。现在 drover 自己跑 next，送出去的是任务正文本身，和人手动粘一段
     任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字。"""
     for repo in discover(list_path):
@@ -1577,7 +1577,7 @@ def loop_tick(list_path):
 
 
 def serve(args):
-    port = int(args[args.index("--port") + 1]) if "--port" in args else int(os.environ.get("REVIEW_BOARD_PORT", "10086"))
+    port = int(args[args.index("--port") + 1]) if "--port" in args else int(os.environ.get("DROVER_BOARD_PORT", "10086"))
     list_path = args[args.index("--projects") + 1] if "--projects" in args else None
     token = secrets.token_urlsafe(24)
     started = time.time()
@@ -1638,7 +1638,7 @@ def serve(args):
             return self.reply(code, res)
 
     def loop_worker():
-        tick = float(os.environ.get("REVIEW_LOOP_TICK", "5"))
+        tick = float(os.environ.get("DROVER_LOOP_TICK", "5"))
         while True:
             try:
                 loop_tick(list_path)
@@ -1649,7 +1649,7 @@ def serve(args):
     import threading
     threading.Thread(target=loop_worker, daemon=True).start()
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"review-board serve: http://127.0.0.1:{port}/", flush=True)
+    print(f"drover-board serve: http://127.0.0.1:{port}/", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -1658,8 +1658,15 @@ def serve(args):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] in (["-h"], ["--help"], ["help"]):
+        print(__doc__.strip())
+        return
     if args[:1] == ["serve"]:
         return serve(args[1:])
+    bad = [a for a in args if a.startswith("-") and a not in ("--open", "--quiet", "--notify", "--out", "--projects")]
+    if bad:
+        print(f"不认识的参数：{bad[0]}\n\n{__doc__.strip()}")
+        sys.exit(2)
     out_path = args[args.index("--out") + 1] if "--out" in args else DEFAULT_OUT
     list_path = args[args.index("--projects") + 1] if "--projects" in args else None
     projects = collect(list_path)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# review-board 冒烟测试：造八个合成仓库，断言生成的 HTML 里队列、「等你」横幅、主控状态
+# drover-board 冒烟测试：造八个合成仓库，断言生成的 HTML 里队列、「等你」横幅、主控状态
 # 都在，评审协议的东西一处都不剩，且不接触真实项目。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BOARD=${REVIEW_BOARD_BIN:-${ROOT}/bin/review-board}
+BOARD=${DROVER_BOARD_BIN:-${ROOT}/bin/drover-board}
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 OUT="${TMP}/board.html"
@@ -174,7 +174,7 @@ has '和 T2 冲突' 'drop reason shown'
 has '<span class="mode gate">放行模式</span>' 'release-mode chip'
 has '<span class="mode paused">暂停中</span>' 'paused chip replaces the mode chip'
 has 'T3 补登录接口的回归测试（带&quot;引号&quot;） 做完了' 'awaiting release listed as waiting on you, title escaped'
-has 'review-task go' 'the waiting item says how to release'
+has 'drover go' 'the waiting item says how to release'
 has '下一件会自动送进主控' 'the waiting item says what happens after release'
 has '<span class="badge me">等你放行</span>' 'awaiting release badge'
 has 'class="card s-me"' 'finished card turns crimson while it waits'
@@ -239,8 +239,8 @@ assert len(found) == 1 and found[0].endswith("/alpha/repo"), found
 assert not any("sneaky" in r for r in found), found             # 埋在老 glob 位置的那个不该出现
 assert not hasattr(B, "PROJ_GLOB"), "PROJ_GLOB 还在：目录扫描没删干净"
 PY2
-echo 'PASS review-board renders the queue, the banner and 主控 status; no review protocol left'
-echo 'PASS review-board discovery: only ~/.drover/projects, never a directory scan'
+echo 'PASS drover-board renders the queue, the banner and 主控 status; no review protocol left'
+echo 'PASS drover-board discovery: only ~/.drover/projects, never a directory scan'
 
 # 并发刷新：launchd 每 30 秒一次，request-review 退出时也刷一次，两者会同时跑。临时文件共用一个名字时，
 # 后到的那个改名会扑空（2026-09-11 board.err 里有 3 次）。先用一个被占住的 board.html.tmp 把「共用固定名字」
@@ -266,7 +266,7 @@ cat > "${TMP}/notifier" <<EOF
 printf '%s\n' "\$*" >> "${TMP}/notify.log"
 EOF
 chmod +x "${TMP}/notifier"
-board() { REVIEW_NOTIFY_BIN="$1" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" "${@:2}" >/dev/null; }
+board() { DROVER_NOTIFY_BIN="$1" python3 "${BOARD}" --projects "${TMP}/projects" --out "${OUT}" "${@:2}" >/dev/null; }
 nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr -d ' '; else echo 0; fi; }
 board "${TMP}/notifier"
 [ "$(nlines)" = 0 ] || fail 'the board must not notify without --notify'
@@ -289,7 +289,7 @@ board "${TMP}/no-such-notifier" --notify || fail 'a missing notifier must not br
 has 'Review board' 'page still written when notifications cannot be sent'
 echo 'PASS 等你 notifications: only with --notify, once per project, again when an item returns, escaped, never fatal'
 
-# ---- 本机服务：review-board serve。页面带令牌和按钮；放行、放弃转给 review-task；只认本机 Host / Origin 和令牌 ----
+# ---- 本机服务：drover-board serve。页面带令牌和按钮；放行、放弃转给 drover；只认本机 Host / Origin 和令牌 ----
 lacks '<meta name="rb-token"' 'the static board carries no token'
 lacks 'data-act=' 'the static board carries no action buttons'
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
@@ -324,15 +324,15 @@ ES=$(wc -l < "${TMP}/eta/review/tasks.state")
 [ "$(wc -l < "${TMP}/eta/review/tasks.state")" = "${ES}" ] || fail 'a refused drop writes nothing'
 [ "$(post /api/drop '{"project":"eta/repo","id":"T9","reason":"不需要了"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'drop a pending task'; }
 grep -q '"ok": true' "${TMP}/resp" || fail 'drop reports ok'
-tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "drop", "id": "T9".*不需要了' || fail 'drop goes through review-task with the reason'
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "drop", "id": "T9".*不需要了' || fail 'drop goes through drover with the reason'
 [ "$(post /api/go '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'go refused when nothing waits for release'
 [ "$(post /api/go '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'release the finished task'; }
-tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go", "id": "T3"' || fail 'go goes through review-task'
-grep -q 'review-task next' "${TMP}/resp" || fail 'go passes on how the next one gets sent'
+tail -1 "${TMP}/theta/review/tasks.state" | grep -q '"ev": "go", "id": "T3"' || fail 'go goes through drover'
+grep -q 'drover next' "${TMP}/resp" || fail 'go passes on how the next one gets sent'
 [ "$(curl -s "${U}/v")" != "${V1}" ] || fail 'the version changes after the queue state changes'
-echo 'PASS review-board serve: token, local Host/Origin only, release and drop via review-task, in-progress task not droppable'
+echo 'PASS drover-board serve: token, local Host/Origin only, release and drop via drover, in-progress task not droppable'
 
-# ---- 页面上加任务：标题 + 流程 + 正文，经 review-task add 追加到队列末尾；顶格 ## 会被当成新任务，拒绝
+# ---- 页面上加任务：标题 + 流程 + 正文，经 drover add 追加到队列末尾；顶格 ## 会被当成新任务，拒绝
 grep -qF 'data-act="add" data-p="eta/repo"' "${TMP}/live.html" || fail 'add-task button on a board with a queue'
 lacks 'data-act="add"' 'the static board has no add button'
 EQ=$(cat "${TMP}/eta/review/queue.md")
@@ -355,7 +355,7 @@ PY2
 case "$(cat "${TMP}/eta/review/queue.md")" in "${EQ}"*) ;; *) fail 'existing queue text is kept as is';; esac
 [ "$(post /api/add '{"project":"eta/repo","title":"普通任务","body":""}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'a task with no body'
 tail -1 "${TMP}/eta/review/queue.md" | grep -qx '## T11 普通任务' || fail 'a task with no body is a single line'
-echo 'PASS review-board serve: add a task from the page via review-task add; bad titles and ## body lines refused'
+echo 'PASS drover-board serve: add a task from the page via drover add; bad titles and ## body lines refused'
 
 # ---- 页面上调整顺序、修改还没开始的任务：带着页面生成时 queue.md 的指纹，对不上（队列被别人改过）就拒绝
 curl -s "${U}/" > "${TMP}/live.html"
@@ -388,20 +388,20 @@ import sys; q = open(sys.argv[1], encoding="utf-8").read()
 i = q.index("## 修一下登录页的超时（改）"); j = q.find("\n## ", i + 1)
 assert q[i:j].strip() == "## 修一下登录页的超时（改）\n### 范围\n- 只改超时", repr(q[i:j])
 PY2
-echo 'PASS review-board serve: reorder and edit pending tasks via review-task move / edit, guarded by the queue fingerprint'
+echo 'PASS drover-board serve: reorder and edit pending tasks via drover move / edit, guarded by the queue fingerprint'
 
-# ---- 页面上暂停 / 恢复发新任务：标题栏按当前状态给「暂停发任务」或「恢复发任务」，经 review-task pause / resume
+# ---- 页面上暂停 / 恢复发新任务：标题栏按当前状态给「暂停发任务」或「恢复发任务」，经 drover pause / resume
 grep -qF 'data-act="pause" data-p="eta/repo"' "${TMP}/live.html" || fail 'pause button on a board that is not paused'
 grep -qF 'data-act="resume" data-p="theta/repo"' "${TMP}/live.html" || fail 'resume button on a paused board'
 grep -qF 'data-act="resume" data-p="eta/repo"' "${TMP}/live.html" && fail 'no resume button on a board that is not paused'
 [ "$(post /api/pause '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'pause from the page'; }
-[ -f "${TMP}/eta/review/paused" ] || fail 'pause goes through review-task pause'
+[ -f "${TMP}/eta/review/paused" ] || fail 'pause goes through drover pause'
 [ "$(post /api/pause '{"project":"eta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'pause refused when already paused (the page was stale)'
 [ "$(post /api/resume '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'resume from the page'; }
-[ ! -f "${TMP}/theta/review/paused" ] || fail 'resume goes through review-task resume'
+[ ! -f "${TMP}/theta/review/paused" ] || fail 'resume goes through drover resume'
 [ "$(post /api/resume '{"project":"theta/repo"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'resume refused when not paused'
 rm -f "${TMP}/eta/review/paused"
-echo 'PASS review-board serve: pause / resume from the page via review-task, refused when the page was stale'
+echo 'PASS drover-board serve: pause / resume from the page via drover, refused when the page was stale'
 
 # ---- 页面上放弃没编号的任务：放弃按钮带队列位置，和调整顺序一样带着指纹
 curl -s "${U}/" > "${TMP}/live.html"
@@ -411,8 +411,8 @@ QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").r
 [ "$(post /api/drop '{"project":"eta/repo","pos":2,"reason":"不做了","expect":"000000000000"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'a stale fingerprint refuses the drop'
 [ "$(post /api/drop '{"project":"eta/repo","pos":2,"reason":"不做了","expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'drop an unnumbered task from the page'; }
 [ "$(epending)" = "普通任务|导出支持按月分文件" ] || fail "dropped by position: $(epending)"
-tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"key": "修一下登录页的超时（改）".*不做了' || fail 'the page drop goes through review-task drop --pos'
-echo 'PASS review-board serve: drop unnumbered pending tasks from the page by position, guarded by the queue fingerprint'
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"key": "修一下登录页的超时（改）".*不做了' || fail 'the page drop goes through drover drop --pos'
+echo 'PASS drover-board serve: drop unnumbered pending tasks from the page by position, guarded by the queue fingerprint'
 
 # ---- 已完成列表「查看全部」：栏底入口（只在本机服务），点开时 GET /history 取全部做完 / 放弃的任务，最新的在前
 curl -s "${U}/" > "${TMP}/live.html"
@@ -436,9 +436,9 @@ assert by["T9"]["source"].startswith("queue.md")
 sm = h["summary"]
 assert sm["done"] == 2 and sm["dropped"] == len(items) - 2 and sm["avg"], sm
 PY2
-echo 'PASS review-board serve: view all finished tasks via GET /history (newest first, summary, queue text for never-started drops)'
+echo 'PASS drover-board serve: view all finished tasks via GET /history (newest first, summary, queue text for never-started drops)'
 
-# ---- 做完停：只在循环开着（或自动模式）时出现；按钮经 review-task hold 记进 tasks.state；任务上标「做完停」；关了循环就不显示
+# ---- 做完停：只在循环开着（或自动模式）时出现；按钮经 drover hold 记进 tasks.state；任务上标「做完停」；关了循环就不显示
 curl -s "${U}/" > "${TMP}/live.html"
 grep -qF 'data-act="hold" data-p="eta/repo"' "${TMP}/live.html" && fail 'no hold toggle while every task already waits for release'
 [ "$(post /api/loop '{"project":"eta/repo","on":true}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'loop on for eta'; }
@@ -447,13 +447,13 @@ grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="0"' "${TMP}/li
 QV=$(python3 -c 'import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],"rb").read()).hexdigest()[:12])' "${TMP}/eta/review/queue.md")
 [ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":true,"expect":"000000000000"}' -H "X-RB-Token: ${TOKEN}")" = 409 ] || fail 'a stale fingerprint refuses the hold'
 [ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":true,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || { cat "${TMP}/resp"; fail 'hold from the page'; }
-tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the page hold goes through review-task hold'
+tail -1 "${TMP}/eta/review/tasks.state" | grep -q '"ev": "hold".*"on": true' || fail 'the page hold goes through drover hold'
 curl -s "${U}/" > "${TMP}/live.html"
 grep -qF '<span class="hold-tag">做完停</span>' "${TMP}/live.html" || fail 'a held task is marked on the board'
 grep -qF 'data-act="hold" data-p="eta/repo" data-pos="1" data-on="1"' "${TMP}/live.html" || fail 'the toggle shows it is on'
 [ "$(post /api/hold '{"project":"eta/repo","pos":1,"on":false,"expect":"'"${QV}"'"}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'unhold from the page'
 [ "$(post /api/loop '{"project":"eta/repo","on":false}' -H "X-RB-Token: ${TOKEN}")" = 200 ] || fail 'loop off for eta'
-echo 'PASS review-board serve: hold toggle only while looping, via review-task hold, marked on the board, guarded by the fingerprint'
+echo 'PASS drover-board serve: hold toggle only while looping, via drover hold, marked on the board, guarded by the fingerprint'
 
 # ---- 服务健康：/health 汇报本机服务（代码是否比服务新）、launchd 托管、看板定时生成、出错记录、corral；页面顶栏有状态圆点
 grep -qF 'class="hp"' "${TMP}/live.html" || fail 'the live masthead has the health pill'
@@ -479,7 +479,7 @@ alpha = next(p for p in B.collect(sys.argv[2]) if p["name"] == "alpha/repo")
 assert (alpha["agents"].get("writer") or {}).get("status") == "working", alpha["agents"]
 PY2
 mkdir -p "${TMP}/home/.drover" "${TMP}/hbin" "${TMP}/code"
-cp "${BOARD}" "${TMP}/code/review-board"; cp "$(dirname "${BOARD}")/review-task" "${TMP}/code/review-task"
+cp "${BOARD}" "${TMP}/code/drover-board"; cp "$(dirname "${BOARD}")/drover" "${TMP}/code/drover"
 cat > "${TMP}/hbin/launchctl" <<EOF
 #!/usr/bin/env bash
 case "\$2" in
@@ -499,9 +499,9 @@ EOF
 chmod +x "${TMP}/hbin/launchctl" "${TMP}/hbin/corral"
 printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
 HP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-HOME="${TMP}/home" REVIEW_LAUNCHCTL="${TMP}/hbin/launchctl" REVIEW_LOOP_TICK=1 \
+HOME="${TMP}/home" DROVER_LAUNCHCTL="${TMP}/hbin/launchctl" DROVER_LOOP_TICK=1 \
   DROVER_CORRAL_BIN="${TMP}/hbin/corral" \
-  python3 "${TMP}/code/review-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
+  python3 "${TMP}/code/drover-board" serve --projects "${TMP}/projects" --port "${HP}" > /dev/null 2> "${TMP}/serve2.err" &
 SERVE2=$!
 trap 'kill "${SERVE}" "${SERVE2}" 2>/dev/null; rm -rf "${TMP}"' EXIT
 for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:${HP}/v" && break; sleep 0.1; done
@@ -531,7 +531,7 @@ printf '[]\n' > "${TMP}/home/.drover/board-notified.json"
 : > "${TMP}/serve.other"; health warn '服务守护（launchd）' false '另一个进程'; rm "${TMP}/serve.other"
 health ok '服务守护（launchd）' true '已由 launchd 托管'
 grep -qF "document.body.classList.contains('offline')" "${TMP}/live.html" || fail 'no full-page refresh while the service is unreachable'
-python3 -c 'import os,sys,time; t=time.time()+5; os.utime(sys.argv[1], (t, t))' "${TMP}/code/review-task"
+python3 -c 'import os,sys,time; t=time.time()+5; os.utime(sys.argv[1], (t, t))' "${TMP}/code/drover"
 health warn 本机服务 false '旧代码'
 # ---- agent 状态随轮询更新：GET /crew 返回各项目的 agent 状态块，页面每 8 秒换上，不用等整页刷新
 grep -qF 'data-crew="alpha/repo"' "${TMP}/live.html" || fail 'the live page has a crew slot per project'
@@ -541,26 +541,26 @@ python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working"
 curl -s "http://127.0.0.1:${HP}/crew" > "${TMP}/crew.json"
 python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert "st-working" not in c["alpha/repo"], c' "${TMP}/crew.json" || { cat "${TMP}/crew.json"; fail 'crew follows corral without a page reload'; }
 rm "${TMP}/corral.down"
-echo 'PASS review-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed; crew polled'
+echo 'PASS drover-board serve: /health reports stale code, launchd, board refresh, recent errors and corral; NOW and agents refreshed; crew polled'
 
 # ---- 外层循环：页面开关；服务看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次
-# review-task next，由它把**任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句
-# 「运行 review-task next」——内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
+# drover next，由它把**任务正文**送进主控。老 herdsman 是往写手 pane 里注入固定那句
+# 「运行 drover next」——内依赖外，已经删掉；pane 身份核对那一整套也跟着没了。
 curl -s "http://127.0.0.1:${HP}/" > "${TMP}/live2.html"
 TOKEN2=$(sed -n 's/.*<meta name="rb-token" content="\([^"]*\)".*/\1/p' "${TMP}/live2.html")
 grep -qF 'data-act="loop" data-p="theta/repo" data-on="0"' "${TMP}/live2.html" || fail 'loop switch (off) on the task board'
 lpost() { curl -s -o "${TMP}/resp" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-RB-Token: ${TOKEN2}" --data "$2" "http://127.0.0.1:${HP}$1"; }
 [ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 200 ] || { cat "${TMP}/resp"; fail 'turn the loop on from the page'; }
-[ -f "${TMP}/theta/review/loop" ] || fail 'the page switch goes through review-task loop on'
+[ -f "${TMP}/theta/review/loop" ] || fail 'the page switch goes through drover loop on'
 [ "$(lpost /api/loop '{"project":"theta/repo","on":true}')" = 409 ] || fail 'loop on refused when already on'
 mark() { printf '{"reason": "empty", "t": %s}\n' "$(date +%s)" > "${TMP}/theta/review/.loop-wait"; }
 waitfor() { for _ in $(seq 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 [ "$(lpost /api/go '{"project":"theta/repo"}')" = 200 ] || true     # T3 还等着放行，先放掉
 rm -f "${TMP}/prompts.log"; mark
 waitfor '[ -s "${TMP}/prompts.log" ]' || { cat "${TMP}/serve2.err"; cat "${TMP}/theta/review/.loop.log" 2>/dev/null; fail 'the loop sends the next task when one is pending'; }
-# 送出去的是任务正文本身，不是「运行 review-task …」那种指令
+# 送出去的是任务正文本身，不是「运行 drover …」那种指令
 grep -q 'T4' "${TMP}/prompts.log" || { cat "${TMP}/prompts.log"; fail 'the sent text is the task itself'; }
-grep -q 'review-task' "${TMP}/prompts.log" && { cat "${TMP}/prompts.log"; fail 'the sent text must never tell the agent to run review-task'; }
+grep -q 'drover' "${TMP}/prompts.log" && { cat "${TMP}/prompts.log"; fail 'the sent text must never tell the agent to run drover'; }
 waitfor '[ ! -f "${TMP}/theta/review/.loop-wait" ]' || fail 'the marker is cleared once the task went out'
 # 暂停中：不发
 [ "$(lpost /api/pause '{"project":"theta/repo","on":true}')" = 200 ] || true
@@ -572,7 +572,7 @@ rm -f "${TMP}/prompts.log"; mark; sleep 2.5
 rm -f "${TMP}/prompts.log"; mark; sleep 2.5
 [ ! -s "${TMP}/prompts.log" ] || fail 'nothing is sent with the loop off'
 rm -f "${TMP}/theta/review/.loop-wait"
-echo 'PASS review-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
+echo 'PASS drover-board serve: loop switch; sends the next task itself, not while paused, not with the loop off'
 
 # ---- 外层循环闭合：主控空闲下来时，循环引擎自己核对三条判据，过了就记 done 并发下一件。
 # 直接调 loop_tick，不等常驻服务，省得看时序。
@@ -622,9 +622,9 @@ echo 'PASS loop engine: checks the criteria only when the 主控 is idle, closes
 if command -v node >/dev/null; then
   # 给冒烟测试准备一个「做完等放行」的任务：theta 领 T4、提交一笔（判据第 1 条要 main 前进）、做完
   rm -f "${TMP}/theta/review/loop" "${TMP}/theta/review/.loop-wait" "${TMP}/theta/review/paused"
-  ( cd "${TMP}/theta/repo" && python3 "$(dirname "${BOARD}")/review-task" next >/dev/null \
+  ( cd "${TMP}/theta/repo" && python3 "$(dirname "${BOARD}")/drover" next >/dev/null \
     && printf 'flag\n' >> a.py && git add a.py && git commit -qm 'T4 work' \
-    && python3 "$(dirname "${BOARD}")/review-task" done T4 >/dev/null ) || true
+    && python3 "$(dirname "${BOARD}")/drover" done T4 >/dev/null ) || true
   grep -q '"ev": "done", "id": "T4".*"gate": true' "${TMP}/theta/review/tasks.state" || fail 'smoke setup: theta T4 waits for release'
   set +e; node "${ROOT}/tests/browser-smoke.mjs" "${U}/" "${SERVE}"; SMOKE=$?; set -e
   if [ "${SMOKE}" = 77 ]; then :

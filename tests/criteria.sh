@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BOARD=${DROVER_BOARD_BIN:-${ROOT}/bin/review-board}
+BOARD=${DROVER_BOARD_BIN:-${ROOT}/bin/drover-board}
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 
