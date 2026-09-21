@@ -97,3 +97,52 @@ drover done： ✓ 3 验收命令过了 : `for t in criteria drover ...`   ← �
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 实现时的取舍
+
+- **只在 `check_done()` 发布一次**：保存决定是否允许 done 的第一次核对结果；`criteria_report()` 既有的第二次执行原样保留，不覆盖记录。测试用第一次通过、第二次失败的命令验证：仍执行两次，文件只发布一次且保存第一次结果。第二次报告与第一次判断可能不同，这是本次明确不修的既有问题。
+- **main 在核对前取值，时间在首次核对结束时记录**：不会把验收期间新出现的 main 提交当成已验证的版本；看板随后会按 main 不一致判陈旧。时间沿用看板的 `dur()` 口径，如 `3m 前跑的`，放在判据名称后，避免被长命令挤掉。
+- **只在 `card_vm()` 的显示层替换第 3 条**：新增 `check_result_vm()`，不改 `criteria()`、`wants_human()`、`close_if_done()`、`loop_tick()` 的判断逻辑；无有效文件与已核对但不适用分别显示「没跑过」和「不适用」。
+- **原子写沿用 `.loop-wait` 模式**：同目录 `.check-result.<pid>.tmp` 写完关闭后 `os.replace`，临时名字按进程区分；不增加配置、依赖或看板写操作。
+
+## 完成记录
+
+2026-09-21，drover/dev-check，在 `m10-check-result` 分支完成。
+
+### 做了什么
+
+- `bin/drover`：手动或循环调用 done 时，将第 3 条的成功、失败、不适用结果写入 `.check-result`，包含设计列出的 `task/main/cmd/ok/why/t` 字段；未通过其它门时仍记录已执行的核对结果。
+- `bin/drover-board`：只读记录，严格核对当前任务 id、main sha、有效验收命令；不匹配时分别说明原因。匹配时显示结果、原始理由和运行距今时间；文件缺失、坏 JSON、缺字段、字段类型错误、非法时间和非法 UTF-8 均降级。
+- `tests/check-result.py`：8 个聚焦测试，覆盖真实 CLI 写入、循环写入、显示与只读性、三种陈旧、null、坏文件、原子替换、进程临时名、核对期间 main 改变，以及文件不参与判断。由 `tests/drover-board.sh` 调用，支持现有 `DROVER_BIN` / `DROVER_BOARD_BIN` 临时副本验证方式。
+
+### 测试命令和结果
+
+所有命令均前台运行并等到退出；只使用临时合成 git 仓库和假 corral，安装套件使用自己的隔离环境。
+
+1. `python3 tests/check-result.py CheckResult.test_done_writes_result`：实现前 RED，三个子例均因「done 未写 .check-result」失败；实现后 GREEN。
+2. `python3 tests/check-result.py CheckResult.test_board_matching_results CheckResult.test_board_stale_results CheckResult.test_board_missing_and_invalid_results CheckResult.test_board_not_applicable_is_not_missing`：修正夹具后 RED，命中结果仍是 None、三种陈旧原因缺失和「没跑过」缺失；实现后 GREEN。
+3. `python3 tests/check-result.py`：8 个测试全绿。
+4. `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`：四个套件全部通过，退出 0；安装 9 项、新增聚焦测试 8 项通过。
+5. `bash -n tests/drover-board.sh`、Python 源码 `compile()` 检查、`git diff --check`：通过。
+
+### 植入缺陷自检
+
+逐条在临时目录里的 `drover` / `drover-board` 副本植入，先用 `compile()` 确认不是语法错误，再通过环境变量指向副本运行对应的 `CheckResult.test_*`。9 项全部 RED；执行后核对工作区两个实现文件字节未变。
+
+| 植入缺陷 | 对应测试 | 结果与失败依据 |
+|---|---|---|
+| 陈旧判断不比 task | `test_board_stale_results` | RED，`True is not None` |
+| 陈旧判断不比 main | `test_board_stale_results` | RED，`True is not None` |
+| 陈旧判断不比 cmd | `test_board_stale_results` | RED，`True is not None` |
+| 显示名称去掉距今时间 | `test_board_matching_results` | RED，实际详情缺少 `3m 前跑的` |
+| 取消坏 JSON 的 ValueError 保护 | `test_board_missing_and_invalid_results` | RED，`JSONDecodeError`，看板渲染中断 |
+| `ok=null` 直接走没跑过分支 | `test_board_not_applicable_is_not_missing` | RED，缺少「不适用」，实际成了「没跑过」 |
+| 改成直接 open 目标写入并移除 replace | `test_done_publishes_once_atomically` | RED，「不得直接写目标文件」 |
+| tmp 改成无 pid 的固定名字 | `test_done_publishes_once_atomically` | RED，临时名不含模拟进程号 `12345` |
+| `criteria()` 调 read 读取 `.check-result` | `test_result_never_enters_decisions` | RED，「判断路径读了 .check-result」 |
+
+### 遇到的问题、没做的事
+
+- 看板测试最初漏建 `queue.md`，因此没有卡片；补齐夹具后重新取得真正的行为 RED，未将夹具错误算作 RED。实现阶段统一了陈旧提示的空格，随后聚焦测试全绿。
+- 未修 done 重复跑验收命令；未改 ROADMAP、历史任务文件、HANDOFF；未改 corral / corral-dispatch；未访问真实交接目录或真实项目、未实际安装或动 launchd、未合并 main、未推送。
+- 没有需要主控决定的设计问题；交叉审查与后续合并由主控安排。

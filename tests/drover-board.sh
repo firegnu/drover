@@ -875,6 +875,9 @@ grep -q '"ev": "done", "id": "T1"' "${KA}/review/tasks.state" \
   || { cat "${KA}/review/.loop.log" 2>/dev/null || true; fail 'the loop must close the task exactly as it would without the 路由 line'; }
 echo 'PASS 路由行只进显示：判据、收尾记号、等人、loop_tick 一概碰不到它'
 
+# 第 3 条上次核对的结果只喂显示；原子发布、陈旧检测和判断边界一起验。
+DROVER_BIN="${DROVER}" DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/check-result.py"
+
 # 完成记录（2026-09-21，交叉审查返工；本轮限定只改本文件，记录也留在这里）：
 # 新增同仓库 25→12 行的溢出用例：偏移 19→6、合法偏移 3→3，宽窄屏均验；
 # PgDn 从 0、PgUp 从 12 独立调用，各自先复制输入、调用后立即验输入未变。原断言全部保留。

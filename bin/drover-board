@@ -27,6 +27,7 @@ drover 这边只需要一个不占分栏、能走 SSH 的任务看板。要查�
 import curses
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -679,6 +680,28 @@ def wait_items(p):
             for kind, fid, verb, sev, reason in p["human"]]
 
 
+def check_result_vm(p, c, row):
+    """第 3 条上次核对的结果，只供 card_vm 显示；判断路径绝不读它。"""
+    missing = {**row, "ok": None, "why": "没跑过（无有效核对记录）；" + row["why"]}
+    try:
+        saved = json.loads(read(f"{p['dir']}/.check-result") or "null")
+        if (not isinstance(saved, dict)
+                or not all(isinstance(saved.get(k), str) for k in ("task", "main", "cmd", "why"))
+                or "ok" not in saved or (saved["ok"] is not None and type(saved["ok"]) is not bool)
+                or type(saved.get("t")) not in (int, float) or not math.isfinite(saved["t"])):
+            return missing
+    except (ValueError, OverflowError):
+        return missing
+    current = {"task": c["id"], "main": git(p["repo"], "rev-parse", MAIN_BRANCH).strip(),
+               "cmd": task_check_cmd(c.get("body"), p.get("check_cmd", ""))}
+    reasons = {"task": "任务 id 不一致", "main": "main sha 不一致", "cmd": "验收命令不一致"}
+    stale = [reasons[k] for k in current if saved[k] != current[k]]
+    if stale:
+        return {**row, "ok": None, "why": "上次核对已陈旧：" + "、".join(stale) + "；" + row["why"]}
+    return {**row, "ok": saved["ok"], "name": row["name"] + f"（{dur(NOW - saved['t'])} 前跑的）",
+            "why": ("不适用：" if saved["ok"] is None else "") + saved["why"]}
+
+
 def card_vm(p, tv):
     """「当前这件活」：分支进展 + 判据过了几条。**依据（收尾记号）排最前**，三条门跟在后面。
 
@@ -690,6 +713,7 @@ def card_vm(p, tv):
     rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""))] + \
         criteria(p["repo"], c["main"],
                  task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
+    rows[-1] = check_result_vm(p, c, rows[-1])
     last = ago(c["last_at"])
     return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],
             "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
