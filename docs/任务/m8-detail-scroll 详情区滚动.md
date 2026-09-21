@@ -100,3 +100,9 @@
 - 长内容验收：为不改真实交接目录，使用临时合成 git 仓库、20 条中文任务、假的 corral 和 `--projects` 清单运行同一真实 curses 程序；从 80×12（首屏 `PgUp↑0 PgDn↓17`）缩至 80×6，翻到底为 `PgUp↑23 PgDn↓0`，再缩至 20×6 验无侧栏；向上翻回为 `PgUp↑21 PgDn↓2`，输出及截断正常，`q` 退出 0，临时数据随验收脚本退出清理。
 - 验收限制：桌面工具拒绝操作 Terminal（`Computer Use is not allowed to use the app 'com.apple.Terminal' for safety reasons`），因此使用工具提供的 PTY 验真实 curses 按键、缩窗及输出，没有做桌面窗口的像素目视验收；越界由假屏幕严格断言补充覆盖。
 - 未做：未改设计文档、安装、启用引擎、触碰真实交接目录、合并或推送；真界面没有按写操作键。没有新增设计事项需要主控决定，以上验收替代方式请主控审查时留意。
+
+### 主控审查返工：切项目归零测试
+
+- 补上两个详情均为 25 行、仓库身份不同的项目：A 翻到偏移 6 后切换到 B，必须归零；另验刷新重排后选中 B 的同一行为，覆盖有侧栏与 20 列窄屏。原有断言一条未删。
+- 变异自证：临时把 `draw()` 的项目身份判断替换为无条件沿用 `detail_offset`，前台执行 `bash tests/drover-board.sh`，明确在 `AssertionError: 等长项目切换后偏移必须归零` 处退出 1；随后在 `finally` 中逐字节还原实现并断言还原成功，生产代码没有最终改动。
+- 还原后前台执行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，四个套件全绿、退出 0；`git diff --check` 通过。本次只新增测试与完成记录，原实现和取舍不变，无新增待决事项。

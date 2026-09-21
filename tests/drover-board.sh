@@ -397,6 +397,8 @@ long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished":
     "todo": [{"id": "", "title": f"任务{i:02d} 中文宽度", "next": False, "held": False}
              for i in range(1, 21)]}}
 short_pv = {**pv, "repo": "另一个仓库", "queue": None, "waits": []}
+equal_pv = {**long_pv, "repo": "等长的另一个仓库"}
+assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 25
 vm = {**model, "projects": [long_pv, short_pv]}
 original = copy.deepcopy(vm)
 for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏和 rail = 0
@@ -437,6 +439,21 @@ for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏
     state["detail_offset"] = 19
     B.draw(screen, {**vm, "projects": [short_pv, long_pv]}, state)  # 刷新重排项目
     assert state["detail_offset"] == 0
+
+    # 等长项目让夹限无法顺带归零，单独守住切换和刷新重排时的项目身份判断。
+    for change in ("切换", "重排"):
+        equal_vm, state = {**model, "projects": [long_pv, equal_pv]}, {"sel": 0}
+        B.draw(screen, equal_vm, state)
+        state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
+        B.draw(screen, equal_vm, state)
+        assert state["detail_offset"] == 6
+        if change == "切换":
+            state["sel"] = B.key_action(ord("j"), long_pv, {**state, "n": 2})[1]
+            assert state["sel"] == 1
+        else:
+            equal_vm = {**equal_vm, "projects": [equal_pv, long_pv]}
+        B.draw(screen, equal_vm, state)
+        assert state["detail_offset"] == 0, f"等长项目{change}后偏移必须归零"
 assert vm == original, "显示不能改 view_model 的内容"
 
 # 真 tui 分发到 draw：只替换 curses 边界，项目、数据和按键逻辑照常跑。
