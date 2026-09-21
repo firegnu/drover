@@ -105,3 +105,45 @@
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-21，drover/dev-branch-filter，在 `m6-branch-filter` 分支完成。
+
+### 做了什么
+
+- `milestone_branches` 增加 `base_sha`，严格以 `git merge-base --is-ancestor <base_sha> <branch>` 的成功结果保留本次分支，继续排除 `main`。
+- 第 2 条缺少 `base_sha` 时返回 `ok: None`；过滤后为空仍不过，分别说明 glob 无匹配或全部被过滤，后者列出数量和全部分支名；有本次分支时也在理由中列出被排除的分支。
+- 合成仓库覆盖遗留分支与本次未合入／已合入分支并存、缺少基准、全部被过滤和完全无匹配；原有断言保留，仅适配直接调用的参数和返回值。
+- ROADMAP 只修正指定算法句；按本任务的记录要求追加本节。
+
+### 测试命令和结果
+
+1. RED：先新增合成仓库用例，未改实现时运行 `bash tests/criteria.sh`，退出码 1。本次分支已合入，失败原因确为历史遗留分支仍被计入，输出如下：
+
+   ```text
+   FAIL: merged current branch must pass despite legacy branch: 1:ok 2:no 3:skip
+     1 main 前进了: 2c2e1e9 → 4e79d1f
+     2 里程碑分支都合进去了: 还没合进 main：m4/planning
+     3 验收命令过了: 没有验收命令：CHECK_CMD 空着，队列条目也没写
+   ```
+
+2. GREEN：实现后运行 `bash tests/criteria.sh`，退出码 0，原有及新增断言全部通过。
+3. 回归：前台顺序运行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit; done`，退出码 0；四个套件全部通过，其中安装套件 9 项、看板套件 10 块全部通过。
+4. `git diff --check` 通过。所有测试只使用临时合成仓库和假 corral；安装测试在临时 HOME 和 macOS 写入沙箱中运行，未执行真实 launchctl。
+
+### 遇到的问题
+
+初写未合入分支的文案断言时，误要求旧实现把本次分支列在首位，导致先停在文案断言；调整为检查分支名后，得到上面明确由 `m4/planning` 阻塞已合入任务的 RED。没有阻塞问题或待定设计。
+
+### 没做的事
+
+未改 `criteria` 签名、判据第 1／3 条、`find_done_mark`、`bin/drover`、`HANDOFF.md` 或任何配置项；未访问真实项目或靶场，未修改 corral，未安装到真实 HOME，未操作 launchd、agent；未合并到 main、未推送。交叉审查和主控审查留给主控安排。
+
+### 实现时的取舍
+
+- `milestone_branches` 返回 `(本次分支, 被排除分支)` 两份名单，两个调用点一起适配，避免为诊断文案重复查询 git；共享入口 `criteria` 的签名和返回结构不变。
+- 文案以“不包含 base_sha，按遗留分支处理”说明判别依据，不引入日期或 reflog 推断；通过和未通过时均附排除名单。
+- ROADMAP 保留原句开头的“修法（还没做）”，严格遵守仅改算法措辞的范围；落地状态记在本完成记录，HANDOFF 由主控收尾时更新。
+
+没有需要主控决定的新事项。
