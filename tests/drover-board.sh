@@ -50,8 +50,8 @@ case "$1 $2" in
   'send iota/main')    printf '%s\n' "$3" >> "${MOCK_DIR}/sent-iota"
                        printf '{"ok":true,"name":"iota/main","instance":1,"confirmed":true}\n';;
   # ls 里有三个：alpha 的主控、eta 的主控、以及 eta 派出去的那个（cwd 在 eta 的 worktree 里）
-  'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"},{"name":"eta/main","instance":1,"kind":"claude","cwd":"%s"},{"name":"eta/m1-backend","instance":2,"kind":"codex","cwd":"%s"}]}\n' \
-           "${MOCK_ALPHA}" "${MOCK_ETA}" "${MOCK_ETA_WT}";;
+  'ls ') printf '{"ok":true,"agents":[{"name":"alpha/main","instance":1,"kind":"codex","cwd":"%s"},{"name":"eta/main","instance":1,"kind":"claude","cwd":"%s"},{"name":"eta/m1-backend","instance":2,"kind":"codex","cwd":"%s"},{"name":"eta/ghost","instance":3,"kind":"codex","cwd":"%s"}]}\n' \
+           "${MOCK_ALPHA}" "${MOCK_ETA}" "${MOCK_ETA_WT}" "${MOCK_ETA_WT}";;
   'status eta/m1-backend') st eta/m1-backend working;;
   'send theta/main') printf '%s\n' "$3" >> "${MOCK_DIR}/prompts.log"
                      printf '{"ok":true,"name":"theta/main","instance":1,"confirmed":true}\n';;
@@ -187,6 +187,9 @@ rm -f "${TMP}/eta.state"; vm
 # eta 正是卡住的样子：0 个提交落地——这和「等人」那条说的是同一件事，从两个角度看。
 is 'p("eta/repo")["queue"]["card"]["id"]' T8 'the current-work card is the task in progress'
 is 'p("eta/repo")["queue"]["card"]["title"]' '把 CSV 导入改成流式' 'and carries its title'
+# 任务正文（2026-09-22 加）：在看板上要看得见这件活到底要干什么，不用切去 queue.md。
+# 正文只进显示——判据、收尾记号、loop_tick 都不碰它，和「路由：」行同一条边界。
+is 'p("eta/repo")["queue"]["card"]["body"]' "['约束：内存不超过 200MB']" 'and its body, so you can see what the task actually asks'
 is 'p("eta/repo")["queue"]["card"]["on_main"]' 0 'branch progress counts commits on main since the task went out'
 is '"还没有提交落地" in p("eta/repo")["queue"]["card"]["progress"]' True 'a stuck task shows nothing landed yet'
 is 'p("eta/repo")["queue"]["card"]["commits"]' 1 'the card counts commits since the task started'
@@ -199,9 +202,22 @@ is '"pytest -q" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'b
 # 说法是「没在刷新时跑」，不是「没在页面上跑」——页面没有了，看板每刷新一次就要算一遍判据
 is '"没在刷新时跑" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'and why it was skipped'
 
-# 派出去的 agent 一个字都不该出现：那是 corral board + --viewer 的活。
-# eta/m1-backend 在假 corral 的 ls 里、cwd 就落在 eta 的 worktree 上——正是以前会被认出来的那种。
-lacks 'eta/m1-backend' 'dispatched agents are not drover的事: no chips, no names'
+# 派出去的 agent：2026-09-22 用户要求显示状态（m5 删掉的是重量级的那版，见 crew_of 的注释）。
+# eta/m1-backend 在假 corral 的 ls 里、cwd 落在 eta 的 worktree 上——正该被认出来。
+is 'len(p("eta/repo")["queue"]["crew"])' 2 'agents living in the repo worktree show up'
+is 'p("eta/repo")["queue"]["crew"][0]["name"]' eta/ghost 'sorted by name'
+is 'p("eta/repo")["queue"]["crew"][1]["name"]' eta/m1-backend 'both of them'
+is 'p("eta/repo")["queue"]["crew"][1]["state"]' working 'with its state'
+is 'p("eta/repo")["queue"]["crew"][1]["where"]' wt-m1 'and which worktree it lives in'
+# 查不到状态的照样列出来、标 unknown：**列表本身就是信息**（有几个 agent 住在这个仓库里）。
+# eta/ghost 在假 corral 的 ls 里，但没有 status 分支 —— 落到 not_found。
+is 'p("eta/repo")["queue"]["crew"][0]["state"]' unknown 'an agent whose status cannot be read is still listed'
+# 主控自己不算进「干活的 agent」——它在顶栏已经有了
+is '[a for a in p("eta/repo")["queue"]["crew"] if a["name"] == "eta/main"]' '[]' 'the 主控 is not crew'
+# 边界照旧：只给状态，不长成 agent 看板（那是 corral board + --viewer 的活）
+# 边界：只给状态，不长成 agent 看板。「在调什么工具」是 corral board 的活。
+# （attach 提示不在此列——「等你」那栏本来就带 corral attach，是给人抄的命令。）
+lacks '在调' 'no tool-activity chips: still not an agent board'
 
 # 评审协议的东西一律不该再出现
 lacks 'Round 1' 'no review rounds'
@@ -392,10 +408,12 @@ assert B.detail_viewport(20, 0, 14, 1) == (0, 0)
 import copy, curses
 from unittest.mock import patch
 pv = next(p for p in model["projects"] if p["name"] == "eta/repo")
-long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished": [],
+long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished": [], "crew": [],
     "counts": {"todo": 20, "done": 0, "dropped": 0},
     "todo": [{"id": "", "title": f"任务{i:02d} 中文宽度", "next": False, "held": False}
              for i in range(1, 21)]}}
+# crew 显式清空：这组用例验的是翻页夹限，行数要可预期，不受「干活的 agent」那块影响。
+# 那块自己的断言在下面。
 short_pv = {**pv, "repo": "另一个仓库", "queue": None, "waits": []}
 equal_pv = {**long_pv, "repo": "等长的另一个仓库"}
 assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 25
@@ -414,6 +432,7 @@ for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏
     assert state["detail_offset"] == 6
     assert any(y == 2 and col == x + 2 and "任务04" in text for y, col, text in screen.rows)
     assert (8, x, "PgUp↑6 PgDn↓13") in screen.rows
+
     state["detail_offset"] = 999
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 19
@@ -485,6 +504,22 @@ with patch.object(B.curses, "curs_set"), patch.object(B.curses, "start_color", s
     B.tui(screen, sys.argv[2])
 assert screen.frames[0] != screen.frames[1], "tui 必须执行翻页动作"
 assert screen.frames[0] == screen.frames[2], "向上翻后回到第一屏"
+# 「干活的 agent」那块：有 crew 就多出标题 + 每个 agent 一行，没有就一行都不占。
+crew_pv = {**long_pv, "queue": {**long_pv["queue"], "crew": [
+    {"name": "eta/dev-1", "kind": "codex", "state": "working", "since": 0, "where": "wt-m1"},
+    {"name": "eta/rev-1", "kind": "codex", "state": "idle", "since": 90, "where": "wt-rev"}]}}
+crew_lines = B.detail_lines(crew_pv)
+assert len(crew_lines) == len(B.detail_lines(long_pv)) + 3, len(crew_lines)
+# 正文要真的画出来（card 有 body 时）
+body_pv = {**pv, "waits": []}
+body_text = "\n".join(t for _, _, t in B.detail_lines(body_pv))
+assert "约束：内存不超过 200MB" in body_text, "任务正文没上屏"
+
+crew_text = "\n".join(t for _, _, t in crew_lines)
+assert "干活的 agent · 2" in crew_text, crew_text
+assert "eta/dev-1  working" in crew_text and "eta/rev-1  idle" in crew_text, crew_text
+assert "闲了" in crew_text, "idle 的要显示闲了多久"
+assert "wt-m1" in crew_text, "要说清楚住在哪个 worktree"
 PY2
 echo 'PASS draw(): 翻页、夹限、切项目、缩窗和内容缩短；窄屏不越界，tui 执行翻页'
 

@@ -103,10 +103,40 @@ def corral_status(name):
     return j if code == 0 and j.get("ok") else None
 
 
-# 这里曾经有 repo_dirs() 和 crew_of()：把 `corral ls` 报的 cwd 顺着 `git worktree list` 映射回
-# 项目，算出「这件活派出去了哪几个 agent」。**删掉了**：corral 的 board + --viewer 已经把「谁在忙、
-# 在调什么工具、卡住没有、接入去看」做完了，而且比这里准——drover 只能靠 worktree 路径反推归属。
-# drover 是任务看板，不是 agent 看板。要找回来看 git log。
+CREW_TIMEOUT = 2     # 问一个干活 agent 的状态最多等这么久。它只是显示，不能把整块看板拖住
+
+
+def crew_of(repo, main_agent=""):
+    """这个仓库的 worktree 里住着哪些 agent → [{name, kind, state, since}]，按名字排。
+
+    **只显示状态，不做 agent 看板。** `m5` 删掉过一个重量级的（在调什么工具、卡住没有、接入
+    命令），理由是 corral 的 board 已经做了而且更准。2026-09-22 用户要求加回轻量版：派出去的
+    agent 是死是活，在 drover 这边一眼看得见。边界照旧——**不加"在调什么工具""接入去看"这类**，
+    那些仍旧是 corral board 的活；drover 是任务看板。
+
+    归属靠 `git worktree list` 的路径反推（契约只给 cwd），主控自己不算在内。查不到状态的
+    照样列出来、标 unknown：**列表本身就是信息**（有几个 agent 住在这个仓库里）。"""
+    real = lambda x: os.path.realpath(x) if x else ""
+    roots = {real(ln.split()[0]) for ln in git(repo, "worktree", "list").splitlines() if ln.strip()}
+    roots.add(real(repo))
+    if not roots:
+        return []
+    crew = []
+    for a in corral_agents():
+        cwd, name = real(a.get("cwd")), a.get("name") or ""
+        if not cwd or not name or name == main_agent:
+            continue
+        if not any(cwd == r or cwd.startswith(r + os.sep) for r in roots):
+            continue
+        code, j = corral("status", name, timeout=CREW_TIMEOUT)
+        ok = code == 0 and j.get("ok")
+        crew.append({"name": name, "kind": a.get("kind") or "",
+                     "state": (j.get("state") or "unknown") if ok else "unknown",
+                     "since": (j.get("idle_for") or 0) if ok else 0,
+                     "where": os.path.basename(cwd)})
+    return sorted(crew, key=lambda c: c["name"])
+
+
 def agents_of(repo, main_agent=""):
     """{"writer": info}：主控。配了 MAIN_AGENT 就按名字问 corral status（权威）；
     没配就退回「cwd 是这个仓库的 agent」——项目还没接上 corral 时看板照样能显示点东西。"""
@@ -597,6 +627,7 @@ def project_state(repo, conf):
     p["done_mark"] = conf.get("DONE_MARK", "收尾").strip()
     p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
+    p["crew"] = crew_of(repo, p["main_agent"])   # 住在本仓库 worktree 里的 agent，只显示
     p["tasks"] = task_view(repo, conf, p)
     add_waits(p)
     return p
@@ -732,7 +763,12 @@ def card_vm(p, tv):
     check = next(r for r in rows if r["n"] == 3)
     check.update(check_result_vm(p, c, check))
     last = ago(c["last_at"])
-    return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],
+    # 正文只进显示。判据、收尾记号、loop_tick 一概不碰它——和「路由：」行同一条边界。
+    body = [ln.rstrip() for ln in (c.get("body") or "").splitlines()]
+    while body and not body[-1]:
+        body.pop()
+    return {"id": c["id"], "title": c["title"], "body": body,
+            "waiting": c["waiting"], "held": c["held"],
             "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
             # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
             # 判据第 1 条看的是同一个 sha，两处说的是同一件事。
@@ -749,6 +785,7 @@ def queue_vm(p, tv):
             "counts": {"todo": len(tv["todo"]), "doing": 1 if c and not c["waiting"] else 0,
                        "done": tv["done"], "dropped": tv["dropped"]},
             "card": card_vm(p, tv),
+            "crew": p.get("crew") or [],
             "todo": [{"id": b["id"] or "", "title": b["title"], "next": i == 0,
                       "held": task_held(b, tv["holds"])} for i, b in enumerate(tv["todo"])],
             "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
@@ -841,6 +878,12 @@ def detail_lines(pv):
     out.append(("h2", 0, "当前这件活" + ("" if c else " · 空着")))
     if c:
         out.append(("", 2, " ".join(x for x in (c["id"], c["title"]) if x)))
+        # 正文原样摊开（只压掉行尾空白）。长了有 PgUp/PgDn 翻，不在这里截——截了就看不全要做什么。
+        body = c.get("body") or []
+        for ln in body:
+            out.append(("dim", 4, ln) if ln else ("dim", 0, ""))
+        if body:
+            out.append(("dim", 0, ""))          # 正文和下面的元信息隔开，不然糊成一团
         out.append(("dim", 2, f'{c["commits"]} 个提交 · 已进行 {c["span"]}'
                               + ("  · 核对通过，等你按 g 放行" if c["waiting"] else "")
                               + ("  · 做完停" if c["held"] else "")))
@@ -854,6 +897,16 @@ def detail_lines(pv):
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
             out.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 3,
                         f'{mark} {r["name"]}：{" ".join(r["why"].split())}'))
+    crew = q.get("crew") or []
+    if crew:
+        out.append(("h2", 0, f'干活的 agent · {len(crew)}'))
+        for a in crew:
+            busy = a["state"] == "working"
+            tail = " · ".join(x for x in (
+                f'闲了 {dur(a["since"])}' if a["state"] == "idle" and a["since"] else "",
+                a["where"]) if x)
+            out.append(("ok" if busy else ("dim" if a["state"] == "idle" else "bad"), 2,
+                        f'{a["name"]}  {a["state"]}' + (f'  {tail}' if tail else "")))
     out.append(("h2", 0, f'队列 · {q["counts"]["todo"]}   {q["mode"]}'))
     for i, t in enumerate(q["todo"]):
         out.append(("", 2, f'{i + 1}. ' + ("下一个 · " if t["next"] else "") + (f'{t["id"]} ' if t["id"] else "手写 ")
