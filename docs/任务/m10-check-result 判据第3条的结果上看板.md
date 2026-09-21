@@ -236,3 +236,14 @@ drover done： ✓ 3 验收命令过了 : `for t in criteria drover ...`   ← �
 - 真实 `drover done` 子进程保留行为对照，但不会继承这层观察；子进程 `cat`、其它打开入口或事先持有的文件描述符也不属于本计数器的覆盖范围。实现审阅确认生产判断路径没有新增此类记录读取；不能把一次内容对照当成禁止所有未来读取方式的证明。此前主控审查中「从机制上禁止读取」的表述，以本节和最新主控裁定为准。
 - 未改第一次核对才发布的选择、重复验收既有问题、三键陈旧规则；未加 tmp 清扫、fsync、结果锁或队列锁，残留与两个 done 并发的既有欠账留给主控。
 - 未改 ROADMAP / HANDOFF / 交叉审查文件；未碰真实交接目录、真实项目、安装与 launchd；只在 `m10-check-result` 提交，不合并、不推送。没有新增待主控决定的事项。
+
+## 返工记录（第 2 轮）
+
+2026-09-21，drover/dev-check。仅补齐发布旁路对真实 UTF-8 编码失败的隔离。
+
+- **实现**：`bin/drover` 发布块的 `except OSError` 改为 `except (OSError, UnicodeError)`；WARNING 原样保留，不扩大到整个完成流程。
+- **真实回归**：新增 `test_publish_encoding_error_preserves_done`。合成仓库的 start 正文设为 `验收：true # ` 加孤立代理码 `\udcff`，使用 JSON 转义写进合法 UTF-8 的 `tasks.state`。通过真实任务解析及 `criteria()`，明确断言三条门全为 True，再运行真实 CLI；不 mock 编码错误。与普通正文基线比较退出码和完成事件（仅剔除事件时间），并断言 stderr 含 WARNING、`.check-result` 和 `surrogates not allowed`。stdout 按字节收集，避免命令报告中的原代理码让测试父进程先出现解码错误。
+- **RED → GREEN**：修复前 CLI 在 `json.dump(..., ensure_ascii=False)` 发布处抛 `UnicodeEncodeError`，新测试因 `1 != 8` 失败；仅扩展捕获后退出 8、事件为 start + done、完成事件与基线相同，并有 WARNING。
+- **缺陷植入自检**：成对复制实现到临时目录，仅移除捕获列表中的 `UnicodeError`，先 `compile()` 验证语法，再以 `DROVER_BIN` / `DROVER_BOARD_BIN` 指向副本运行新测试。确认 RED：`AssertionError: 1 != 8`，且 traceback 明确为发布处 `UnicodeEncodeError`；工作区实现字节未变。
+- **验证**：`python3 tests/check-result.py CheckResult.test_publish_encoding_error_preserves_done` 与 `/usr/bin/python3 tests/check-result.py CheckResult.test_publish_encoding_error_preserves_done` 均通过；`for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done` 四套件全绿、退出 0，其中聚焦测试 16 项通过；Python `compile()` 和 `git diff --check` 通过。所有命令前台运行并等待退出。
+- **范围**：仅改发布块这一行、增加真实回归、追加本记录；未改任务格式、判据、队列逻辑、tmp 清扫或并发 done；只在 `m10-check-result` 提交，不合并、不推送。无新增待定事项。

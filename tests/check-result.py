@@ -211,6 +211,39 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                     finally:
                         self.result.rmdir()
 
+    def test_publish_encoding_error_preserves_done(self):
+        def done_bytes():
+            # stdout 的报告也含原命令；按字节收集，别让父进程解码掩盖发布错误。
+            return subprocess.run([sys.executable, str(DROVER), "done", "T1"], cwd=self.repo,
+                                  env=self.env, capture_output=True)
+
+        def completed():
+            events = self.B.task_events((self.d / "tasks.state").read_text())
+            self.assertEqual([e["ev"] for e in events], ["start", "done"])
+            return {k: v for k, v in events[-1].items() if k != "t"}
+
+        self.configure("true", "验收：true # normal")
+        baseline = done_bytes()
+        self.assertEqual(baseline.returncode, 8, baseline.stderr)
+        self.assertEqual(baseline.stderr, b"")
+        expected = completed()
+
+        # 文件仍是合法 UTF-8 JSON；代理码经解析进入命令注释，三条判据都真跑通过。
+        self.task["body"] = "验收：true # " + "\udcff"
+        state = self.d / "tasks.state"
+        state.write_text(json.dumps(self.task, ensure_ascii=True) + "\n", encoding="utf-8")
+        self.assertIn(b"\\udcff", state.read_bytes())
+        _, current, _ = self.B.task_fold(self.B.task_events(state.read_text(encoding="utf-8")))
+        cmd = self.B.task_check_cmd(current["body"], "true")
+        self.assertEqual([r["ok"] for r in self.B.criteria(str(self.repo), self.base, cmd)],
+                         [True, True, True])
+        actual = done_bytes()
+        self.assertEqual(actual.returncode, baseline.returncode, actual.stderr)
+        self.assertEqual(completed(), expected)
+        self.assertIn(b"WARNING: ", actual.stderr)
+        self.assertIn(b".check-result", actual.stderr)
+        self.assertIn(b"surrogates not allowed", actual.stderr)
+
     def test_publish_io_errors_preserve_check_done(self):
         D = load("drover_io_check", DROVER)
         for cmd in ("true", "false"):
