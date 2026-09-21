@@ -103,3 +103,57 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+
+## 实现时的取舍
+
+- 完全沿用 ROADMAP 已定的 `base_sha` 判别式和已接受的边界，不加分支快照、迁移逻辑或配置项；两种空集合都通过，但分别说明「没有未合并的分支」和逐个列名的「全部被排除」。
+- 测试用 `feature/implementation` 守住不再依赖命名模式；只剩遗留分支的场景通过删除合成仓库中的本次分支构造，不再靠 glob 隐藏它们。`main` 排除仍直接断言分支清单，避免被最终布尔值掩盖。
+- 缺陷只植入临时实现副本，用现有 `DROVER_BOARD_BIN` 入口执行原测试；每次从正确实现重新生成副本，互不叠加，工作区实现不被修改。
+
+## 完成记录
+
+2026-09-21，drover/dev-glob。
+
+### 做了什么
+
+- `milestone_branches` 改为 `task_branches(repo, base_sha)`，枚举所有本地分支并排除 `main`；保留祖先查询退出码 0 / 1 / 其它的三分处理。
+- `criteria` 去掉 glob 参数，更新 CLI、看板和三个测试套件的调用；空集合通过、遗留分支逐个列名，缺少 `base_sha` 仍不适用，查询失败仍阻断并报告分支名与 stderr。
+- 删除配置读取、项目状态字段和 init 模板中的 `BRANCH_GLOB`；CLI 测试确认老配置残留无影响、新配置不再生成该键。
+- 更新 QUICKSTART 和手册中全部相关现行说明；看板的空分支场景计数由 0/2 改为 1/3，验收命令未配置时仍显示不适用。
+
+### 测试命令和结果
+
+1. RED：先只改空分支用例、仍调用旧签名，运行 `bash tests/criteria.sh`，退出码 1：`FAIL: no other branches must pass: 1:ok 2:no 3:skip`。失败来自旧空真防护，不是签名、语法或 fixture 错误。
+2. GREEN：实现和调用迁移后 `bash tests/criteria.sh` 退出码 0。
+3. 最终回归：`for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，四套全绿、退出码 0（安装套件 9 项通过，使用临时 HOME 和写入沙箱）。所有命令均在前台等到结束。
+4. 静态检查：`bash -n tests/criteria.sh tests/drover.sh tests/drover-board.sh`、Python `compile()` 检查两个脚本、`git diff --check` 均通过。生产代码中无旧函数名、glob 参数或配置键残留。
+
+### 植入缺陷自检（逐次独立执行）
+
+每次编译临时副本后运行 `DROVER_BOARD_BIN=<临时副本> bash tests/criteria.sh`；17/17 均退出 1，且核对了命中指定断言，无语法/签名错误，无假绿。临时副本随测试清理，当前实现保持不变。
+
+| 植入缺陷 | 对应断言结果 |
+|---|---|
+| 没有其它分支时改判 False | 红：`no other branches must pass` |
+| 只有遗留分支时改判 False | 红：`all legacy branches must pass` |
+| 去掉「没有未合并的分支」说明 | 红：`criterion 2 explains the empty branch set` |
+| 已合入的本次分支改判 False | 红：`merged branch passes even though it was not deleted` |
+| 已合入分支理由只列第一个名字 | 红：`criterion 2 must name every merged current branch` |
+| 未合入分支改判 True | 红：`unmerged branch must not pass` |
+| 去掉未合入分支名字 | 红：`criterion 2 names the unmerged branch` |
+| 只检查第一个本次分支是否合入 | 红：`second current branch must still block` |
+| 全是遗留分支时只列第一个排除名字 | 红：`excluded branch missing: m4/planning` |
+| 全排除的理由混入「没有未合并的分支」，保留原数量和名字 | 红：`all-filtered branches must not use the no-other-branches explanation` |
+| 完全去掉 main 排除 | 红：空分支理由断言 |
+| 仅有兄弟分支时漏排除 main，避免先被空集合断言挡住 | 红：分支清单出现 `main`，`main itself must never be counted as a task branch` |
+| 退出码三分改成两分，把查询失败当遗留分支 | 红：`branch query error must block despite merged siblings` |
+| 查询失败理由漏掉分支名 | 红：查询错误分支名断言 |
+| 查询失败理由漏掉 git stderr | 红：stderr 原文断言 |
+| base_sha 为空时改判 False | 红：`missing base_sha makes criterion 2 inapplicable` |
+| 枚举分支重新加上 m[0-9]* 过滤 | 红：非 m 命名的未合入分支未能阻断 |
+
+### 遇到的问题、没做的事
+
+- 无设计阻塞，无需主控另作决定。手册实际残留的相关旧说明多于任务概述中的处数，均按既定设计同步。
+- 未改 ROADMAP、m6 历史任务、HANDOFF；未安装、启用 launchd、使用真实交接目录或真实 agent；未合并 main、未推送。仅在本任务分支提交，审查和合并留给主控。

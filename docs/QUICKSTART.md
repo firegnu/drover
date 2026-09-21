@@ -40,13 +40,12 @@ drover init <短名>          # 短名只能是小写字母、数字、连字符
 
 ```sh
 MAIN_AGENT=<项目>/main      # 主控在 corral ls 里的名字。留空 = 不自动送，只把任务正文打出来让你自己粘
-BRANCH_GLOB=m[0-9]*         # 里程碑分支的匹配模式，直接交给 git branch --list。留空 = 这个项目不用里程碑分支
 CHECK_CMD=uv run pytest -q  # 默认验收命令，退出码 0 才算过。留空 = 没有验收命令
 DONE_MARK=收尾              # 收尾记号的前缀，见下一步
 TASK_GATE=1                 # 1（默认）每件做完等人放行；0 做完直接发下一件
 ```
 
-> `BRANCH_GLOB` 别写 `m*`，它会把 `main` 自己匹配进来。两个真实项目都能用 `m[0-9]*`。
+> 分支无需配置：drover 枚举本地分支，排除 `main`，只核对包含任务起点 `base_sha` 的分支是否已合入；收尾后分支全删了也通过。
 
 ## 3. 往项目的 AGENTS.md 加一行
 
