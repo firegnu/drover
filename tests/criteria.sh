@@ -77,12 +77,15 @@ git -C "$R" branch --list 'm1/implementation' | grep -q m1 || fail 'the branch i
 # ---- 2. main 自己绝不算里程碑分支，哪怕 glob 匹配得上（m* 会匹配到 main）----
 [ "$(line1 "${BASE}" 'm*' '')" = "1:ok 2:ok 3:skip" ] || fail 'm* must still work'
 # 直接断分支清单本身：判据的说明文字里本来就会出现 main 这个词，grep 整段认不出来
-python3 - "${BOARD}" "$R" <<'PY2' || fail 'main itself must never be counted as a milestone branch'
+python3 - "${BOARD}" "$R" "$BASE" <<'PY2' || fail 'main itself must never be counted as a milestone branch'
 import importlib.machinery, importlib.util, sys
 sys.dont_write_bytecode = True
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
 B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
-assert B.milestone_branches(sys.argv[2], "m*") == ["m1/implementation"], B.milestone_branches(sys.argv[2], "m*")
+branches, excluded, errors = B.milestone_branches(sys.argv[2], "m*", sys.argv[3])
+assert branches == ["m1/implementation"], branches
+assert excluded == [], excluded
+assert errors == [], errors
 assert "main" in B.git(sys.argv[2], "branch", "--list", "m*"), "前提：m* 确实匹配得到 main"
 PY2
 
@@ -112,6 +115,110 @@ H=$(git -C "$R" rev-parse HEAD)
 crit "${BASE}" 'm[0-9]*' 'true' > /dev/null
 [ "$(git -C "$R" rev-parse HEAD)" = "$H" ] || fail 'evaluating the criteria must not move HEAD'
 [ -z "$(git -C "$R" status --porcelain)" ] || fail 'evaluating the criteria must not touch the working tree'
+
+# ---- 2. 遗留分支不该卡住这次任务，但这次未合入的分支仍必须挡住 ----
+(
+R="${TMP}/history-repo"; mkdir -p "$R"
+git -C "$R" init -q -b main
+git -C "$R" config user.name t; git -C "$R" config user.email t@example.com
+git -C "$R" commit -q --allow-empty -m initial
+EARLY=$(git -C "$R" rev-parse main)
+git -C "$R" commit -q --allow-empty -m 'main before legacy branch'
+git -C "$R" checkout -qb m4/planning "$EARLY"
+printf 'abandoned\n' > "$R/legacy.py"; git -C "$R" add .; git -C "$R" commit -qm 'legacy work'
+git -C "$R" checkout -q main
+git -C "$R" commit -q --allow-empty -m 'main before dispatch'
+CURRENT_BASE=$(git -C "$R" rev-parse main)
+git -C "$R" checkout -qb m6/impl
+printf 'current\n' > "$R/current.py"; git -C "$R" add .; git -C "$R" commit -qm 'current work'
+git -C "$R" checkout -q main
+# main 已前进，确认是第 2 条仍在挡这次未合入的分支。
+git -C "$R" commit -q --allow-empty -m 'main after dispatch'
+[ "$(line1 "$CURRENT_BASE" 'm[0-9]*' '')" = "1:ok 2:no 3:skip" ] \
+  || fail "current unmerged branch must still block: $(crit "$CURRENT_BASE" 'm[0-9]*' '')"
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q 'm6/impl' \
+  || fail 'criterion 2 must name the current unmerged branch'
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q '已排除.*m4/planning' \
+  || fail 'a blocking criterion must name the excluded legacy branch'
+git -C "$R" merge -q --no-ff -m 'merge current task' m6/impl
+[ "$(line1 "$CURRENT_BASE" 'm[0-9]*' '')" = "1:ok 2:ok 3:skip" ] \
+  || fail "merged current branch must pass despite legacy branch: $(crit "$CURRENT_BASE" 'm[0-9]*' '')"
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q '1 个都已经是 main 的祖先：m6/impl' \
+  || fail 'only the current branch is reported as merged'
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q '已排除.*m4/planning' \
+  || fail 'a passing criterion must name the excluded legacy branch'
+
+# ---- 2. 两个本次分支必须都合入，不能只核对第一个 ----
+git -C "$R" checkout -qb m6/second "$CURRENT_BASE"
+printf 'second\n' > "$R/second.py"; git -C "$R" add .; git -C "$R" commit -qm 'second work'
+git -C "$R" checkout -q main
+[ "$(line1 "$CURRENT_BASE" 'm[0-9]*' '')" = "1:ok 2:no 3:skip" ] \
+  || fail "second current branch must still block: $(crit "$CURRENT_BASE" 'm[0-9]*' '')"
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q '还没合进 main：m6/second' \
+  || fail 'criterion 2 must name the second unmerged branch'
+why "$CURRENT_BASE" 'm[0-9]*' '' | grep -q '已排除.*m4/planning' \
+  || fail 'mixed current branches must still report the excluded legacy branch'
+git -C "$R" merge -q --no-ff -m 'merge second task branch' m6/second
+[ "$(line1 "$CURRENT_BASE" 'm[0-9]*' '')" = "1:ok 2:ok 3:skip" ] \
+  || fail "both current branches merged must pass: $(crit "$CURRENT_BASE" 'm[0-9]*' '')"
+
+# ---- 2. 没记 base_sha → 不适用，不能退回旧行为或凭空卡住 ----
+[ "$(line1 '' 'm[0-9]*' '')" = "1:no 2:skip 3:skip" ] \
+  || fail "missing base_sha makes criterion 2 inapplicable: $(crit '' 'm[0-9]*' '')"
+why '' 'm[0-9]*' '' | grep -q '2 .*没有 base_sha' \
+  || fail 'criterion 2 explains the missing base_sha'
+
+# ---- 2. 全是遗留分支 → 不过，理由与 glob 压根没匹配到分支不同 ----
+git -C "$R" branch m4/other m4/planning
+[ "$(line1 "$CURRENT_BASE" 'm4/*' '')" = "1:ok 2:no 3:skip" ] \
+  || fail "all legacy branches must not pass: $(crit "$CURRENT_BASE" 'm4/*' '')"
+LEGACY_WHY=$(why "$CURRENT_BASE" 'm4/*' '')
+printf '%s\n' "$LEGACY_WHY" | grep -q '匹配到 2 个.*全部被排除' \
+  || fail "all-filtered branches need a distinct explanation: $LEGACY_WHY"
+for branch in m4/planning m4/other; do
+  printf '%s\n' "$LEGACY_WHY" | grep -q "$branch" || fail "excluded branch missing: $branch"
+done
+if printf '%s\n' "$LEGACY_WHY" | grep -q '一个都没匹配到'; then
+  fail 'all-filtered branches must not be described as an unmatched glob'
+fi
+why "$CURRENT_BASE" 'm9/*' '' | grep -q '一个都没匹配到' \
+  || fail 'an unmatched glob keeps its original explanation'
+
+# ---- 2. 一个分支正常且已合入，另一个祖先查询报错 → 不过并报告 Git 错误 ----
+git -C "$R" checkout -qb m6/z-broken "$CURRENT_BASE"
+git -C "$R" commit -q --allow-empty -m 'broken branch middle'
+MIDDLE=$(git -C "$R" rev-parse HEAD)
+git -C "$R" commit -q --allow-empty -m 'broken branch tip'
+git -C "$R" checkout -q main
+python3 - "${BOARD}" "$R" "$CURRENT_BASE" "$MIDDLE" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+repo, base, middle = sys.argv[2:]
+obj = pathlib.Path(repo) / ".git" / "objects" / middle[:2] / middle[2:]
+saved = pathlib.Path(repo).parent / "saved-middle-object"
+assert B.criteria(repo, base, "m6/*", "")[1]["ok"] is False
+obj.rename(saved)
+try:
+    listed = subprocess.run(["git", "-C", repo, "branch", "--list", "--format=%(refname:short)", "m6/*"],
+                            capture_output=True, text=True)
+    assert listed.returncode == 0 and "m6/z-broken" in listed.stdout, listed
+    good = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", base, "m6/impl"])
+    assert good.returncode == 0, "the other branch still contains base_sha"
+    bad = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", base, "m6/z-broken"],
+                         capture_output=True, text=True)
+    assert bad.returncode == 128 and bad.stderr.strip(), bad
+    row = B.criteria(repo, base, "m6/*", "")[1]
+    assert row["ok"] is False, f"branch query error must block despite merged siblings: {row}"
+    assert "m6/z-broken" in row["why"] and "查询失败" in row["why"], row
+    assert bad.stderr.strip() in row["why"], row
+finally:
+    saved.rename(obj)
+PY2
+)
+[ "$(line1 "$BASE" 'm[0-9]*' '')" = "1:ok 2:ok 3:skip" ] \
+  || fail 'history scenarios must leave the outer repo and base intact'
 
 # ================== 收尾记号：判「这件活完了」的唯一依据 ==================
 # 三条判据是「门」（现在是不是一个可以去判断的时刻），收尾记号是「依据」（凭什么说它完了）。

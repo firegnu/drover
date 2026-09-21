@@ -306,12 +306,25 @@ MAIN_BRANCH = "main"
 CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，不能把 drover 卡住
 
 
-def milestone_branches(repo, glob_pat):
-    """glob 匹配到的里程碑分支。main 自己永远不算——`m*` 这种写法会把它匹配进来。"""
+def milestone_branches(repo, glob_pat, base_sha):
+    """glob 匹配的分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
     if not glob_pat:
-        return []
+        return [], [], []
     out = git(repo, "branch", "--list", "--format=%(refname:short)", glob_pat).splitlines()
-    return [b.strip() for b in out if b.strip() and b.strip() != MAIN_BRANCH]
+    current, excluded, errors = [], [], []
+    for b in (b.strip() for b in out):
+        if not b or b == MAIN_BRANCH:
+            continue
+        result = subprocess.run(
+            ["git", "-C", repo, "merge-base", "--is-ancestor", base_sha, b],
+            capture_output=True, text=True)
+        if result.returncode == 0:
+            current.append(b)
+        elif result.returncode == 1:
+            excluded.append(b)
+        else:
+            errors.append(f"{b} 查询失败（git 退出码 {result.returncode}）：{result.stderr.strip()}")
+    return current, excluded, errors
 
 
 def run_check(repo, cmd):
@@ -349,13 +362,20 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
     name2 = "里程碑分支都合进去了"
     if not glob_pat:
         rows.append({"n": 2, "name": name2, "ok": None, "why": "没配 BRANCH_GLOB：这个项目不用里程碑分支"})
+    elif not base_sha:
+        rows.append({"n": 2, "name": name2, "ok": None,
+                     "why": "没有 base_sha：没记下送任务之前的 sha，无法判断哪些分支是这次的"})
     else:
-        brs = milestone_branches(repo, glob_pat)
-        if not brs:
+        brs, excluded, errors = milestone_branches(repo, glob_pat, base_sha)
+        if errors:
+            rows.append({"n": 2, "name": name2, "ok": False, "why": "\n".join(errors)})
+        elif not brs:
             # 对空集合「全都合进去了」恒真。前缀填错、分支命名换了、这件活压根没建分支，
             # 从 git 这边看一模一样——都不能当作通过。见 ROADMAP 完成判据那一节。
             rows.append({"n": 2, "name": name2, "ok": False,
-                         "why": f"`{glob_pat}` 一个都没匹配到。是写错了，还是这件活没建分支？"})
+                         "why": (f"`{glob_pat}` 匹配到 {len(excluded)} 个，但全部被排除（不包含 base_sha，按遗留分支处理）："
+                                 + "、".join(excluded)) if excluded else
+                                f"`{glob_pat}` 一个都没匹配到。是写错了，还是这件活没建分支？"})
         else:
             left = [b for b in brs
                     if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", b, MAIN_BRANCH],
@@ -363,6 +383,8 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
             rows.append({"n": 2, "name": name2, "ok": not left,
                          "why": (f"{len(brs)} 个都已经是 {MAIN_BRANCH} 的祖先：" + "、".join(brs)) if not left
                                 else f"还没合进 {MAIN_BRANCH}：" + "、".join(left)})
+        if excluded and (brs or errors):
+            rows[-1]["why"] += "；已排除不包含 base_sha 的遗留分支：" + "、".join(excluded)
 
     name3 = "验收命令过了"
     if not check_cmd:
