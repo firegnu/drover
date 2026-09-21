@@ -22,12 +22,12 @@
 
 - 这个项目的开发任务由主控拆开，派给别的 agent 做。主控负责拆任务、写任务文件、审查、合并，不自己写功能代码。分派时按 corral-dispatch 技能做。
 - 被委派的 agent（任务文件里写明了身份）照任务文件做，不再往下派。
-- agent 名字以 `drover/dev-` 开头；任务文件放 `docs/任务/`；每个任务一个分支，worktree 放 `../drover-worktrees/<分支>`。
+- agent 名字以 `drover/dev-` 开头；任务文件放 `docs/任务/`；每个任务一个分支，worktree 放 `../drover-worktrees/<分支>`，交叉审查用 detached worktree `../drover-worktrees/review-<分支>`。
 - 审查：主控审查每个任务。
 - 合并：审查通过后本地合并进 main。**不推送**——远端 `origin`（`github.com/firegnu/drover`，公开）2026-09-20 建好了，但推送仍旧在「先问人」那一节里，每次都要人点头。
 - 收尾记号：一件活合并完、worktree 和分支清干净之后，在 main 上补一条空提交（`git commit --allow-empty`），首行写「收尾: 」加一句话说明这件活是什么。只记真正落地的活；说好不合并、停在审查的不记。
 - 收尾之后更新 `HANDOFF.md`：现在在哪、下一步干什么、有什么悬着。设计和理由进 `docs/ROADMAP.md`，别写进交接文件。
-- 开出来的 agent，用户说关才关。
+- 开出来的 agent：清掉某个 worktree 时，把住在里面的那个一并关掉（它的工作目录没了，接不了新活）；其余的用户说关才关。
 - 不要按项目名或路径批量杀进程（`pkill -f drover` 这类）：主控和别的 agent 的进程命令行里都带着项目名和工作目录，一条命令能把它们全杀掉。停自己起的服务用起的时候记下的 PID（`cmd & echo $!`），或者固定端口后 `lsof -ti:<端口> | xargs kill`。
 
 ## 硬规矩
