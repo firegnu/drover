@@ -59,6 +59,8 @@ ROADMAP D1 第 5 步第 3 小节那句「**还欠**：详情区不滚动」可�
 
    **这件事不归 drover 管,也不要再插手**——根子在 corral-dispatch(拆掉 drover 照样堆),而 drover 主控参与上游规矩设计会侵蚀「只能往下依赖」那条线。要提供的只有使用者视角的事实,判断由人和 corral 主控做。
 
+   （**2026-09-21 晚已全部落地**：两件都拍板进了 SKILL.md，我又拿一件真活实测了一遍、报了四条事实、上游全采纳。见顶上那节。**这一节以下都是当天早些时候的历史记录。**）
+
 2. **`AGENTS.md` 的派活规矩今天改了两条**(用户定的,提交 `4f587b5`):交叉审查用 detached worktree `../drover-worktrees/review-<分支>`;清掉某个 worktree 时把住在里面的 agent 一并关掉,其余仍旧用户说关才关。
 
    **两个保护有意先不补,等真实跑出来再说**(用户 2026-09-21 定的):
@@ -184,6 +186,7 @@ drover 驱动自己的开发。**一律放行模式**（`TASK_GATE=1`，每件�
 ## 悬着等人定的
 
 - ~~待定 3、待定 4~~：**2026-09-21 都定了并做完了**，见顶上那节。ROADMAP「待定」一节现在四条全部有结论。
+- **本地领先 `origin/main` 12 个提交，一直没推**（9-21 那天之后攒下来的：m6、m7、m8 三件活加文档）。推之前要人点头，每次都要（`AGENTS.md`「先问人」）。公开仓库，推之前照例先扫一遍 `gitleaks` / `trufflehog`。
 - **`~/.drover/board-notified.json`**：`drover/dev-tui` 测试疏忽漏出来的残渣，内容是合成仓库（`iota/main`）的条目。按「删东西先问人」留着没删。
 - ~~两个 dev agent 关不关~~：**已关**（`drover/dev-tui`、`drover/dev-install`，2026-09-20 收工时用户定的）。明天要派活得重新 `corral start`，别忘了带免确认参数（`claude --dangerously-skip-permissions` / `codex --yolo`），见下面「派活的规矩」。
 
