@@ -88,7 +88,7 @@ def setup():
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
-    CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条的默认值；队列条目的「验收：」行可覆盖
+    CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条跑的命令；留空 = 这个项目不跑验收
     MAIN_AGENT = conf.get("MAIN_AGENT", "")          # 送给谁；空 = 不自动送，打出来让人粘
     DONE_MARK = conf.get("DONE_MARK", "收尾").strip()  # 收尾记号的前缀；空 = 这个项目不打记号，判不出完成
 
@@ -193,12 +193,6 @@ def tree_dirty():
     return [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
 
 
-def task_check_cmd(body):
-    """这件活的验收命令：正文里那行「验收：…」优先，否则 .drover.conf 的 CHECK_CMD。
-    人在 queue.md 里写这件活算完的标准，本来就是人的活（见 ROADMAP 完成判据那一节）。"""
-    return B.task_check_cmd(body, CHECK_CMD)
-
-
 def check_done(task):
     """→ (问题列表, 同次核对的三条门)。只读核对 git，不听主控一句话。
     三条门见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
@@ -212,7 +206,7 @@ def check_done(task):
     dirty = tree_dirty()
     if dirty:
         probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
-    cmd, sha = task_check_cmd(task.get("body")), main_sha()
+    cmd, sha = CHECK_CMD, main_sha()
     rows = B.criteria(REPO, task.get("main", ""), cmd)
     # 发布和报告都复用决定能否 done 的这次核对。
     check = next(r for r in rows if r["n"] == 3)

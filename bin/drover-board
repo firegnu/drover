@@ -215,7 +215,7 @@ def wants_human(p):
         return []
     rows = [find_done_mark(p["repo"], tv["card"].get("main", ""), p.get("done_mark", ""))] + \
         criteria(p["repo"], tv["card"].get("main", ""),
-                 task_check_cmd(tv["card"].get("body"), p.get("check_cmd", "")), do_check=False)
+                 p.get("check_cmd", ""), do_check=False)
     return [r for r in rows if r["ok"] is False]
 
 
@@ -264,18 +264,7 @@ def task_blocks(text):
 
 
 TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
-# 正文里的「验收：<命令>」覆盖 .drover.conf 的 CHECK_CMD（完成判据第 3 条）。
-# 它会被当成 shell 命令跑，所以只认 queue.md 里写的：人自己编的文件，不经任何表单。
-TASK_CHECK = re.compile(r'^\s*验收\s*[:：]\s*(\S.*?)\s*$', re.M)
-
-
-def task_check_cmd(body, default=""):
-    """正文里那行「验收：<命令>」→ 命令；没写就用传进来的默认值（.drover.conf 的 CHECK_CMD）。"""
-    m = TASK_CHECK.search(body or "")
-    return m.group(1) if m else default
-
-
-# 正文里那行「任务文件：<相对路径>」，和上面的「验收：」同一套机制：人自己在 queue.md 里写的。
+# 正文里那行「任务文件：<相对路径>」：人自己在 queue.md 里写的。
 TASK_FILE = re.compile(r'^\s*任务文件\s*[:：]\s*(\S.*?)\s*$', re.M)
 # 任务文件开头那行「路由：<档> / 交叉审查<要|不要>（路由：…；推翻：…）」。这是主控**本来就会写**
 # 的一行（corral-dispatch 的 SKILL.md 第 3 节规定的记录格式），drover 只读、只显示。
@@ -740,7 +729,7 @@ def check_result_vm(p, c, row):
     except (OSError, ValueError, OverflowError, RecursionError):
         return missing
     current = {"task": c["id"], "main": git(p["repo"], "rev-parse", MAIN_BRANCH).strip(),
-               "cmd": task_check_cmd(c.get("body"), p.get("check_cmd", ""))}
+               "cmd": p.get("check_cmd", "")}
     reasons = {"task": "任务 id 不一致", "main": "main sha 不一致", "cmd": "验收命令不一致"}
     stale = [reasons[k] for k in current if saved[k] != current[k]]
     if stale:
@@ -759,7 +748,7 @@ def card_vm(p, tv):
         return None
     rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""))] + \
         criteria(p["repo"], c["main"],
-                 task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
+                 p.get("check_cmd", ""), do_check=False)
     check = next(r for r in rows if r["n"] == 3)
     check.update(check_result_vm(p, c, check))
     last = ago(c["last_at"])

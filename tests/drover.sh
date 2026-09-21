@@ -50,6 +50,7 @@ sent_txt() { awk 'BEGIN{RS="--8<--\n"} {b=$0} END{printf "%s", b}' "${TMP}/sent.
 fail() { echo "FAIL: $*" >&2; echo "--- 最后一次输出 ---" >&2; cat "${TMP}/out" >&2 || true; exit 1; }
 rt() { set +e; ( cd "${REPO}" && DROVER_CORRAL_BIN="${TMP}/bin/corral" python3 "${RT}" "$@" ) > "${TMP}/out" 2>&1; RC=$?; set -e; }
 has() { grep -qF -e "$1" "${TMP}/out" || fail "$2 (missing: $1)"; }
+lacks() { grep -qF -e "$1" "${TMP}/out" && fail "$2 (unexpected: $1)"; return 0; }
 code() { [ "${RC}" = "$1" ] || fail "$2: exit ${RC}, expected $1"; }
 edit() { mkdir -p "$(dirname "${REPO}/$1")"; printf '%s\n' "$2" >> "${REPO}/$1"; git -C "${REPO}" add "$1"; git -C "${REPO}" commit -qm "$2"; }
 hsha() { git -C "${REPO}" rev-parse HEAD; }
@@ -291,14 +292,16 @@ edit hold.py 'work for the unheld-again task'
 rt_pane done "${TID}"; code 8 'unheld task continues to the empty queue'; has '队列空了' 'continues'
 rt loop off
 
-# ---- 队列条目覆盖默认验收命令：正文里一行「验收：<命令>」----
+# ---- 验收命令只有一个来源：.drover.conf 的 CHECK_CMD。
+#      队列正文里写什么都不当命令跑——「验收：<命令>」那条语法 2026-09-21 删了，
+#      理由：queue.md 的帮助说「下面随意写约束和验收」，而那行会被当 shell 跑，两句话不能同时成立。
 printf 'CHECK_CMD=true\n' >> "${REPO}/.drover.conf"
-rt add "带自己验收命令的任务" "验收：test -f no-such-file"; rt next
+rt add "正文里写了验收字样的任务" "验收：test -f no-such-file"; rt next
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 edit acc.py 'work'
-rt done "${TID}"; code 9 'the queue entry overrides CHECK_CMD and this one fails'
-has '判据 3' 'names the criterion'; has 'no-such-file' 'quotes the command that ran'
-rt drop "${TID}" "换一个"
+rt done "${TID}"; code 8 'a 验收 line in the body is prose, not a command'
+has '✓ 3 验收命令过了' 'CHECK_CMD ran, not the text from the body'
+lacks 'no-such-file' 'the body text never reached the shell'
 rt add "用默认验收命令的任务"; rt next
 TID=$(sed -n 's/^TASK \(T[0-9]*\):.*/\1/p' "${TMP}/out")
 edit acc.py 'more work'

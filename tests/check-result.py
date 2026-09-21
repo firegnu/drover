@@ -159,10 +159,11 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
         self.assertIn("没跑过", card["criteria"][3]["why"])
 
     def test_done_writes_result(self):
+        # 正文里的「验收：…」只是散文：CHECK_CMD 是唯一来源（覆盖语法 2026-09-21 删了）。
         for cmd, body, effective, ok, code in [
-                ("false", "验收：true", "true", True, 8),
-                ("true", "验收：echo failed; exit 1", "echo failed; exit 1", False, 9),
-                ("", "", "", None, 8)]:
+                ("true", "验收：echo failed; exit 1", "true", True, 8),
+                ("echo failed; exit 1", "验收：true", "echo failed; exit 1", False, 9),
+                ("", "验收：true", "", None, 8)]:
             with self.subTest(ok=ok):
                 self.configure(cmd, body)
                 before = int(time.time())
@@ -240,7 +241,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
         # 若渲染真跑验收，会留下这个文件；只看 ok 不足以守住此边界。
         check_marker = self.root / "unexpected-check"
         cmd = f"touch {check_marker}"
-        self.configure("false", "验收：" + cmd)
+        self.configure(cmd)
         for ok in (True, False):
             with self.subTest(ok=ok):
                 self.result.write_text(json.dumps(self.saved(cmd=cmd, ok=ok, why="核对结果")))
