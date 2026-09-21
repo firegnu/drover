@@ -2,3 +2,7 @@
 *.bak.*
 .DS_Store
 .drover.conf
+
+# Python 字节码（跑测试/导入 drover-board 时会生成）
+__pycache__/
+*.pyc
