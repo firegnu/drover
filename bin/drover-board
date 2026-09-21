@@ -385,7 +385,18 @@ CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，�
 
 def task_branches(repo, base_sha):
     """所有本地分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
-    out = git(repo, "branch", "--list", "--format=%(refname:short)").splitlines()
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", None) or ""
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
+        return [], [], [f"枚举本地分支失败：{exc}" + (f"\n{detail}" if detail else "")]
+    if result.returncode or "warning: ignoring broken ref" in result.stderr:
+        return [], [], [f"枚举本地分支失败（git 退出码 {result.returncode}）：{result.stderr.strip()}"]
+    out = result.stdout.splitlines()
     current, excluded, errors = [], [], []
     for b in (b.strip() for b in out):
         if not b or b == MAIN_BRANCH:
@@ -416,7 +427,7 @@ def run_check(repo, cmd):
 def criteria(repo, base_sha, check_cmd, do_check=True):
     """三条完成判据的只读核对 → [{n, name, ok, why}]。
     ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
-    全程只读：只跑 rev-parse / branch --list / merge-base，外加人自己配的验收命令。
+    全程只读：只跑 rev-parse / for-each-ref / merge-base，外加人自己配的验收命令。
 
     `do_check=False` 时第 3 条不跑命令、直接标「没查」。**渲染页面时必须用这个**：第 3 条
     可能是整套测试，页面 30 秒刷一次、每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。

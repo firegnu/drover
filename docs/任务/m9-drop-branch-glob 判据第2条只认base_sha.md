@@ -179,3 +179,39 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ### 顺带记一条（既有问题，不属本任务）
 
 `.gitignore` 没有盖住 `__pycache__` / `*.pyc`。跑 python 导入 `bin/drover-board` 就会留下 `bin/__pycache__/`。这次是我审查时产生的，已手动清掉。要不要补进 `.gitignore` 另说。
+
+
+## 返工记录
+
+2026-09-21，按交叉审查文件「主控对审查意见的判断」落实第 1、2、3 条。
+
+### 改动与取舍
+
+- 枚举这一处直接读取 `subprocess.run` 完整结果，保留 30 秒超时；非零退出、`warning: ignoring broken ref`、启动异常或超时均返回 `errors`，保留退出码 / stderr / 异常诊断，不再把不可信清单当空集合。共享 `git()` 未改。
+- 枚举改为 `git for-each-ref --format=%(refname:short) refs/heads/`，只读真实本地分支，排除 detached HEAD 伪条目。`main` 排除及 `base_sha` 判别式不变。
+- 增加独立合成仓库：只有一个缺失中间对象的分支，先断言候选和遗留集合均为空、错误恰好一条，再断言第 2 条 False 且包含分支名和 git stderr。原有「存在已合入兄弟分支」的错误用例原样保留。
+- 增加真实坏 ref 回归（枚举退出 0 但 stderr 报忽略 ref），以及 subprocess 边界注入的非零退出、OSError 和 TimeoutExpired 回归；增加 attached / 本仓库 checkout detached / 新建 detached worktree 的清单及判据一致性检查，并确认 worktree 占用的分支有未合入提交时仍阻断。
+- 第 4 条依裁定不改：沿用现有 `splitlines()` / `strip()`，不处理 Unicode 空白分支名；未改 ROADMAP、共享 git 封装或其它功能。
+
+### RED → GREEN 与回归
+
+1. 先加真实坏 ref 测试：`bash tests/criteria.sh` 退出 1，`ignored broken ref must block`，实际返回 `ok=True / 没有未合并的分支`；修枚举诊断后退出 0。
+2. 再加 detached 测试：同命令退出 1，`detached cwd must list only real branches`，实际混入 `(HEAD detached at refs/heads/main)` 并产生 128；改用 `for-each-ref` 后退出 0。
+3. 第 3 条属于覆盖缺口，正确实现本来就过；补用例后以审查者指定变体验证 RED，见下表。
+4. 最终运行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`：四套全绿、退出 0，install 的 9 项隔离测试通过。命令均在前台跑完。
+5. `bash -n tests/criteria.sh`、Python `compile()` 检查 `bin/drover-board`、`git diff --check` 均通过。
+
+### 缺陷植入自检
+
+每次从正确实现生成独立临时副本，先编译，再运行 `DROVER_BOARD_BIN=<临时副本> bash tests/criteria.sh`。6/6 均因对应断言退出 1，无语法/签名错误；临时副本已清理，工作区实现不曾被植入。
+
+| 对应意见 | 植入缺陷 | 结果 |
+|---|---|---|
+| 1 | 不检查枚举非零退出码，仅检查坏 ref 警告 | 红：`enumeration failure must block` |
+| 1 | 不检查坏 ref 警告，仅检查非零退出码 | 红：`ignored broken ref must block` |
+| 1 | 枚举异常返回三个空集合 | 红：`enumeration failure must block` |
+| 1 | 超时诊断丢掉 stderr | 红：缺少 `enumeration timeout detail` 的诊断断言 |
+| 2 | 将枚举恢复为 `git branch --list --format=%(refname:short)` | 红：`detached cwd must list only real branches` |
+| 3 | 将 `if errors:` 改为 `if errors and brs:` | 红：新增的 `query error without candidates must block`，确实由仅有查询失败分支的用例抓住 |
+
+没有新增设计决定需要主控裁定；仅在 `m9-drop-branch-glob` 提交，不合并、不推送。

@@ -218,6 +218,129 @@ fi
 [ "$(line1 "$BASE" '')" = "1:ok 2:ok 3:skip" ] \
   || fail 'history scenarios must leave the outer repo and base intact'
 
+# ---- 2. 没有正常候选，只有查询失败分支 → 仍不能空集合通过 ----
+python3 - "${BOARD}" "${TMP}/only-error-repo" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+repo = sys.argv[2]
+pathlib.Path(repo).mkdir()
+def git(*args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True).stdout.strip()
+git("init", "-q", "-b", "main")
+git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+git("commit", "-q", "--allow-empty", "-m", "base")
+base = git("rev-parse", "main")
+git("checkout", "-qb", "feature/only-broken")
+git("commit", "-q", "--allow-empty", "-m", "middle")
+middle = git("rev-parse", "HEAD")
+git("commit", "-q", "--allow-empty", "-m", "tip")
+git("checkout", "-q", "main")
+obj = pathlib.Path(repo) / ".git/objects" / middle[:2] / middle[2:]
+saved = obj.read_bytes()
+obj.unlink()
+try:
+    bad = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", base, "feature/only-broken"],
+                         capture_output=True, text=True)
+    assert bad.returncode == 128 and bad.stderr.strip(), bad
+    branches, excluded, errors = B.task_branches(repo, base)
+    assert branches == [] and excluded == [] and len(errors) == 1, (branches, excluded, errors)
+    assert "feature/only-broken" in errors[0] and bad.stderr.strip() in errors[0], errors
+    row = B.criteria(repo, base, "")[1]
+    assert row["ok"] is False, f"query error without candidates must block: {row}"
+    assert "feature/only-broken" in row["why"] and bad.stderr.strip() in row["why"], row
+finally:
+    obj.write_bytes(saved)
+PY2
+
+# ---- 2. attached / detached cwd 只枚举真实分支，worktree 占用分支仍需核对 ----
+python3 - "${BOARD}" "$R" "$BASE" "${TMP}" <<'PY2'
+import importlib.machinery, importlib.util, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+repo, base, tmp = sys.argv[2:]
+def git(cwd, *args):
+    subprocess.run(["git", "-C", cwd, *args], check=True, capture_output=True, text=True)
+occupied, detached = tmp + "/occupied", tmp + "/detached"
+git(repo, "worktree", "add", "-q", occupied, "feature/implementation")
+git(repo, "worktree", "add", "-q", "--detach", detached, "main")
+expected = (["feature/implementation"], [], [])
+assert B.task_branches(repo, base) == expected
+attached_rows = B.criteria(repo, base, "")
+assert attached_rows[1]["ok"] is True, attached_rows
+# 本仓库 checkout --detach 和新建 detached worktree 的伪条目不同，两种都要验。
+git(repo, "checkout", "-q", "--detach", "main")
+try:
+    for cwd in (repo, detached):
+        actual = B.task_branches(cwd, base)
+        assert actual == expected, f"detached cwd must list only real branches: {actual}"
+        assert B.criteria(cwd, base, "") == attached_rows, cwd
+    git(occupied, "commit", "-q", "--allow-empty", "-m", "occupied branch unfinished")
+    for cwd in (repo, detached):
+        row = B.criteria(cwd, base, "")[1]
+        assert row["ok"] is False and "feature/implementation" in row["why"], row
+finally:
+    git(repo, "checkout", "-q", "main")
+PY2
+
+# ---- 2. 枚举丢了坏 ref，即使退出码为 0 也不能空集合通过 ----
+python3 - "${BOARD}" "${TMP}/enumeration-repo" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+from unittest.mock import patch
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+repo = sys.argv[2]
+pathlib.Path(repo).mkdir()
+def git(*args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True).stdout.strip()
+git("init", "-q", "-b", "main")
+git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+git("commit", "-q", "--allow-empty", "-m", "base")
+base = git("rev-parse", "main")
+git("checkout", "-qb", "feature/unfinished")
+git("commit", "-q", "--allow-empty", "-m", "unfinished")
+git("checkout", "-q", "main")
+assert B.criteria(repo, base, "")[1]["ok"] is False, "前提：未合入分支必须挡住"
+ref = pathlib.Path(repo) / ".git/refs/heads/feature/unfinished"
+saved = ref.read_bytes()
+ref.write_text("not-a-sha\n")
+try:
+    listed = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                            capture_output=True, text=True)
+    assert listed.returncode == 0 and "warning: ignoring broken ref" in listed.stderr, listed
+    row = B.criteria(repo, base, "")[1]
+    assert row["ok"] is False, f"ignored broken ref must block: {row}"
+    assert listed.stderr.strip() in row["why"], row
+finally:
+    ref.write_bytes(saved)
+
+# subprocess 边界注入：枚举非零、启动异常和超时；其它 git 调用仍用真的合成仓库。
+real_run = subprocess.run
+for failure, diagnostic in [
+    (subprocess.CompletedProcess([], 128, "", "fatal: enumeration failed"), "fatal: enumeration failed"),
+    (OSError("enumeration could not start"), "enumeration could not start"),
+    (subprocess.TimeoutExpired("git enumerate", 30, stderr=b"enumeration timeout detail"), "enumeration timeout detail"),
+]:
+    calls = []
+    def run(args, *a, **kw):
+        if args[:3] == ["git", "-C", repo] and args[3] in ("branch", "for-each-ref"):
+            calls.append(args)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return real_run(args, *a, **kw)
+    with patch.object(B.subprocess, "run", side_effect=run):
+        row = B.criteria(repo, base, "")[1]
+    assert calls, "前提：确实注入到枚举命令"
+    assert row["ok"] is False, f"enumeration failure must block: {row}"
+    assert diagnostic in row["why"], row
+    if isinstance(failure, subprocess.CompletedProcess):
+        assert "128" in row["why"], row
+PY2
+
 # ================== 收尾记号：判「这件活完了」的唯一依据 ==================
 # 三条判据是「门」（现在是不是一个可以去判断的时刻），收尾记号是「依据」（凭什么说它完了）。
 # 四道闸：区间 / 父提交恰好一个 / 空提交 / 前缀。见 docs/ROADMAP.md 完成判据那一节。
