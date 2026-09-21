@@ -157,3 +157,25 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 
 - 无设计阻塞，无需主控另作决定。手册实际残留的相关旧说明多于任务概述中的处数，均按既定设计同步。
 - 未改 ROADMAP、m6 历史任务、HANDOFF；未安装、启用 launchd、使用真实交接目录或真实 agent；未合并 main、未推送。仅在本任务分支提交，审查和合并留给主控。
+
+## 主控审查
+
+2026-09-21，drover/main。**结论：通过，可以进交叉审查。**
+
+- **自己重跑四个套件全绿**，和回复一致。断言数 `tests/criteria.sh` 51 → 49：删的 5 条全是 glob 专有的（空 glob 不适用、匹配 0 个、`m*` 匹配到 main、未匹配理由），新增 3 条（空集合过 + 理由、每个已合入分支都要列名），净 −2 对得上，不是削弱。
+- **自己另做了 4 次缺陷植入**（不看它的表格，独立挑的要害），全部变红：空集合结论翻回 `False` → `no other branches must pass`；全排除时理由里拿掉分支名 → `excluded branch missing: m4/planning`；两种「一个不剩」混成同一句 → `all-filtered branches need a distinct explanation`；去掉 `main` 排除 → `criterion 2 explains the empty branch set`。**没有假绿。**
+- **抽看代码**：`task_branches` 枚举全部分支并排除 `MAIN_BRANCH`，`merge-base` 退出码 0/1/其它的三分处理原样保留（`m6` 那条假阳性修复没被退回）；`not base_sha` 的「不适用」保留；行为翻转只此一处。
+- **实测真实场景**：老 `.drover.conf`（残留 `BRANCH_GLOB=`）配新代码，`drover list` 正常，第 2 条正确认出未合并的 `m9-drop-branch-glob`。确认无需迁移代码。
+- **范围核对**：只动了 `bin/drover`、`bin/drover-board`、三个测试套件、`QUICKSTART`、`手册` 和本文件。ROADMAP 没碰、`m6` 历史任务文件没碰、没加第三方包、没加配置项、没合并没推送。「不要做」一条没犯。
+
+### 取舍逐条表态
+
+1. **沿用既定 `base_sha` 判别式、不加分支快照** —— 同意。那是 ROADMAP 里标着「动之前先问人」的设计变更，本任务范围外。
+2. **测试改用 `feature/implementation` 而非 `m1/implementation`** —— 同意，**比我要求的更好**：它证明判据不再依赖 `m` 开头的命名，正是这次改动的要点。
+3. **只剩遗留分支的场景改用「删掉本次分支」构造，不再靠 glob 隐藏** —— 同意，构造方式和新语义一致。
+4. **缺陷只植入临时副本、每次从正确实现重新生成** —— 同意，这是上一件活教出来的干净跑法。
+5. **手册改动多于任务概述列的处数** —— 同意。核过 diff，多出来的是「已知限制」一段（主动补的，指向 ROADMAP）和「门 2 永远过不了」那节里「更好的修法还没实现」一句的删除（现在实现了）。都该改。
+
+### 顺带记一条（既有问题，不属本任务）
+
+`.gitignore` 没有盖住 `__pycache__` / `*.pyc`。跑 python 导入 `bin/drover-board` 就会留下 `bin/__pycache__/`。这次是我审查时产生的，已手动清掉。要不要补进 `.gitignore` 另说。
