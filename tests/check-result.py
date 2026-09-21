@@ -2,14 +2,18 @@
 """.check-result 的写入、显示和判断边界；只用合成仓库与假 corral。"""
 import importlib.machinery
 import importlib.util
-from contextlib import redirect_stdout
+import fcntl
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import io
 import json
 import os
 from pathlib import Path
+import select
 import subprocess
+import struct
 import sys
 import tempfile
+import termios
 import time
 import unittest
 from unittest.mock import patch
@@ -80,9 +84,79 @@ class CheckResult(unittest.TestCase):
         p = vm["projects"][0]
         row = p["queue"]["card"]["criteria"][3]
         text = "\n".join(line[2] for line in self.B.detail_lines(p))
+        self.draw(vm)
         after = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.d.iterdir()}
         self.assertEqual(before, after, "看板刷新必须只读")
         return row, text
+
+    def draw(self, vm):
+        case = self
+
+        class Screen:
+            def getmaxyx(self): return (40, 120)
+            def erase(self): self.lines = []
+            def addstr(self, y, x, text, attr=0):
+                if "\0" in text:
+                    raise ValueError("embedded null character")
+                text.encode("utf-8")
+                case.assertLessEqual(x + case.B.width(text), 120)
+                self.lines.append(text)
+
+        screen = Screen()
+        self.B.draw(screen, vm, {"sel": 0, "msg": ""})
+        self.assertTrue(any("验收命令过了" in line for line in screen.lines),
+                        "必须实际绘制第 3 条，不能被视口或截断绕过")
+
+    def test_nul_output_reaches_real_draw(self):
+        self.configure(r"printf '\000'; exit 1")
+        r = self.done()
+        self.assertEqual(r.returncode, 9, r.stderr)
+        self.assertIn("\0", json.loads(self.result.read_text())["why"])
+        # 用真实 curses 的 addstr 验证，不依赖假屏幕自己声称 NUL 会抛异常。
+        master, slave = os.openpty()
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+            code = """
+import curses, runpy, sys
+m = runpy.run_path(sys.argv[1])
+B = m['load']('draw_check', sys.argv[2])
+vm = B.view_model(B.collect(sys.argv[3]))
+curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
+"""
+            with tempfile.TemporaryFile() as errors:
+                proc = subprocess.Popen(
+                    [sys.executable, "-B", "-c", code, __file__, str(BOARD), str(self.projects)],
+                    stdin=slave, stdout=slave, stderr=errors,
+                    env={**self.env, "TERM": "xterm-256color"})
+                try:
+                    deadline = time.monotonic() + 15
+                    while proc.poll() is None and time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.1)[0]:
+                            os.read(master, 65536)  # 前台排空终端输出，避免 PTY 缓冲堵塞。
+                    self.assertIsNotNone(proc.poll(), "PTY 绘制超时")
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait()
+                errors.seek(0)
+                self.assertEqual(proc.returncode, 0, errors.read().decode())
+        finally:
+            os.close(slave)
+            os.close(master)
+        row, _ = self.display()
+        self.assertIsNone(row["ok"])
+        self.assertIn("没跑过", row["why"])
+
+    def test_deep_json_and_parser_recursion(self):
+        self.result.write_text("[" * 1200 + "0" + "]" * 1200)
+        row, _ = self.display()
+        self.assertIsNone(row["ok"])
+        # 不依赖具体 Python 的 JSON 解析器是否使用递归，强制覆盖这个错误出口。
+        p = self.B.collect(str(self.projects))[0]
+        with patch.object(self.B.json, "loads", side_effect=RecursionError("deep JSON")):
+            card = self.B.card_vm(p, p["tasks"])
+        self.assertIsNone(card["criteria"][3]["ok"])
+        self.assertIn("没跑过", card["criteria"][3]["why"])
 
     def test_done_writes_result(self):
         for cmd, body, effective, ok, code in [
@@ -103,6 +177,64 @@ class CheckResult(unittest.TestCase):
                 self.assertTrue(saved["why"])
                 self.assertLessEqual(before, saved["t"])
                 self.assertLessEqual(saved["t"], time.time())
+
+    def test_publish_failure_preserves_done_and_advance(self):
+        def events():
+            return [{k: v for k, v in e.items() if k != "t"}
+                    for e in self.B.task_events((self.d / "tasks.state").read_text())]
+
+        for cmd in ("true", "false"):
+            for gate in (0, 1):
+                with self.subTest(cmd=cmd, gate=gate):
+                    def reset():
+                        self.configure(cmd)
+                        with (self.repo / ".drover.conf").open("a") as f:
+                            f.write(f"TASK_GATE={gate}\n")
+                        with (self.d / "queue.md").open("a") as f:
+                            f.write("\n## T2 next\n")
+
+                    reset()
+                    baseline = self.done()
+                    expected = events()
+                    self.assertEqual(baseline.returncode, 9 if cmd == "false" else 8 if gate else 0)
+                    self.result.unlink()
+                    self.result.mkdir()
+                    reset()
+                    try:
+                        actual = self.done()
+                        self.assertEqual((actual.returncode, actual.stdout),
+                                         (baseline.returncode, baseline.stdout), actual.stderr)
+                        self.assertEqual(events(), expected, "显示记录故障不能阻止 done 或推进下一件")
+                        self.assertIn(".check-result", actual.stderr)
+                        self.assertIn("未能发布", actual.stderr)
+                        self.assertTrue(self.result.is_dir(), "不能删除异常目标")
+                    finally:
+                        self.result.rmdir()
+
+    def test_publish_io_errors_preserve_check_done(self):
+        D = load("drover_io_check", DROVER)
+        for cmd in ("true", "false"):
+            self.configure(cmd)
+            previous = os.getcwd()
+            try:
+                os.chdir(self.repo)
+                D.setup()
+            finally:
+                os.chdir(previous)
+            expected = D.check_done(self.task)
+            real_open = open
+
+            def denied_tmp(path, mode="r", *args, **kwargs):
+                if os.fspath(path) == str(self.result) + f".{os.getpid()}.tmp":
+                    raise PermissionError("tmp denied")
+                return real_open(path, mode, *args, **kwargs)
+
+            for failure in (patch("builtins.open", denied_tmp),
+                            patch.object(D.json, "dump", side_effect=OSError("disk full")),
+                            patch.object(D.os, "replace", side_effect=OSError("replace denied"))):
+                with failure, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(D.check_done(self.task), expected)
+                self.assertIn("未能发布", errors.getvalue())
 
     def test_board_matching_results(self):
         # 若渲染真跑验收，会留下这个文件；只看 ok 不足以守住此边界。
@@ -138,7 +270,7 @@ class CheckResult(unittest.TestCase):
         invalid = [b"not json", b"", b'{"ok":true}', b'[]', b'null', b'\xff']
         invalid += [json.dumps(self.saved(**{key: value})).encode() for key, value in
                     [("t", "yesterday"), ("t", float("nan")), ("t", float("inf")),
-                     ("t", True), ("ok", 1), ("why", []), ("cmd", None)]]
+                     ("t", True), ("ok", 1), ("why", []), ("cmd", None), ("why", "\ud800")]]
         for raw in invalid:
             with self.subTest(raw=raw):
                 self.result.write_bytes(raw)
@@ -146,6 +278,78 @@ class CheckResult(unittest.TestCase):
                 self.assertIsNone(row["ok"])
                 self.assertIn("没跑过", row["why"])
                 self.assertIn("– 验收命令过了", text)
+
+    def test_record_and_reason_limits(self):
+        for length, expected in ((4096, True), (4097, None), (2 * 1024 * 1024, None)):
+            with self.subTest(why_length=length):
+                self.result.write_text(json.dumps(self.saved(why="x" * length)))
+                row, _ = self.display()
+                self.assertIs(row["ok"], expected)
+        content = json.dumps(self.saved())
+        self.result.write_text(content + " " * (65536 - len(content)))
+        self.assertIs(self.display()[0]["ok"], True)
+        with self.result.open("a") as f:
+            f.write(" ")
+        self.assertIsNone(self.display()[0]["ok"])
+
+        # 实测单次读取量，避免只在无界 read() 之后检查长度而伪装成有界读取。
+        self.result.write_text(json.dumps(self.saved(why="x" * (2 * 1024 * 1024))))
+        p = self.B.collect(str(self.projects))[0]
+        real_open, reads = open, []
+
+        class Reader:
+            def __init__(self, file): self.file = file
+            def __enter__(self): return self
+            def __exit__(self, *args): self.file.close()
+            def read(self, size=-1):
+                data = self.file.read(size)
+                reads.append((size, len(data)))
+                return data
+
+        def observed_open(path, *args, **kwargs):
+            file = real_open(path, *args, **kwargs)
+            return Reader(file) if os.path.realpath(path) == os.path.realpath(self.result) else file
+
+        with patch("builtins.open", observed_open):
+            card = self.B.card_vm(p, p["tasks"])
+        self.assertIsNone(card["criteria"][3]["ok"])
+        self.assertTrue(reads)
+        self.assertTrue(all(0 < size <= 65537 for size, _ in reads), reads)
+        self.assertLessEqual(sum(length for _, length in reads), 65537)
+
+    def test_future_time_and_collection_skew(self):
+        now = int(time.time())
+        with patch.object(self.B.time, "time", return_value=now):
+            self.result.write_text(json.dumps(self.saved(t=now + 86400)))
+            row, text = self.display()
+            self.assertIsNone(row["ok"])
+            self.assertIn("没跑过", row["why"])
+            self.assertNotIn("0s 前跑的", text)
+            self.result.write_text(json.dumps(self.saved(t=now + 3)))
+            self.assertIs(self.display()[0]["ok"], True)
+            p = self.B.collect(str(self.projects))[0]
+        self.result.write_text(json.dumps(self.saved(t=now + 59)))
+        with patch.object(self.B.time, "time", return_value=now + 60):
+            vm = self.B.view_model([p])
+            self.draw(vm)
+        row = vm["projects"][0]["queue"]["card"]["criteria"][3]
+        self.assertIs(row["ok"], True, "采集耗时不能把正常并发发布的记录误判为未来")
+        self.assertIn("1s 前跑的", row["name"])
+
+    def test_check_row_is_selected_by_number(self):
+        self.result.write_text(json.dumps(self.saved(ok=False, why="上次核对失败")))
+        p = self.B.collect(str(self.projects))[0]
+        criteria = self.B.criteria
+
+        def reordered(*args, **kwargs):
+            rows = criteria(*args, **kwargs)
+            return [rows[2], rows[0], rows[1]]
+
+        with patch.object(self.B, "criteria", reordered):
+            card = self.B.card_vm(p, p["tasks"])
+        self.assertIs(card["criteria"][1]["ok"], False)
+        self.assertEqual(card["criteria"][1]["why"], "上次核对失败")
+        self.assertIs(card["criteria"][-1]["ok"], True, "最后一条不是第 3 条，不得被覆盖")
 
     def test_board_not_applicable_is_not_missing(self):
         self.configure("")
@@ -213,50 +417,106 @@ class CheckResult(unittest.TestCase):
         row, _ = self.display()
         self.assertIn("main sha 不一致", row["why"])
 
+    @contextmanager
+    def observe_result_reads(self):
+        """只观察同进程三种标准库打开入口；不覆盖 subprocess cat 或其它进程。
+
+        计数独立于被测调用，吞异常不能藏掉尝试。真正 CLI 另做内容污染对照，
+        check_done 及它单独加载的 board 模块另在本进程直接调用，不冒充文件沙箱。
+        """
+        attempts = []
+        target = os.path.realpath(self.result)
+        real_open, real_io_open, real_os_open = open, io.open, os.open
+
+        def observe(path, reading, entry):
+            if not isinstance(path, int) and reading:
+                resolved = os.path.realpath(os.fsdecode(path))
+                if resolved == target:
+                    attempts.append((entry, resolved))
+
+        def builtin_open(path, mode="r", *args, **kwargs):
+            observe(path, "r" in mode or "+" in mode, "builtins.open")
+            return real_open(path, mode, *args, **kwargs)
+
+        def io_open(path, mode="r", *args, **kwargs):
+            observe(path, "r" in mode or "+" in mode, "io.open")
+            return real_io_open(path, mode, *args, **kwargs)
+
+        def os_open(path, flags, *args, **kwargs):
+            observe(path, flags & os.O_ACCMODE != os.O_WRONLY, "os.open")
+            return real_os_open(path, flags, *args, **kwargs)
+
+        with patch("builtins.open", builtin_open), patch("io.open", io_open), patch("os.open", os_open):
+            yield
+        self.assertEqual(attempts, [], "判断路径尝试读取 .check-result")
+
     def test_result_never_enters_decisions(self):
-        self.configure("false")
         B = self.B
-        before = B.criteria(str(self.repo), self.base, "false")
-        unchecked = B.criteria(str(self.repo), self.base, "false", do_check=False)
-        baseline = self.done()
-        self.assertEqual(baseline.returncode, 9)
-        original_state = (self.d / "tasks.state").read_bytes()
-        conf = B.parse_conf(str(self.repo / ".drover.conf"))
+        D = load("drover_decision_check", DROVER)
+
+        def setup_drover():
+            previous = os.getcwd()
+            try:
+                os.chdir(self.repo)
+                D.setup()
+            finally:
+                os.chdir(previous)
+            D.B.CORRAL = str(self.corral)
+
+        def reset(cmd, raw):
+            self.configure(cmd)
+            stamp = self.d / ".criteria-checked"
+            if stamp.exists():
+                stamp.unlink()
+            if raw is None:
+                if self.result.exists():
+                    self.result.unlink()
+            else:
+                self.result.write_bytes(raw)
+
+        def events():
+            return [{k: v for k, v in e.items() if k != "t"}
+                    for e in B.task_events((self.d / "tasks.state").read_text())]
+
         (self.d / "loop").touch()
-        self.result.unlink()
-        B.loop_tick(str(self.projects))
-        baseline_log = (self.d / ".loop.log").read_text().split(" done ", 1)[1].strip()
-        original_open = open
+        for cmd, expected_code in (("false", 9), ("true", 8)):
+            reset(cmd, None)
+            setup_drover()
+            criteria = B.criteria(str(self.repo), self.base, cmd)
+            unchecked = B.criteria(str(self.repo), self.base, cmd, do_check=False)
+            conf = B.parse_conf(str(self.repo / ".drover.conf"))
+            human = B.project_state(str(self.repo), conf)["human"]
+            problems = D.check_done(self.task)
+            reset(cmd, None)
+            baseline = self.done()
+            self.assertEqual(baseline.returncode, expected_code)
+            expected_events = events()
+            reset(cmd, None)
+            B.loop_tick(str(self.projects))
+            baseline_log = (self.d / ".loop.log").read_text().splitlines()[-1].split(" done ", 1)[1]
+            self.assertEqual(events(), expected_events)
+            self.assertIs(json.loads(self.result.read_text())["ok"], cmd == "true")
 
-        def forbid_read(path, mode="r", *args, **kwargs):
-            if os.fspath(path) == str(self.result) and ("r" in mode or "+" in mode):
-                raise AssertionError("判断路径读了 .check-result")
-            return original_open(path, mode, *args, **kwargs)
-
-        for raw in (json.dumps(self.saved(cmd="false")).encode(), b"not json", b"\xff"):
-            with self.subTest(raw=raw):
-                self.result.write_bytes(raw)
-                with patch("builtins.open", forbid_read):
-                    self.assertEqual(B.criteria(str(self.repo), self.base, "false"), before)
-                    self.assertEqual(B.criteria(str(self.repo), self.base, "false", do_check=False), unchecked)
-                    # collect 中的「等你」判断也不能因为这个文件改变。
-                    self.assertTrue(B.project_state(str(self.repo), conf)["needs_me"] is False)
-                    (self.d / ".criteria-checked").unlink()
-                    B.loop_tick(str(self.projects))
-                self.assertEqual((self.d / "tasks.state").read_bytes(), original_state)
-                log = (self.d / ".loop.log").read_text().splitlines()[-1].split(" done ", 1)[1]
-                self.assertEqual(log, baseline_log)
-                self.result.write_bytes(raw)
-                r = self.done()
-                self.assertEqual((r.returncode, r.stdout, r.stderr),
-                                 (baseline.returncode, baseline.stdout, baseline.stderr))
-        # 成功路径也是真正通过 loop_tick → drover done 写入，非只覆盖手动命令。
-        self.configure("true")
-        (self.d / ".criteria-checked").unlink()
-        B.loop_tick(str(self.projects))
-        events = B.task_events((self.d / "tasks.state").read_text())
-        self.assertEqual([e["ev"] for e in events], ["start", "done"])
-        self.assertIs(json.loads(self.result.read_text())["ok"], True)
+            # 成功侧伪造成失败、失败侧伪造成成功；两侧还各试坏 JSON 与非法 UTF-8。
+            for raw in (json.dumps(self.saved(cmd=cmd, ok=cmd != "true")).encode(), b"not json", b"\xff"):
+                with self.subTest(cmd=cmd, raw=raw):
+                    reset(cmd, raw)
+                    with self.observe_result_reads():
+                        self.assertEqual(B.criteria(str(self.repo), self.base, cmd), criteria)
+                        self.assertEqual(B.criteria(str(self.repo), self.base, cmd, do_check=False), unchecked)
+                        self.assertEqual(B.project_state(str(self.repo), conf)["human"], human)
+                        self.assertEqual(D.check_done(self.task), problems)
+                    reset(cmd, raw)  # check_done 已发布新值；每条路径重新喂伪造记录。
+                    with self.observe_result_reads():
+                        B.loop_tick(str(self.projects))
+                    self.assertEqual(events(), expected_events)
+                    log = (self.d / ".loop.log").read_text().splitlines()[-1].split(" done ", 1)[1]
+                    self.assertEqual(log, baseline_log)
+                    reset(cmd, raw)
+                    actual = self.done()
+                    self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                     (baseline.returncode, baseline.stdout, baseline.stderr))
+                    self.assertEqual(events(), expected_events)
 
 
 if __name__ == "__main__":

@@ -176,3 +176,63 @@ drover done： ✓ 3 验收命令过了 : `for t in criteria drover ...`   ← �
 
 1. **`rows[-1] = check_result_vm(...)`** 依赖「第 3 条永远是 `rows` 最后一行」。同一件事 `bin/drover` 里用的是 `next(r for r in rows if r["n"] == 3)`，两处风格不一致。现在 `criteria()` 恒定产出三行所以成立，但以后增减行就会错位。
 2. **`forbid_read` 的盲区**：它靠抛 `AssertionError` 报警，而生产代码里若写 `try: ... except Exception: pass` 就会把它吞掉，守线失效。现实中判断路径不太可能这么写，但这是这条守线的边界，请判断要不要加固。
+
+## 返工记录
+
+2026-09-21，drover/dev-check，按主控对交叉审查的裁定完成第一轮返工：第 1–6 条全部落实，第 7–9 条保持已接受边界。
+
+### 改了什么
+
+1. **坏记录保护到绘制边界**：`.check-result` 读取处捕获 `RecursionError`；四个字符串字段拒绝 NUL，并检查 UTF-8 可编码性，避免 JSON 转义解出的孤立代理码送进 curses。失败只把本记录降级为无有效记录，没有给整个看板套宽泛异常捕获。所有显示回归现在经过 `draw()` / 假屏幕 `addstr()`，假屏幕拒绝 NUL，并断言第 3 条确实被画出；真实 `printf '\000'; exit 1` 产生的记录另用 40×120 PTY 跑真实 curses 绘制。
+2. **发布失败不影响判断**：只对 tmp 写入、JSON 写入、replace 的 `OSError` 报 stderr 诊断，继续返回真实判据并维持队列动作。实际将 marker 放成目录，成功/失败 × 放行/自动四组对照的退出码、stdout、事件完全相同（事件仅剔除运行时间戳）；自动模式继续发 T2。另注入 tmp 权限错误、写入磁盘满、replace 错误，确认 `check_done()` 问题列表不变。不删除异常目标，不清扫 tmp。
+3. **加固读取守线**：独立列表观察 `builtins.open`、`io.open`、`os.open` 的读取尝试，路径统一 `fsdecode` + `realpath`，兼容 Path、bytes、`..`、`./` 与 macOS `/var` 别名。调用返回后断言列表为空；不靠一个可被吞掉的异常断言。直接调用同进程 `check_done()`，连同它独立加载的 board 模块一起观察；保留真实 CLI、循环和事件的内容污染对照，成功侧伪造失败、失败侧伪造成功，两侧都测坏 JSON / 非法 UTF-8。
+4. **局部限量**：只在读取 `.check-result` 时以二进制读最多 65537 字节，记录超过 64 KiB 降级；`why` 超过 4096 字符降级。覆盖上限正好成立、超一位、2 MiB 理由；另观察实际 read 请求和返回量，防止先无界读再检查长度。未改全局 `read()` 或排版函数。
+5. **未来时间**：用显示时 `time.time()` 判断并计算距今时间，容许 5 秒偏差；超过该范围按坏记录降级。覆盖一天后的坏时间、3 秒小偏差，以及采集开始后 59 秒发布、60 秒才显示的正常记录，后者显示 `1s 前跑的`，不拿采集起点 NOW 误判。
+6. **按编号替换**：`card_vm()` 用 `n == 3` 定位；调序为 3、1、2 的回归确认只更新第 3 条，最后一条保持原结果。
+
+### RED → GREEN 与完整验证
+
+- 先用新增回归复现真实 curses `ValueError: embedded null character`；系统 `/usr/bin/python3`（3.9.6）对 1200 层 JSON 实际抛 `RecursionError`。默认 Python 3.14.7 另外用解析器抛 `RecursionError` 的确定性注入覆盖异常出口，避免依赖解释器恰好不报错。修复后两种 Python 的两项回归都通过。
+- 发布路径目录异常：实现前四组对照均因退出 1 而失败，修复后真实退出码分别恢复为成功自动 0、成功放行 8、失败 9；事件与无故障基线一致。
+- 长度和时间回归：实现前 4097 字符、2 MiB、65537 字节、一天后的时间均被错误接受；实现后按坏记录降级。
+- `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`：四套件全部通过，退出 0；安装套件 9 项、新增及原有聚焦测试合计 15 项通过。
+- `/usr/bin/python3 tests/check-result.py`：系统 Python 3.9.6 下 15 项全部通过，含真实 PTY。
+- `bash -n tests/drover-board.sh`、两个实现及聚焦测试的 `compile()`、`git diff --check`：通过。
+- PTY 回归初版未排空终端缓冲而超时，修正测试驱动后才取得真实的 NUL RED；不把夹具超时算作产品缺陷证据。发布回归用 `finally` 清掉测试自己创建的空目录，避免一组失败污染下一组。
+
+### 缺陷植入逐条结果
+
+所有植入都在临时成对副本中进行，先 `compile()` 确认语法有效，再用 `DROVER_BIN` / `DROVER_BOARD_BIN` 指向副本跑对应聚焦测试；没有在工作区实现里留下植入。
+
+先从返工前的 `HEAD` 取实现和旧测试，重放审查者的五种读取植入，再用新实现、新测试逐项对照：
+
+| 植入 | 旧守线 | 新守线与失败依据 |
+|---|---|---|
+| `close_if_done` 普通 open 读取，外包 `except Exception: pass` | GREEN，复现盲区 | RED，返回后发现 `builtins.open` 读取计数非零 |
+| `close_if_done` 用 `Path(.../../.../.check-result).read_bytes()` | GREEN，复现盲区 | RED，`io.open` 读取计数非零 |
+| `close_if_done` 用 bytes 路径 `os.open` + `os.read` | GREEN，复现盲区 | RED，`os.open` 读取计数非零 |
+| `close_if_done` 用子进程 `cat` | GREEN | **仍 GREEN，明确不在此守线覆盖范围** |
+| `check_done` 用普通 open 读取记录 | GREEN，复现子进程盲区 | RED，同进程直接调用记录到 `builtins.open` 读取 |
+
+其余植入全部 RED：
+
+| 植入 | 对应测试 | 失败依据 |
+|---|---|---|
+| 去掉 NUL 字符检查 | `test_nul_output_reaches_real_draw` | 真实 PTY 退出 1，`addstr` 的 `ValueError: embedded null character` |
+| 每份有效结果在显示时 why 追加 NUL | `test_board_matching_results` | 假屏幕绘制边界抛 `ValueError: embedded null character`，不再停在 VM 层而假绿 |
+| 去掉 `RecursionError` 捕获 | `test_deep_json_and_parser_recursion` | `RecursionError: deep JSON` |
+| 发布的 OSError 重新抛出 | `test_publish_failure_preserves_done_and_advance` | 退出 1 与基线 0/8/9 不符 |
+| tmp 打开错误不隔离 | `test_publish_io_errors_preserve_check_done` | `PermissionError: tmp denied` |
+| 改回无界 `read()` | `test_record_and_reason_limits` | 观测到 `read(-1)` 返回 2097280 字节，即使事后降级也会 RED |
+| 去掉 why 长度上限 | `test_record_and_reason_limits` | 4097 字符结果仍为 True，预期 None |
+| 去掉未来时间校验 | `test_future_time_and_collection_skew` | 一天后结果仍为 True，预期 None |
+| 恢复 `rows[-1]` | `test_check_row_is_selected_by_number` | 调序后第 3 条未被更新，None 不等于预期 False |
+
+共 13 项要求守住的退化全部变红；`cat` 作为已声明不覆盖的对照仍绿。第一批植入驱动的失败消息筛选漏列了 `PermissionError`，实际测试已红；补齐筛选并重跑该项和未执行的后续项，均取得上述明确证据。
+
+### 守线覆盖范围与未改内容
+
+- 本测试观察**同进程**中这三个标准库打开入口：`criteria()`（包含 do_check=False）、项目的等人判断、`close_if_done()` / `loop_tick()` 本进程部分，以及直接调用的 `check_done()`（含其 board 模块）。它是测试内的读取观察，**不是从机制上禁止读取，也不是通用文件访问沙箱**。独立列表的断言发生在被测调用返回之后，生产代码吞异常藏不掉读取尝试。
+- 真实 `drover done` 子进程保留行为对照，但不会继承这层观察；子进程 `cat`、其它打开入口或事先持有的文件描述符也不属于本计数器的覆盖范围。实现审阅确认生产判断路径没有新增此类记录读取；不能把一次内容对照当成禁止所有未来读取方式的证明。此前主控审查中「从机制上禁止读取」的表述，以本节和最新主控裁定为准。
+- 未改第一次核对才发布的选择、重复验收既有问题、三键陈旧规则；未加 tmp 清扫、fsync、结果锁或队列锁，残留与两个 done 并发的既有欠账留给主控。
+- 未改 ROADMAP / HANDOFF / 交叉审查文件；未碰真实交接目录、真实项目、安装与 launchd；只在 `m10-check-result` 提交，不合并、不推送。没有新增待主控决定的事项。

@@ -680,17 +680,31 @@ def wait_items(p):
             for kind, fid, verb, sev, reason in p["human"]]
 
 
+CHECK_RESULT_BYTES = 64 * 1024
+CHECK_WHY_CHARS = 4096
+
+
 def check_result_vm(p, c, row):
     """第 3 条上次核对的结果，只供 card_vm 显示；判断路径绝不读它。"""
     missing = {**row, "ok": None, "why": "没跑过（无有效核对记录）；" + row["why"]}
+    now = time.time()  # collect 的 NOW 可能已过去一段时间；按显示时钟容许 5 秒偏差。
     try:
-        saved = json.loads(read(f"{p['dir']}/.check-result") or "null")
-        if (not isinstance(saved, dict)
-                or not all(isinstance(saved.get(k), str) for k in ("task", "main", "cmd", "why"))
-                or "ok" not in saved or (saved["ok"] is not None and type(saved["ok"]) is not bool)
-                or type(saved.get("t")) not in (int, float) or not math.isfinite(saved["t"])):
+        with open(f"{p['dir']}/.check-result", "rb") as f:
+            raw = f.read(CHECK_RESULT_BYTES + 1)
+        if len(raw) > CHECK_RESULT_BYTES:
             return missing
-    except (ValueError, OverflowError):
+        saved = json.loads(raw.decode("utf-8") or "null")
+        if (not isinstance(saved, dict)
+                or not all(isinstance(saved.get(k), str) and "\0" not in saved[k]
+                           for k in ("task", "main", "cmd", "why"))
+                or "ok" not in saved or (saved["ok"] is not None and type(saved["ok"]) is not bool)
+                or len(saved["why"]) > CHECK_WHY_CHARS
+                or type(saved.get("t")) not in (int, float) or not math.isfinite(saved["t"])
+                or saved["t"] > now + 5):
+            return missing
+        for k in ("task", "main", "cmd", "why"):
+            saved[k].encode("utf-8")  # JSON 转义可能解出孤立代理码，不能送进 addstr。
+    except (OSError, ValueError, OverflowError, RecursionError):
         return missing
     current = {"task": c["id"], "main": git(p["repo"], "rev-parse", MAIN_BRANCH).strip(),
                "cmd": task_check_cmd(c.get("body"), p.get("check_cmd", ""))}
@@ -698,7 +712,7 @@ def check_result_vm(p, c, row):
     stale = [reasons[k] for k in current if saved[k] != current[k]]
     if stale:
         return {**row, "ok": None, "why": "上次核对已陈旧：" + "、".join(stale) + "；" + row["why"]}
-    return {**row, "ok": saved["ok"], "name": row["name"] + f"（{dur(NOW - saved['t'])} 前跑的）",
+    return {**row, "ok": saved["ok"], "name": row["name"] + f"（{dur(now - saved['t'])} 前跑的）",
             "why": ("不适用：" if saved["ok"] is None else "") + saved["why"]}
 
 
@@ -713,7 +727,8 @@ def card_vm(p, tv):
     rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""))] + \
         criteria(p["repo"], c["main"],
                  task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
-    rows[-1] = check_result_vm(p, c, rows[-1])
+    check = next(r for r in rows if r["n"] == 3)
+    check.update(check_result_vm(p, c, check))
     last = ago(c["last_at"])
     return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],
             "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
