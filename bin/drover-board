@@ -388,7 +388,7 @@ def task_branches(repo, base_sha):
     try:
         result = subprocess.run(
             ["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.SubprocessError) as exc:
         detail = getattr(exc, "stderr", None) or ""
         if isinstance(detail, bytes):

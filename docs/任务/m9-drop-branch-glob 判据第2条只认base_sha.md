@@ -215,3 +215,24 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 | 3 | 将 `if errors:` 改为 `if errors and brs:` | 红：新增的 `query error without candidates must block`，确实由仅有查询失败分支的用例抓住 |
 
 没有新增设计决定需要主控裁定；仅在 `m9-drop-branch-glob` 提交，不合并、不推送。
+
+
+## 返工记录（第 2 轮）
+
+2026-09-21，按「主控对复核意见的判断」修复坏 ref 警告的 locale 缺口。
+
+- 生产代码只改一行：枚举的 `subprocess.run` 局部传入 `env={**os.environ, "LC_ALL": "C"}`。退出码、stderr、异常处理保持不变；不改调用进程环境、共享 `git()` 或其它 subprocess 调用，Unicode 分支名解析和 ROADMAP 均未动。
+- 回归在调用者的 `LC_ALL` / `LANG` 分别设为 `zh_CN.UTF-8`、`fr_FR.UTF-8` 时直接调用 `task_branches()` 和 `criteria()`，清除 `LANGUAGE` 覆盖。每次先用真实 Git、不传英文环境，确认退出 0 且输出真实译文及坏 ref 名，再断言 errors 非空、第 2 条 False、诊断包含 `refs/heads/feature/unfinished`，并比较调用前后的整个 `os.environ` 未变。
+- 实测译文分别是 `警告：忽略损坏的引用 refs/heads/feature/unfinished` 和 `avertissement : réf cassé refs/heads/feature/unfinished ignoré`（法文实际含不换行空格）。没有在测试外层统一英文，没有模拟译文。只给既有英文诊断对照命令局部传 C；新增回归的外层始终为非英文。
+- 测试不调用 Python `locale.setlocale`，只传 Git 使用的 locale 环境并核对真实译文。本机两种译文均已实测；若 CI 的 Git 缺少相应翻译目录，前提断言会明确失败，不会把未测试的英文输出当成通过或静默跳过。
+
+### RED → GREEN 和缺陷植入
+
+1. 加回归、未修实现时，`bash tests/criteria.sh` 退出 1：真实中文警告之后命中 `non-English locale broken ref must block (zh_CN.UTF-8)`，旧实现返回 `ok=True / 没有未合并的分支`。
+2. 局部固定 C 后，同命令退出 0，中文和法文两次真实回归均通过。
+3. 临时副本去掉枚举调用的 `env` 参数，再跑 `DROVER_BOARD_BIN=<临时副本> bash tests/criteria.sh`，退出 1，再次命中同一中文回归断言。
+4. 另一个独立副本改为写 `os.environ["LC_ALL"] = "C"`，退出 1，命中「枚举不能修改调用进程的环境」。两项植入 2/2 变红，均非语法/签名错误；副本已清理，工作区实现未被植入。
+
+最终 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done` 四套全绿、退出 0（install 9 项通过）；`bash -n tests/criteria.sh`、Python `compile()` 和 `git diff --check` 通过。全部命令在前台跑完。
+
+无新增设计取舍需主控裁定；仅在本任务分支提交，不合并、不推送。

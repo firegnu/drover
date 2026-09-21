@@ -287,7 +287,7 @@ PY2
 
 # ---- 2. 枚举丢了坏 ref，即使退出码为 0 也不能空集合通过 ----
 python3 - "${BOARD}" "${TMP}/enumeration-repo" <<'PY2'
-import importlib.machinery, importlib.util, pathlib, subprocess, sys
+import importlib.machinery, importlib.util, os, pathlib, subprocess, sys
 from unittest.mock import patch
 sys.dont_write_bytecode = True
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
@@ -309,11 +309,30 @@ saved = ref.read_bytes()
 ref.write_text("not-a-sha\n")
 try:
     listed = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"})
     assert listed.returncode == 0 and "warning: ignoring broken ref" in listed.stderr, listed
     row = B.criteria(repo, base, "")[1]
     assert row["ok"] is False, f"ignored broken ref must block: {row}"
     assert listed.stderr.strip() in row["why"], row
+
+    # 调用者处于非英文环境；先用真实 git 证明警告已翻译，禁止用英文外层掩盖生产缺口。
+    for locale_name, translated in [("zh_CN.UTF-8", "忽略损坏的引用"), ("fr_FR.UTF-8", "réf cassé")]:
+        with patch.dict(os.environ, {"LC_ALL": locale_name, "LANG": locale_name, "LANGUAGE": ""}):
+            caller_env = dict(os.environ)
+            localized = subprocess.run(
+                ["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                capture_output=True, text=True)
+            assert localized.returncode == 0 and translated in localized.stderr, (
+                "前提：真实 git 必须输出非英文坏 ref 警告（需要对应翻译目录）", locale_name, localized)
+            assert "refs/heads/feature/unfinished" in localized.stderr, localized
+            print(f"locale fixture {locale_name}: {localized.stderr.strip()}", flush=True)
+            branches, excluded, errors = B.task_branches(repo, base)
+            row = B.criteria(repo, base, "")[1]
+            assert row["ok"] is False, f"non-English locale broken ref must block ({locale_name}): {row}"
+            assert branches == [] and excluded == [] and len(errors) == 1, (branches, excluded, errors)
+            assert "warning: ignoring broken ref refs/heads/feature/unfinished" in errors[0], errors
+            assert errors[0] in row["why"], row
+            assert dict(os.environ) == caller_env, "枚举不能修改调用进程的环境"
 finally:
     ref.write_bytes(saved)
 
