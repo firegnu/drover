@@ -231,9 +231,9 @@ drover 驱动自己的开发。**一律放行模式**（`TASK_GATE=1`，每件�
 3. ~~**待定 4：读任务文件开头那行「路由：…」**~~（**2026-09-21 做完**，`m7-accounting`）。
 4. ~~**TUI 详情区不滚动**~~（**2026-09-21 晚做完**，`m8-detail-scroll`，详见顶上那节）。
 5. **判据第 3 条在看板上只显示命令、不显示结果**。要把核对结果写进交接目录（像 `.loop-wait` 那样归引擎所有、看板只读）才能上屏。`drover done` 里看得到，不急。
+6. **`install.sh` 把安装时那条 shell 的整条 PATH 烤进 plist**。好处是常驻引擎一定找得到 `corral` 和 `git`；代价是换条 PATH 再装会拒绝（失败方向安全，有提示），装时若激活着 venv 会一直用那个 venv 的 `python3`。**真装的时候用干净的 shell。** 要改就是收成白名单加 `~/.local/bin`，但那样可能找不到 `corral`。
 7. **分支名里的 Unicode 空白会被 `splitlines()` / `strip()` 改写**（`bin/drover-board` 的 `task_branches`，2026-09-21 交叉审查发现，**旧版也有，不是 `m9` 引入的**）。git 接受某些 Unicode 空白（如末尾 NBSP），但 Python 的 `strip()` 会把 `feature/x\u00a0` 裁成 `feature/x`，于是**未合入的那个被当成已合入的那个**，门 2 误过；含 U+2028 的名字会被 `splitlines()` 拆成两条不存在的 ref。审查者实测复现过。改法：解析时只按 ASCII 换行切分、不做 Unicode `strip()`，查询用完整 ref、显示时再去 `refs/heads/` 前缀。方向在危险那侧，但触发要人真去建这种分支名。
 
-6. **`install.sh` 把安装时那条 shell 的整条 PATH 烤进 plist**。好处是常驻引擎一定找得到 `corral` 和 `git`；代价是换条 PATH 再装会拒绝（失败方向安全，有提示），装时若激活着 venv 会一直用那个 venv 的 `python3`。**真装的时候用干净的 shell。** 要改就是收成白名单加 `~/.local/bin`，但那样可能找不到 `corral`。
 
 ## 悬着等人定的
 
