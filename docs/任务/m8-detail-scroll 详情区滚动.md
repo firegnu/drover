@@ -81,3 +81,28 @@
 ## 回复
 
 回复里只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 实现时的取舍
+
+- 选择：`draw()` 每帧把项目身份、详情行数、可视高度和归一后的偏移写回进程内 `state`，`detail_viewport()` 纯函数统一计算夹限及翻页，`key_action()` 保持纯函数；代价是 `draw()` 有明确的 UI 状态副作用，但刷新、缩窗和内容缩短不会沿用越界偏移，首帧缺尺寸时翻页归零。
+- 否掉：不把夹限判断直接埋进 `draw()`，避免只能靠画屏幕验证边界算法。
+- 否掉：不让 `key_action()` 只返回相对量再由 `tui()` 算夹限，避免把算法散进 curses 事件循环。
+- 项目按仓库路径识别，切项目和刷新重排后选中的项目改变都回顶；只加 PgUp/PgDn，溢出时固定留一行显示上下隐藏行数，所有偏移只在内存里。
+
+## 完成记录
+
+- 已完成：PgUp/PgDn 翻详情、上下夹限、切项目归零、窗口变化和内容缩短后重新夹限；保留原按键行为与超时刷新语义，翻页本身只重画，不采集数据。
+- 修改范围：`bin/drover-board`、`tests/drover-board.sh`，另按本任务的记录要求追加本文件；`detail_lines()` 内容和既有函数签名不变，没有持久化 UI 状态。
+- RED 1：先加按键测试，前台执行 `bash tests/drover-board.sh`，因 `AssertionError: PgDn 尚未滚动详情` 退出 1；实现纯视口计算与按键动作后同命令通过。
+- RED 2：再加渲染、夹限和真实 TUI 分发的假屏幕测试，同命令因 `AssertionError: draw 尚未提供当帧详情视口` 退出 1；接通渲染和事件分发后通过。
+- 回归：前台执行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，四套件全绿，退出 0（安装套件 9 项，使用原有隔离测试）。`git diff --check` 通过。
+- 真 curses 验收：在 PTY 前台执行 `python3 ./bin/drover-board`，真实登记项目只读打开、PgDn/PgUp 后 `q` 正常退出；当前 drover 未建 `queue.md`，详情只有两行，无法触发溢出。
+- 长内容验收：为不改真实交接目录，使用临时合成 git 仓库、20 条中文任务、假的 corral 和 `--projects` 清单运行同一真实 curses 程序；从 80×12（首屏 `PgUp↑0 PgDn↓17`）缩至 80×6，翻到底为 `PgUp↑23 PgDn↓0`，再缩至 20×6 验无侧栏；向上翻回为 `PgUp↑21 PgDn↓2`，输出及截断正常，`q` 退出 0，临时数据随验收脚本退出清理。
+- 验收限制：桌面工具拒绝操作 Terminal（`Computer Use is not allowed to use the app 'com.apple.Terminal' for safety reasons`），因此使用工具提供的 PTY 验真实 curses 按键、缩窗及输出，没有做桌面窗口的像素目视验收；越界由假屏幕严格断言补充覆盖。
+- 未做：未改设计文档、安装、启用引擎、触碰真实交接目录、合并或推送；真界面没有按写操作键。没有新增设计事项需要主控决定，以上验收替代方式请主控审查时留意。
+
+### 主控审查返工：切项目归零测试
+
+- 补上两个详情均为 25 行、仓库身份不同的项目：A 翻到偏移 6 后切换到 B，必须归零；另验刷新重排后选中 B 的同一行为，覆盖有侧栏与 20 列窄屏。原有断言一条未删。
+- 变异自证：临时把 `draw()` 的项目身份判断替换为无条件沿用 `detail_offset`，前台执行 `bash tests/drover-board.sh`，明确在 `AssertionError: 等长项目切换后偏移必须归零` 处退出 1；随后在 `finally` 中逐字节还原实现并断言还原成功，生产代码没有最终改动。
+- 还原后前台执行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，四个套件全绿、退出 0；`git diff --check` 通过。本次只新增测试与完成记录，原实现和取舍不变，无新增待决事项。

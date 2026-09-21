@@ -2,8 +2,8 @@
 # drover-board 冒烟测试：造八个合成仓库，断言看板算出来的东西对 —— 队列、「等你」、
 # 当前这件活、完成判据，评审协议的东西一处不剩，且不接触真实项目。
 #
-# **断言全打在 view_model() 返回的纯数据上，不 grep 画面。** 换个排版、换个配色不会挂；
-# 画那一层（draw）薄到只补一条「画进很窄的假屏幕不崩、不越界」的冒烟就够。
+# 内容断言打在 view_model() 返回的纯数据上；详情翻页另验纯视口计算、按键和假屏幕，
+# 假屏幕一旦写出界就失败，同时确认实际显示的内容随翻页变化。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -377,8 +377,116 @@ for h, w in ((10, 40), (24, 80), (6, 20), (60, 200), (3, 12)):
         assert s.rows, f"{h}x{w} 什么都没画"
 s = Fake(10, 40)                                                 # 一个项目都没有时也不能崩
 B.draw(s, {"health": {"ok": True, "text": "corral 正常"}, "waits": [], "projects": []}, {"sel": 0, "msg": ""})
+
+# 夹限用固定例子验，不启动 curses：窗口变高/变矮、内容缩短、无可视行。
+assert B.detail_viewport(20, 7, 0, 1) == (6, 6)
+assert B.detail_viewport(20, 7, 999) == (14, 6)
+assert B.detail_viewport(20, 7, -3) == (0, 6)
+assert B.detail_viewport(20, 4, 14, 1) == (17, 3)
+assert B.detail_viewport(20, 10, 17) == (11, 9)
+assert B.detail_viewport(4, 7, 14, 1) == (0, 7)
+assert B.detail_viewport(7, 7, 0, 1) == (0, 7)
+assert B.detail_viewport(20, 0, 14, 1) == (0, 0)
+
+# 真正的 detail_lines 内容：25 行详情，10 行屏幕里每页 6 行 + 1 行翻页提示。
+import copy, curses
+from unittest.mock import patch
+pv = next(p for p in model["projects"] if p["name"] == "eta/repo")
+long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished": [],
+    "counts": {"todo": 20, "done": 0, "dropped": 0},
+    "todo": [{"id": "", "title": f"任务{i:02d} 中文宽度", "next": False, "held": False}
+             for i in range(1, 21)]}}
+short_pv = {**pv, "repo": "另一个仓库", "queue": None, "waits": []}
+equal_pv = {**long_pv, "repo": "等长的另一个仓库"}
+assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 25
+overflow_pv = {**long_pv, "queue": {**long_pv["queue"],
+    "counts": {"todo": 7, "done": 0, "dropped": 0}, "todo": long_pv["queue"]["todo"][:7]}}
+assert len(B.detail_lines(overflow_pv)) == 12
+vm = {**model, "projects": [long_pv, short_pv]}
+original = copy.deepcopy(vm)
+for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏和 rail = 0
+    screen, state = Fake(10, w), {"sel": 0}
+    B.draw(screen, vm, state)
+    assert state.get("detail_room") == 7, "draw 尚未提供当帧详情视口"
+    assert state["detail_total"] == 25
+    state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 6
+    assert any(y == 2 and col == x + 2 and "任务04" in text for y, col, text in screen.rows)
+    assert (8, x, "PgUp↑6 PgDn↓13") in screen.rows
+    state["detail_offset"] = 999
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 19
+    assert (8, x, "PgUp↑19 PgDn↓0") in screen.rows
+    assert any("还没有" in text for _, _, text in screen.rows)
+    screen.h = 6                                         # 窗口变矮后继续下翻，夹在新底部
+    B.draw(screen, vm, state)
+    state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 21
+    screen.h = 10                                        # 变高，旧偏移重新夹住
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 19
+    state["sel"] = 1                                     # 切项目必须回顶
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 0
+    assert B.key_action(curses.KEY_NPAGE, short_pv, state) == ("scroll", 0)
+    state["sel"] = 0
+    B.draw(screen, vm, state)
+    assert state["detail_offset"] == 0
+    state["detail_offset"] = 19
+    shorter = {**long_pv, "queue": None}                  # 同一项目刷新，内容缩短
+    B.draw(screen, {**vm, "projects": [shorter]}, state)
+    assert state["detail_offset"] == 0
+    B.draw(screen, vm, state)
+    state["detail_offset"] = 19
+    B.draw(screen, {**vm, "projects": [short_pv, long_pv]}, state)  # 刷新重排项目
+    assert state["detail_offset"] == 0
+
+    # 同仓库缩短后仍溢出：旧偏移越界夹到非零末页，仍合法则原样保留。
+    for old_offset, expected in ((19, 6), (3, 3)):
+        state = {"sel": 0}
+        B.draw(screen, vm, state)
+        state["detail_offset"] = old_offset
+        B.draw(screen, vm, state)
+        assert state["detail_offset"] == old_offset
+        B.draw(screen, {**vm, "projects": [overflow_pv]}, state)
+        assert state["detail_total"] == 12 and state["detail_room"] == 7
+        assert state["detail_offset"] == expected, f"内容缩短后偏移应为 {expected}（旧偏移 {old_offset}）"
+
+    # 等长项目让夹限无法顺带归零，单独守住切换和刷新重排时的项目身份判断。
+    for change in ("切换", "重排"):
+        equal_vm, state = {**model, "projects": [long_pv, equal_pv]}, {"sel": 0}
+        B.draw(screen, equal_vm, state)
+        state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
+        B.draw(screen, equal_vm, state)
+        assert state["detail_offset"] == 6
+        if change == "切换":
+            state["sel"] = B.key_action(ord("j"), long_pv, {**state, "n": 2})[1]
+            assert state["sel"] == 1
+        else:
+            equal_vm = {**equal_vm, "projects": [equal_pv, long_pv]}
+        B.draw(screen, equal_vm, state)
+        assert state["detail_offset"] == 0, f"等长项目{change}后偏移必须归零"
+assert vm == original, "显示不能改 view_model 的内容"
+
+# 真 tui 分发到 draw：只替换 curses 边界，项目、数据和按键逻辑照常跑。
+class Interactive(Fake):
+    def __init__(self):
+        super().__init__(5, 80)
+        self.frames = []
+        self.keys = iter((curses.KEY_NPAGE, curses.KEY_PPAGE, ord("q")))
+    def timeout(self, ms): assert ms == B.REFRESH_MS
+    def getch(self):
+        self.frames.append(list(self.rows))
+        return next(self.keys)
+screen = Interactive()
+with patch.object(B.curses, "curs_set"), patch.object(B.curses, "start_color", side_effect=curses.error):
+    B.tui(screen, sys.argv[2])
+assert screen.frames[0] != screen.frames[1], "tui 必须执行翻页动作"
+assert screen.frames[0] == screen.frames[2], "向上翻后回到第一屏"
 PY2
-echo 'PASS draw(): 40x10 到 12x3 都不崩、不越界'
+echo 'PASS draw(): 翻页、夹限、切项目、缩窗和内容缩短；窄屏不越界，tui 执行翻页'
 
 # ---- 按键：「按了什么键 → 要做什么」也是一层纯函数 ----
 # 推进靠按键，这是新的主操作面（ROADMAP），所以不能只埋在 tui() 里跟 getch 缠着。
@@ -433,6 +541,27 @@ for k in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k")):               # �
 # 刷新：手按 r、30 秒没人按（getch 超时给 -1）、窗口改大小，都是重跑一遍
 for k in (ord("r"), -1, curses.KEY_RESIZE):
     assert act(k) == ("refresh",), k
+
+# 翻页只返回新偏移，不重跑数据；7 行正文留 1 行提示，每页 6 行。
+scroll = {**st(), "detail_offset": 0, "detail_total": 20, "detail_room": 7}
+# 每次调用立即验输入不变，不能让相反方向的副作用抵消。
+for key, name, start in ((curses.KEY_NPAGE, "PgDn", 0), (curses.KEY_PPAGE, "PgUp", 12)):
+    candidate = {**scroll, "detail_offset": start}
+    before = candidate.copy()
+    action = act(key, state=candidate)
+    assert candidate == before, f"{name} 单次调用不得修改输入 state"
+    assert action == ("scroll", 6), (name, action)
+assert act(curses.KEY_NPAGE, state=scroll) == ("scroll", 6), "PgDn 尚未滚动详情"
+assert act(curses.KEY_PPAGE, state=scroll) == ("scroll", 0)
+assert act(curses.KEY_NPAGE, state={**scroll, "detail_offset": 12}) == ("scroll", 14)
+assert act(curses.KEY_NPAGE, state={**scroll, "detail_offset": 14}) == ("scroll", 14)
+assert act(curses.KEY_PPAGE, state={**scroll, "detail_offset": 14}) == ("scroll", 8)
+assert act(curses.KEY_PPAGE, state={**scroll, "detail_offset": 2}) == ("scroll", 0)
+assert act(curses.KEY_NPAGE, state={**scroll, "detail_total": 4}) == ("scroll", 0)
+assert act(curses.KEY_NPAGE) == ("scroll", 0)              # 首帧还没有尺寸也安全
+assert scroll == {**st(), "detail_offset": 0, "detail_total": 20, "detail_room": 7}
+for k in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+    assert act(k, None) is None
 
 # 不认识的键：什么都不做，也不重跑（重跑要跑一圈 git 和 corral，不能乱按就触发）
 for k in (ord("x"), ord("Z"), ord("1"), ord("G"), curses.KEY_F1):
@@ -745,3 +874,15 @@ PY2
 grep -q '"ev": "done", "id": "T1"' "${KA}/review/tasks.state" \
   || { cat "${KA}/review/.loop.log" 2>/dev/null || true; fail 'the loop must close the task exactly as it would without the 路由 line'; }
 echo 'PASS 路由行只进显示：判据、收尾记号、等人、loop_tick 一概碰不到它'
+
+# 完成记录（2026-09-21，交叉审查返工；本轮限定只改本文件，记录也留在这里）：
+# 新增同仓库 25→12 行的溢出用例：偏移 19→6、合法偏移 3→3，宽窄屏均验；
+# PgDn 从 0、PgUp 从 12 独立调用，各自先复制输入、调用后立即验输入未变。原断言全部保留。
+# 变异自证使用临时 drover-board / drover 副本，以 DROVER_BOARD_BIN 指向副本跑 bash tests/drover-board.sh：
+# 1. 在 draw 的夹限前植入 if state.get("detail_total") != len(lines): offset = 0，
+#    退出 1，命中 AssertionError: 内容缩短后偏移应为 6（旧偏移 19）。
+# 2. 在 key_action 返回翻页动作前植入 state["detail_offset"] = offset，
+#    退出 1，命中 AssertionError: PgDn 单次调用不得修改输入 state。
+# 两个副本均还原并校验字节一致；生产代码全程未改，主仓库审查文件只读。
+# 原实现回归：for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done
+# 四套件全绿、退出 0（安装 9 项、看板 13 块）；bash -n 与 git diff --check 通过。
