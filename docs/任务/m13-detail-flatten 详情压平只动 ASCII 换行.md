@@ -125,3 +125,43 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 
 - 首次测试运行还选中了 fixture 中 `eta/ghost` 的 `bad` 行，不能单凭那次失败作为 RED；清空副本 `crew` 后，在生产代码未改时重跑，确认只有末尾 NBSP 缺失导致失败。未遇到绘制报错，没有需要主控决定的事项。
 - 未改 `criteria()`、`criteria_report()`、`view_model()`、其他判据、通知摘要、布局配色、滚动或刷新；未处理欠账 13，未改 ROADMAP/HANDOFF，未操作真实项目、agent、安装路径或 launchd；只在 `m13-detail-flatten` 提交，不合并、不推送。
+
+## 主控审查
+
+2026-09-21，drover/main 审。**结论：改完再合并——1 条必须改。**
+
+核实过的：生产代码只动 `detail_lines()` 一处（`bin/drover-board:898`），`re` 早就导入了；范围干净，只有 `bin/drover-board`、`tests/drover-board.sh`、本任务文件三个，没有 `.pyc`。四套主控自己重跑全绿，数字和完成记录对得上（criteria 2 块 / drover 2 块 / install 9 项 / 看板 13 块 + 17 项）。独立植入自检也自己做了一遍：把压平换回 `" ".join(r["why"].split())`，新断言当场红，报的正是「详情理由被改写：…feature/name != …feature/name\xa0」，守得住。
+
+另外做了一次端到端实测（任务文件里没要求，是为了堵「压平完 curses 画不出来」那个口子）：把四种理由灌进真实项目的 view_model，走 `draw()` 画进假屏幕 5 种尺寸（10x40 / 24x80 / 6x20 / 60x200 / 3x12），不崩、不越界，屏幕缓冲里仍带原码位。`width()` 对 `\xa0` ` ` ` ` `\x85` 都算 1 格。
+
+### 必须改 1：新正则太窄，放进来 7 个旧代码挡着的 ASCII 控制字符
+
+`re.sub(r"[\r\n]+", " ", why)` 只吞 `\n` `\r`。旧的 `str.split()` 吞的 ASCII 是 **`\t \n \v \f \r \x1c \x1d \x1e \x1f`** 九个（实测枚举 0x00–0x7f 得出），所以这次改动**放行了 `\t \v \f \x1c \x1d \x1e \x1f` 七个**——这是本次引入的回退，不是既有问题。
+
+`\t` 会让看板崩。实测（真 pty + `curses.wrapper`，80x24）：
+
+```
+末行右边缘 纯文本:  ok
+末行右边缘 带 tab:  error('addwstr() returned ERR')   ← put() 没有 try/except，直接崩掉退出
+末行右边缘 单 tab:  error('addwstr() returned ERR')
+中间行   长 tab:  ok（不崩，但 ncurses 折行，把下一行糊掉）
+```
+
+`put()`（`bin/drover-board:845`）按 `width()` 算宽度，`cell('\t')` 算 1 格，而终端把 tab 展开到下一个制表位——算出来够、画出去不够。
+
+**怎么进到 `why` 里**：分支名进不来（git 禁止 ref 名含控制字符），但 `check_cmd` 进得来（`.drover.conf` 的 `CHECK_CMD`，或队列条目里「验收：…」那行，都是人手写的），收尾记号的 commit subject 也进得来（`find_done_mark` 的 `f"{sha[:7]} {subject}"`）。
+
+**改法**：把 ASCII 控制字符照旧全吞掉，只放过非 ASCII——`re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", why)`。这正好是「旧 `.split()` 的 ASCII 分隔符集合减去普通空格」，做到**对 ASCII 零回退、对 Unicode 才是这次要修的原样保留**。保留成串的普通空格是有意的差异，无害。
+
+> `\x00` 不在此列：`str.split()` 本来就不吞它，改动前后一样会穿过去，**是既有边界，本次没制造也没扩大**，不在这件活范围里。
+
+### 取舍逐条表态
+
+- 「仅合并连续 CR/LF，其余逐码位保留」——**方向同意，范围要扩到全部 ASCII 控制字符**，见上。
+- 「不 `strip()`，保留换行两侧原有空格和 tab」——空格同意；**tab 不同意**，按上条一并吞掉。
+- 「清空测试副本的 `crew` 再比整串」——同意，这样断言不会被别的 `bad` 行干扰，是对的做法。
+- 「用 `re.sub` 不造抽象、不加配置」——同意。
+
+### 要改的测试
+
+第 7 组用例 `"\r\n  错误甲\t \n  错误乙  \r"` 现在断言 tab 被保留，改法落地后期望值要跟着变（tab 变一个空格）。另外**补一条断言守住这次的回退**：理由里塞 `\t` 和 `\x1f`，断言输出里 `"\t" not in` 且不含任何 `\x00-\x1f` 的字符；同时 NBSP / U+2028 那几条一个字不动，证明两类确实分开处理。
