@@ -829,15 +829,29 @@ def detail_lines(pv):
     return out
 
 
+def detail_viewport(total, room, offset, pages=0):
+    """纯排版计算：溢出时留一行提示，先夹住旧偏移，再翻页；没有可视行就归零。"""
+    page = max(0, room - (1 if total > room else 0))
+    limit = max(0, total - page) if page else 0
+    offset = min(max(0, offset), limit)
+    return min(max(0, offset + pages * page), limit), page
+
+
 def draw(stdscr, vm, state):
-    """把 view_model 画出来。薄薄一层：只有排版，没有判断——要显示什么全在 view_model 里定了。"""
+    """把 view_model 画出来；详情视口只写进内存 state，夹限交给纯函数。"""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
+    ps = vm["projects"]
+    sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
+    project = ps[sel]["repo"] if ps else None
+    lines = detail_lines(ps[sel]) if ps else [("dim", 0, "没有登记过的项目。到仓库里运行 drover init <短名>")]
+    room = h - 3 if h >= 5 and w >= 20 else 0
+    offset = state.get("detail_offset", 0) if state.get("detail_project") == project else 0
+    offset, page = detail_viewport(len(lines), room, offset)
+    state.update(detail_project=project, detail_offset=offset, detail_total=len(lines), detail_room=room)
     if h < 5 or w < 20:
         put(stdscr, 0, 0, "窗口太小", h, w)
         return
-    ps = vm["projects"]
-    sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
     head = f'drover · {len(ps)} 个项目 · {vm["health"]["text"]}' + (f' · 等你 {len(vm["waits"])}' if vm["waits"] else "")
     put(stdscr, 0, 0, head, h, w, "h1" if vm["health"]["ok"] else "bad")
     put(stdscr, 1, 0, "─" * w, h, w, "line")
@@ -856,19 +870,17 @@ def draw(stdscr, vm, state):
         for y in range(top, bot + 1):
             put(stdscr, y, rail, "│", h, w, "line")
     x = rail + 2 if rail else 0
-    lines = detail_lines(ps[sel]) if ps else [("dim", 0, "没有登记过的项目。到仓库里运行 drover init <短名>")]
-    room = bot - top + 1
-    shown = lines[:room - 1] if len(lines) > room else lines
+    shown = lines[offset:offset + page]
     for i, (kind, indent, text) in enumerate(shown):
         put(stdscr, top + i, x + indent, text, h, w, kind)
     if len(lines) > room:
-        put(stdscr, top + len(shown), x, f"… 还有 {len(lines) - len(shown)} 行，窗口再高些", h, w, "dim")
+        put(stdscr, bot, x, f"PgUp↑{offset} PgDn↓{len(lines) - offset - len(shown)}", h, w, "dim")
     put(stdscr, h - 1, 0, state.get("msg", ""), h, w, "dim")
 
 
 # ============================================================ 按键
 REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重跑，看板不存自己的状态
-HELP = "↑↓/jk 选项目 · g 放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
+HELP = "↑↓/jk 选项目 · PgUp/PgDn 翻详情 · g 放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
 
 
 def run_drover(repo, *args):
@@ -905,8 +917,8 @@ def key_action(k, pv, state):
     单拆出来：喂键码就能验，尤其是 p 和 l ——它们按当前状态决定发哪一条，切反了就是真 bug。
     tui() 那边只剩 getch 和执行。
 
-    state 里只读两样：sel（选中第几个）、n（一共几个项目）。
-    → ("sel", 新下标) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
+    state 里读 sel（选中第几个）、n（一共几个项目），以及 draw 当帧写入的详情视口。
+    → ("sel", 新下标) | ("scroll", 新偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
       None = 这个键不认识，或者压根没有选中的项目：什么都不做，**也不重跑**——重跑要跑一圈
       git 和 corral，不能乱按一下就触发。"""
     sel, n = state.get("sel", 0), state.get("n", 0)
@@ -920,6 +932,11 @@ def key_action(k, pv, state):
         return ("refresh",)
     if not pv:
         return None
+    if k in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+        offset, _ = detail_viewport(state.get("detail_total", 0), state.get("detail_room", 0),
+                                    state.get("detail_offset", 0),
+                                    1 if k == curses.KEY_NPAGE else -1)
+        return ("scroll", offset)
     if k == ord("a"):
         return ("edit",)
     q = pv["queue"] or {}                                     # 没接队列的项目：当成没暂停、循环没开
@@ -951,6 +968,9 @@ def tui(stdscr, list_path):
             return
         if act[0] == "sel":
             state["sel"] = act[1]
+            continue
+        if act[0] == "scroll":
+            state["detail_offset"] = act[1]
             continue
         if act[0] == "edit":
             state["msg"] = edit_queue(stdscr, pv)
