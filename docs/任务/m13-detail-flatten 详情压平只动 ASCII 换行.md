@@ -96,3 +96,32 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ## 回复
 
 回复里只写：做完了哪些、测试结果、植入自检结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- `bin/drover-board`：只改 `detail_lines()` 的理由压平，连续 ASCII CR/LF 替换为一个空格，其他字符逐码位保留；旁注说明 Unicode 空白不能折叠。
+- `tests/drover-board.sh`：新增 7 组整串精确相等断言，覆盖末尾 NBSP、U+2028、U+2029、U+0085、`"\n".join(errors)`、连续及混合 CR/LF、首尾换行和原有空格/tab；每组另验输出不含 CR/LF。
+
+### RED → GREEN 和完整回归
+
+- 先只改测试，运行 `bash tests/drover-board.sh`：退出 1，`AssertionError: 详情理由被改写` 明确显示实际串结尾为 `feature/name`，预期为 `feature/name\xa0`。此时生产文件未改。
+- 改实现后同一命令退出 0，7 组新增断言和原有看板回归全部通过。
+- 运行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，最终退出 0：criteria **2 个 PASS 块**、drover **2 个 PASS 块**、install **9 项**、drover-board **13 个 PASS 块 + 17 项 check-result 测试**；新增 7 组断言位于现有记账块内，不另增加 PASS 块。
+- `bash -n tests/drover-board.sh` 和 `git diff --check` 均通过。所有命令均在前台等待结束。
+
+### 独立缺陷植入自检
+
+临时目录 `/tmp/drover-m13-mutation-jhiyjrx8` 中成对复制 `drover`、`drover-board`，两个覆盖变量均使用绝对路径。
+
+1. 仅把副本中的压平表达式改回 `" ".join(r["why"].split())`，先经 `compile()` 确认语法有效，再运行 `bash tests/drover-board.sh`：退出 **1**，命中新增 NBSP 整串相等断言，无导入或 fixture 错误；日志为 `mutant.log`。
+2. 恢复副本后核对两个脚本与工作区逐字节一致，使用相同路径重跑：退出 **0**，13 个 PASS 块及 17 项测试全部通过；日志为 `restored.log`。临时缺陷未写入工作区、未提交。
+
+### 实现时的取舍
+
+- 用已有 `re` 模块的 `re.sub(r"[\r\n]+", " ", why)`；不做 `strip()`，保留换行两侧原有空格、tab 和 Unicode 字符，首尾 CR/LF 也只替换成一个空格。使用局部变量保持表达式简洁，不新增抽象、配置或模块。
+- 复用已有合成项目，在 `detail_lines()` 返回文本处比整串；清空测试副本的 `crew`，使其他标成 `bad` 的 agent 行不混入目标结果。不增加真实 git/agent 调用或转义显示格式。
+
+### 遇到的问题、没做的事
+
+- 首次测试运行还选中了 fixture 中 `eta/ghost` 的 `bad` 行，不能单凭那次失败作为 RED；清空副本 `crew` 后，在生产代码未改时重跑，确认只有末尾 NBSP 缺失导致失败。未遇到绘制报错，没有需要主控决定的事项。
+- 未改 `criteria()`、`criteria_report()`、`view_model()`、其他判据、通知摘要、布局配色、滚动或刷新；未处理欠账 13，未改 ROADMAP/HANDOFF，未操作真实项目、agent、安装路径或 launchd；只在 `m13-detail-flatten` 提交，不合并、不推送。
