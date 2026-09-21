@@ -247,3 +247,15 @@ drover done： ✓ 3 验收命令过了 : `for t in criteria drover ...`   ← �
 - **缺陷植入自检**：成对复制实现到临时目录，仅移除捕获列表中的 `UnicodeError`，先 `compile()` 验证语法，再以 `DROVER_BIN` / `DROVER_BOARD_BIN` 指向副本运行新测试。确认 RED：`AssertionError: 1 != 8`，且 traceback 明确为发布处 `UnicodeEncodeError`；工作区实现字节未变。
 - **验证**：`python3 tests/check-result.py CheckResult.test_publish_encoding_error_preserves_done` 与 `/usr/bin/python3 tests/check-result.py CheckResult.test_publish_encoding_error_preserves_done` 均通过；`for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done` 四套件全绿、退出 0，其中聚焦测试 16 项通过；Python `compile()` 和 `git diff --check` 通过。所有命令前台运行并等待退出。
 - **范围**：仅改发布块这一行、增加真实回归、追加本记录；未改任务格式、判据、队列逻辑、tmp 清扫或并发 done；只在 `m10-check-result` 提交，不合并、不推送。无新增待定事项。
+
+## 返工记录（第 3 轮）
+
+2026-09-21，按用户裁定，仅删除 `tests/check-result.py` 的 `test_publish_encoding_error_preserves_done` 整个方法，包含内部 `done_bytes` / `completed` 两个局部辅助函数；其余 15 条测试字节不变。
+
+原因：该测试的全流程退出码受调用者 `PYTHONIOENCODING` 影响。按主控复现，未设置时，发布旁路虽已正确报告 WARNING，同一畸形输入仍会在后续 `cmd_done` 的 `print(line)` 处触发既有 `UnicodeEncodeError`；改动前的 main 也有该问题。因此第 2 轮的「与正常基线退出码一致」断言被范围外的旧问题污染，用户决定删除此测试，不继续扩大修复。
+
+保留 `bin/drover` 中的 `except (OSError, UnicodeError)` 和现有 WARNING；`bin/drover-board` 完全未改。未修 print 的既有问题，未动其它测试、tmp 清扫或并发 done。
+
+验证：以 `env -u PYTHONIOENCODING bash --noprofile --norc -c 'test -z "${PYTHONIOENCODING+x}" || exit 1; for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done'` 前台运行并等待退出，确认变量未设置，四套件全绿、退出 0，聚焦测试 15 项全部通过。另按字节校验测试文件恰好只删该方法、两个实现文件与 HEAD 一致，`git diff --check` 通过。
+
+只在 `m10-check-result` 提交，不合并、不推送；无新增待定事项。
