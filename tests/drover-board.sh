@@ -99,6 +99,14 @@ printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## �
   printf '{"t": %s, "ev": "drop", "id": "T6", "title": "迁移到新日志库", "key": "迁移到新日志库", "reason": "和 T2 冲突"}\n' "$((now - 7700))"
   printf '{"t": %s, "ev": "start", "id": "T8", "title": "把 CSV 导入改成流式", "body": "约束：内存不超过 200MB", "key": "把 CSV 导入改成流式", "sha": "%s", "main": "%s"}\n' "$((now - 3600))" "$EB" "$EH"
 } > "$E/review/tasks.state"
+# eta 的任务文件：T5 那件同前缀有两份，「交叉审查」那份排序在前、**没有「路由：」行**
+# （真实 docs/任务/ 里就是这个形状），挑的应该是真带那一行的第二份。T7 那件没有任务文件。
+mkdir -p "$E/repo/docs/任务"
+printf 'TASK_FILE_DIR=docs/任务\n' >> "$E/repo/.drover.conf"
+printf '# 交叉审查：给导出加进度条\n\n2026-09-21，eta/main 交给 eta/review-bar。\n你是被委派的审查者：只读审查，不写功能代码。\n' \
+  > "$E/repo/docs/任务/给导出加进度条 交叉审查.md"
+printf '# 任务：给导出加进度条\n\n2026-09-21，eta/main 交给 eta/dev-bar。\n路由：重 / 交叉审查要（路由：档=拿不准，交叉审查=要（0.9）；推翻：档位路由拿不准，主控定为重）。\n' \
+  > "$E/repo/docs/任务/给导出加进度条 加个进度条.md"
 TH="${TMP}/theta"; THB=$(git -C "$TH/repo" rev-parse HEAD~1)
 printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\n' > "$TH/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T3", "title": "补登录接口的回归测试（带\\"引号\\"）", "body": "", "key": "补登录接口的回归测试（带\\"引号\\"）", "sha": "%s"}\n' "$((now - 2000))" "$THB"
@@ -231,6 +239,12 @@ is 'p("eta/repo")["queue"]["finished"][1]["commits"]' 1 '记账·提交数用 ta
 # 自动模式（done 事件不带 gate，没有 go 事件）：这一项**不显示**，不是 0
 is 'p("eta/repo")["queue"]["finished"][1]["wait"]' '' '自动模式没有 go 事件：等放行时长不显示，不是 0'
 lacks '返工' '提交数就叫提交数：任何文案里都不许把它说成返工轮数（ROADMAP 待定 3：记不出来）'
+# 路由也进「做完的」栏（ROADMAP 待定 3 的记账内容里本来就有「路由判了什么 / 推翻没有」）。
+# 同前缀两份时挑**含「路由：」行**的那一份：排序第一的「交叉审查」那份没有那行，要跳过它。
+is 'p("eta/repo")["queue"]["finished"][2]["route"]["tier"]' 重 '「做完的」行也带路由：同前缀两份里挑含「路由：」行的那份'
+is 'p("eta/repo")["queue"]["finished"][2]["route"]["cross"]' True '交叉审查要'
+is 'p("eta/repo")["queue"]["finished"][2]["route"]["overridden"]' True '主控推翻了路由'
+is 'p("eta/repo")["queue"]["finished"][1]["route"]' None '没有任务文件的那件：路由那一项不显示，照样记账'
 # 放弃的那件不记账：它没做完，耗时和提交数都无从谈起
 is 'p("eta/repo")["queue"]["finished"][0]["dropped"]' True 'the dropped row stays a dropped row'
 # 时长只有一套口径：ago() 那套（秒 / 分 / 时分 / 天），耗时和等放行时长都走它，不另发明格式。
@@ -251,9 +265,16 @@ pv = next(x for x in B.view_model(B.collect(sys.argv[2]))["projects"] if x["name
 rows = [t for _, _, t in B.detail_lines(pv)]
 t5 = next(t for t in rows if t.startswith("T5 "))
 assert "20m" in t5 and "0 个提交" in t5 and "等放行 5s" in t5, t5
+assert "重档（推翻）" in t5, f"「做完的」一行要能看出档位和主控推翻了路由：{t5}"
+# 一行一件，挤：路由紧跟标题排在记账前面，80 列窄屏（详情区就剩 52 格）截完之后，
+# 编号、标题、路由、耗时都还在——掉的是三项里最不要紧的「等放行时长」
+narrow = B.trunc(t5, 52)
+assert narrow.startswith("T5 给导出加进度条") and "重档" in narrow and "20m" in narrow, narrow
+assert B.width(t5) <= 60, f"「做完的」那一行别再长了（{B.width(t5)} 格）：{t5}"
 t7 = next(t for t in rows if t.startswith("T7 "))
 assert "40s" in t7 and "1 个提交" in t7, t7
 assert "等放行" not in t7, f"自动模式不该有等放行时长：{t7}"
+assert "档" not in t7, f"没有任务文件的那件不该冒出路由：{t7}"
 assert not any("返工" in t for t in rows), rows
 PY2
 echo 'PASS 「做完的」栏记账：耗时 / 提交数 / 等放行时长，口径沿用 ago()'

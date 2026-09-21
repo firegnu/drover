@@ -255,41 +255,34 @@ TASK_NO_OVERRIDE = re.compile(r'^(?:无|没有)(?:[。；;.、,，]|$)')
 ROUTE_HEAD = 20         # 只看任务文件开头这些行：正文里举例子、引用格式的地方不算数
 
 
-def task_file_path(repo, body, title, task_dir):
-    """这件活的任务文件在哪 → 绝对路径，找不到就 ""。两条路：
+def task_files(repo, body, title, task_dir):
+    """这件活的任务文件候选，按优先顺序 → [绝对路径]。两条路：
 
-      1. 队列条目正文里写了「任务文件：<相对路径>」就用它（和「验收：」同一套机制）；
-      2. 没写，就在 TASK_FILE_DIR 里找**文件名以队列条目标题开头**的 .md。
+      1. 队列条目正文里写了「任务文件：<相对路径>」就**只认它**（和「验收：」同一套机制），
+         不再往下走前缀匹配——它没有那一行就是没有；
+      2. 没写，就是 TASK_FILE_DIR 里文件名以队列条目标题开头的那些 .md，按文件名排序。
 
-    两条都落空就是 ""。这只给显示用，找不到不是错。"""
+    第 2 条给的是一串而不是一个：同一个前缀底下常常不止一份（交叉审查、审查意见都跟着任务
+    同名开头，真实的 docs/任务/ 里就有），排序第一的那份未必是任务文件本身。挑哪一份由
+    task_route 定——它挑第一份真带「路由：」行的。"""
     m = TASK_FILE.search(body or "")
     if m:
         p = os.path.join(repo, os.path.expanduser(m.group(1)))
-        return p if os.path.isfile(p) else ""
+        return [p] if os.path.isfile(p) else []
     if not task_dir or not title:
-        return ""
+        return []
     d = os.path.join(repo, os.path.expanduser(task_dir))
     try:
-        names = sorted(n for n in os.listdir(d) if n.endswith(".md") and n.startswith(title))
+        return [os.path.join(d, n) for n in sorted(os.listdir(d))
+                if n.endswith(".md") and n.startswith(title)]
     except OSError:
-        return ""
-    return os.path.join(d, names[0]) if names else ""
+        return []
 
 
-def task_route(repo, body, title, task_dir):
-    """任务文件开头那行「路由：…」→ {"tier": 档位, "cross": 要不要交叉审查, "overridden": 主控推翻没有}，
-    任何一步不成立就 None（页面上这一项不显示）。
-
-    **只进显示，绝不参与任何判断**（ROADMAP 待定 4）：不进完成判据、不进 wants_human、不进
-    loop_tick 的任何分支。它依赖内循环的一个书写格式，算擦边，但不要求主控多做事；漏读只是
-    少显示一项，不影响判完成——所以不需要收尾记号那条例外的三条支撑。
-
-    降级是硬要求：没配 TASK_FILE_DIR、目录不在、文件找不到、没有那一行、格式对不上、编码坏了
-    ——一律返回 None，一个异常都不许漏出去，看板不能因为一行文案崩掉。"""
+def route_line(path):
+    """一份任务文件开头那行「路由：…」→ {"tier": 档位, "cross": 要不要交叉审查,
+    "overridden": 主控推翻没有}；没有那一行、读不了、编码坏了都是 None。"""
     try:
-        path = task_file_path(repo, body, title, task_dir)
-        if not path:
-            return None
         with open(path, encoding="utf-8") as f:
             head = [next(f, "") for _ in range(ROUTE_HEAD)]
     except Exception:
@@ -304,6 +297,22 @@ def task_route(repo, body, title, task_dir):
         return {"tier": m.group(1), "cross": m.group(2) == "要",
                 "overridden": bool(t) and not TASK_NO_OVERRIDE.match(t)}
     return None
+
+
+def task_route(repo, body, title, task_dir):
+    """这件活的路由：候选文件里第一份带「路由：」行的那一份怎么写的 → {tier, cross, overridden}，
+    一份都挑不出来就 None（页面上这一项不显示）。
+
+    **只进显示，绝不参与任何判断**（ROADMAP 待定 4）：不进完成判据、不进 wants_human、不进
+    loop_tick 的任何分支。它依赖内循环的一个书写格式，算擦边，但不要求主控多做事；漏读只是
+    少显示一项，不影响判完成——所以不需要收尾记号那条例外的三条支撑。
+
+    降级是硬要求：没配 TASK_FILE_DIR、目录不在、文件找不到、没有那一行、格式对不上、编码坏了
+    ——一律返回 None，一个异常都不许漏出去，看板不能因为一行文案崩掉。"""
+    try:
+        return next((r for r in (route_line(p) for p in task_files(repo, body, title, task_dir)) if r), None)
+    except Exception:
+        return None
 
 
 def task_holds(evs):
@@ -518,6 +527,7 @@ def task_view(repo, conf, p):
     qtext = read(f"{d}/queue.md")
     if qtext is None:
         return None
+    task_dir = conf.get("TASK_FILE_DIR", "")       # 找任务文件读「路由：」行用的，纯显示
     tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
     t = current or tasks.get(awaiting)
     card = None
@@ -540,7 +550,7 @@ def task_view(repo, conf, p):
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW),
                 # 任务文件开头那行「路由：…」，只显示，不参与任何判断；读不出来就是 None
-                "route": task_route(repo, t.get("body", ""), t.get("title", ""), conf.get("TASK_FILE_DIR", ""))}
+                "route": task_route(repo, t.get("body", ""), t.get("title", ""), task_dir)}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
         if f["status"] == "dropped":
@@ -552,6 +562,8 @@ def task_view(repo, conf, p):
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
                          "commits": len(task_commits(repo, f.get("start"), f.get("end"))),
                          "wait": task_span(f.get("t1"), f.get("t2")),   # 自动模式没有 go 事件：这一项没有，不是 0
+                         # 路由也记进来（待定 3 列的记账内容里就有「路由判了什么 / 推翻没有」）
+                         "route": task_route(repo, f.get("body", ""), f.get("title", ""), task_dir),
                          "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     try:
@@ -695,7 +707,7 @@ def queue_vm(p, tv):
                       "held": task_held(b, tv["holds"])} for i, b in enumerate(tv["todo"])],
             "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
                           "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", ""),
-                          "commits": f.get("commits", 0), "wait": f.get("wait", "")}
+                          "commits": f.get("commits", 0), "wait": f.get("wait", ""), "route": f.get("route")}
                          for f in tv["finished"]]}
 
 
@@ -757,6 +769,17 @@ def put(stdscr, y, x, text, h, w, kind=""):
         stdscr.addstr(y, x, t, COLORS.get(kind, 0))
 
 
+def route_tier(rt):
+    """档位写成「重档」「常规档」——主控写的就是「重」「常规」，补个「档」字读着顺。"""
+    return rt["tier"] + ("" if rt["tier"].endswith("档") else "档")
+
+
+def route_chip(rt):
+    """路由缩成一个词：「重档」「常规档（推翻）」。没有路由就是空字符串，整项不出现。
+    「做完的」是一行一件，写不下全的；全的在「当前这件活」里。"""
+    return (route_tier(rt) + ("（推翻）" if rt["overridden"] else "")) if rt else ""
+
+
 def detail_lines(pv):
     """选中项目的详情，从上到下：等你 → 当前这件活 → 队列 → 做完的。
     → [(样式, 缩进, 文字)]，draw 照着画就行。"""
@@ -778,8 +801,7 @@ def detail_lines(pv):
         out.append(("dim", 2, c["progress"]))
         if c["route"]:
             rt = c["route"]
-            out.append(("dim", 2, f'路由 {rt["tier"]}' + ("" if rt["tier"].endswith("档") else "档")
-                                  + f' · 交叉审查{"要" if rt["cross"] else "不要"}'
+            out.append(("dim", 2, f'路由 {route_tier(rt)} · 交叉审查{"要" if rt["cross"] else "不要"}'
                                   + ("  · 主控推翻了路由" if rt["overridden"] else "")))
         out.append(("", 2, f'判据 {c["met"]}'))
         for r in c["criteria"]:
@@ -795,8 +817,10 @@ def detail_lines(pv):
     out.append(("h2", 0, f'做完的 · {q["counts"]["done"]}'
                          + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else "")))
     for f in q["finished"]:
-        # 记账：耗时 · 提交数 · 等放行时长。最后一项只有放行模式才有，没有就整项不出现
-        acct = " · ".join(x for x in (f["span"], f'{f["commits"]} 个提交',
+        # 记账：路由 · 耗时 · 提交数 · 等放行时长。一行一件，挤——路由缩到「档位（推翻）」两三个字，
+        # 而且排在记账前面：窄屏截行是从尾巴截的，掉的先是三项里最不要紧的「等放行时长」。
+        # 全须全尾的那份在「当前这件活」里（那里一件活占好几行，写得开）。
+        acct = " · ".join(x for x in (route_chip(f["route"]), f["span"], f'{f["commits"]} 个提交',
                                       f'等放行 {f["wait"]}' if f["wait"] else "") if x)
         out.append(("dim", 2, f'{f["id"]} {f["title"]}  '
                               + (f'放弃：{f["reason"]}' if f["dropped"] else acct)))
