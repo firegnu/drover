@@ -137,3 +137,15 @@ drover 眼里： 'feature/merged'
 1. **`split("\n")` 对 `for-each-ref` 输出的假设**：末尾换行产生的空串靠 `if not b` 跳过。ref 名里能不能出现别的东西让这个切分失效（比如 `\r`）？`%(refname)` 的输出保证是什么？
 2. **去前缀用的是固定长度切片** `b[len("refs/heads/"):]`。`for-each-ref refs/heads/` 保证每条都带这个前缀吗？有没有路径能拿到不带前缀的 ref。
 3. **`main` 的排除改成比完整 ref** 之后，`MAIN_BRANCH` 若被配成别的值（现在硬编码 `"main"`）会不会有层级错配。
+
+## 返工记录
+
+- 按交叉审查第 1 条只补测试，生产代码没有改动。开工执行 `git pull --ff-only /Users/firegnu/Developer/personal_projs/drover m12-ref-names`，返回 `Already up to date.`；实际分支上的字节码清理提交为 `66a4610`（消息中提到的 `5f45ba8` 在本地不存在），已确认 `.pyc` 不再被跟踪且 `.gitignore` 已含 `__pycache__/`、`*.pyc`。
+- `tests/criteria.sh` 新增两个独立合成仓库：`branch-tag` 为 early → base → pending，main 停在 base、`feature/task` 指向 pending、同名 tag 指向 early；`main-tag` 的 main 同样停在 base、`feature/task` 指向 pending、tag main 指向 pending。两例都精确断言本次分支为 `["feature/task"]`、遗留分支和查询错误为空、门 2 为 False、理由为 `还没合进 main：feature/task`。
+- `env -u PYTHONIOENCODING bash tests/criteria.sh`：退出码 0。此次是测试补强，正确生产实现不应先红；有效性通过以下独立缺陷植入验证。
+- 植入自检使用标准库 Python 临时目录，将 `drover` 和 `drover-board` 成对复制，两个 `DROVER_*_BIN` 均为绝对路径；未改副本的判据套件先以退出码 0 通过，再分别从原实现植入并运行 `bash tests/criteria.sh`：
+  - (a) 仅将第一次 `merge-base --is-ancestor base_sha b` 的 `b` 改成 `b[len("refs/heads/"):]`：退出码 1，准确失败于 `AssertionError: branch-tag current branches: []`，抓到本次分支被错误排除。
+  - (b) 仅将第二次查询目标 `f"refs/heads/{MAIN_BRANCH}"` 改成 `MAIN_BRANCH`：退出码 1，准确失败于 `AssertionError: main-tag must block pending branch`；变体误判 True，理由为 `1 个都已经是 main 的祖先：feature/task`。
+- 两个变体都先经 `compile()` 确认语法有效，失败输出不含 `SyntaxError` / `FileNotFoundError`，无吞断言的异常处理；没有在工作区生产文件中植入缺陷。
+- `env -u PYTHONIOENCODING bash -c 'for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done'`：退出码 0，四套全绿（含隔离安装 9 项、核对记录 17 项）。所有命令均等待前台完成，未设置 `PYTHONIOENCODING`。
+- `git diff --check` 通过；本轮仅修改测试和本任务文件。未改生产逻辑、判据语义、ROADMAP；审查第 2 条详情折叠和第 4 条其它 main 短名查询保持不动。无新增设计取舍、无需主控决定；只在 `m12-ref-names` 提交，不合并、不推送，不再发起复核。

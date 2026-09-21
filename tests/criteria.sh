@@ -143,6 +143,40 @@ assert row["ok"] is False and row["why"] == "还没合进 main：" + separated, 
 assert B.task_branches(repo, base) == ([separated, "feature/merged", branch], [], [])
 PY2
 
+# ---- 2. 两次祖先查询分别消歧：分支同名 tag 不能改变分类，main 同名 tag 不能冒充合入 ----
+python3 - "${BOARD}" "${TMP}" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+for scenario, tag_name in [("branch-tag", "feature/task"), ("main-tag", "main")]:
+    repo = str(pathlib.Path(sys.argv[2]) / scenario)
+    pathlib.Path(repo).mkdir()
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                              text=True, check=True).stdout.rstrip("\n")
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+    git("commit", "-q", "--allow-empty", "-m", "early")
+    early = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("checkout", "-qb", "feature/task")
+    git("commit", "-q", "--allow-empty", "-m", "pending")
+    pending = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    # 第一个场景的 tag 不含 base；第二个场景的 tag 冒充已包含 pending 的 main。
+    git("tag", tag_name, early if scenario == "branch-tag" else pending)
+    assert git("rev-parse", "refs/heads/main") == base, scenario
+    branches, excluded, errors = B.task_branches(repo, base)
+    assert branches == ["feature/task"], f"{scenario} current branches: {branches!r}"
+    assert excluded == [], f"{scenario} excluded branches: {excluded!r}"
+    assert errors == [], f"{scenario} query errors: {errors!r}"
+    row = B.criteria(repo, base, "")[1]
+    assert row["ok"] is False, f"{scenario} must block pending branch: {row!r}"
+    assert row["why"] == "还没合进 main：feature/task", f"{scenario} reason: {row!r}"
+PY2
+
 # ---- 3. 验收命令退出码 0 → 过 ----
 [ "$(line1 "${BASE}" 'true')" = "1:ok 2:ok 3:ok" ] \
   || fail "passing check: $(line1 "${BASE}" 'true')"
