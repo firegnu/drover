@@ -135,3 +135,40 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ### 遇到的问题、没做的事
 
 唯一与任务原描述不同的是正文已不再进入验收命令，以上测试拆分保留了现行设计和原回归要守的发布旁路。无需主控另作设计决定。未处理欠账 9 / 10，未改 ROADMAP、看板或判据逻辑，未装依赖、未安装服务、未接触真实项目或 corral；只提交当前分支，不合并、不推送。所有命令都已在前台等待结束。
+
+## 主控审查
+
+2026-09-21，drover/main 审 `9d155a2`。**结论：可以合并，0 条必须改。**
+
+生产代码只加了一个 3 行的 `print_text()` 和 3 个调用点（`issue()` 的正文回显、`cmd_done()` 的失败理由和成功报告），`re` 早就导入了。范围干净：`bin/drover`、`tests/check-result.py`、本任务文件三个，没有 `.pyc`。四套主控自己重跑全绿，`check-result` 从 17 项涨到 20 项，数字和完成记录对得上。
+
+**独立植入自检**：把 `print_text` 退化成裸 `print(text)`，`check-result` 当场 1 failure + 2 errors，报的正是 `UnicodeEncodeError: ... position 17: surrogates not allowed`，守得住。
+
+**这件活的关键一条我单独验了**——老那条回归就是栽在「依赖调用者的 `PYTHONIOENCODING`」上才被 `84f76c3` 撤掉的，所以新写法必须不吃环境。四种环境各跑三条新测试：
+
+| `PYTHONIOENCODING` | `test_surrogate_body_preserves_done` | `..._manual_resend` | `test_publish_encoding_error_preserves_done` |
+|---|---|---|---|
+| 不设 | 绿 | 绿 | 绿 |
+| `ascii:strict` | 绿 | 绿 | 绿 |
+| `utf-8:surrogateescape` | 绿 | 绿 | 绿 |
+| `latin-1:strict` | 绿 | 绿 | 绿 |
+
+做法是测试自己用 `-I` 忽略环境变量、再显式把标准流固定成严格 UTF-8。**欠账 11 的连带项到此了结**：`m10` 那个 `except (OSError, UnicodeError)` 重新有测试守着了。
+
+### 取舍表态
+
+- 「代理码只在输出时转义成 `\udxxx`，原始正文和理由不动」——同意，和 `m13` 刚定的那条边界（显示层不许改写数据）一致。
+- 「只处理确实承载任务正文 / 判据理由的三个输出点，其余 print 不扩展」——同意，这正是任务文件里写的范围。
+- 「新发布回归给内存里的 `CHECK_CMD` 赋含 U+DCFF 的 shell 注释来触发真实 JSON 写入编码错误，不伪造异常」——同意。本分支已经没有正文覆盖 `CHECK_CMD` 的语法（`29ed637` 删了），旧回归不能原样搬，这个替代路径是真实触发、不是 mock，比原来更好。
+
+### 顺手实测发现的一条，记欠账，不挡合并
+
+`drover list` 仍会被**标题**里的孤立代理码打崩（`bin/drover:591`，`print(f"  {current['id']} {current['title']}…")`）：
+
+```
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 12
+```
+
+合成仓库实测：标题带代理码、正文干净时，**`drover done` 不崩**（这件活的目标达成，退出码 8、报告完整），但 `drover list` 退出 1。
+
+**不挡合并**，两条理由：① 既有问题，`main` 一模一样会崩，本次没制造也没扩大；② 任务文件里我自己写的「只处理会吃到任务正文 / 判据理由的那些，其余不碰」把它划在范围外。按分级标准这是「建议改」，进欠账清单。
