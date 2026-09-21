@@ -183,7 +183,7 @@ def wants_human(p):
     if a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
         return []
     rows = [find_done_mark(p["repo"], tv["card"].get("main", ""), p.get("done_mark", ""))] + \
-        criteria(p["repo"], tv["card"].get("main", ""), p.get("branch_glob", ""),
+        criteria(p["repo"], tv["card"].get("main", ""),
                  task_check_cmd(tv["card"].get("body"), p.get("check_cmd", "")), do_check=False)
     return [r for r in rows if r["ok"] is False]
 
@@ -383,11 +383,20 @@ MAIN_BRANCH = "main"
 CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，不能把 drover 卡住
 
 
-def milestone_branches(repo, glob_pat, base_sha):
-    """glob 匹配的分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
-    if not glob_pat:
-        return [], [], []
-    out = git(repo, "branch", "--list", "--format=%(refname:short)", glob_pat).splitlines()
+def task_branches(repo, base_sha):
+    """所有本地分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+            capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", None) or ""
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
+        return [], [], [f"枚举本地分支失败：{exc}" + (f"\n{detail}" if detail else "")]
+    if result.returncode or "warning: ignoring broken ref" in result.stderr:
+        return [], [], [f"枚举本地分支失败（git 退出码 {result.returncode}）：{result.stderr.strip()}"]
+    out = result.stdout.splitlines()
     current, excluded, errors = [], [], []
     for b in (b.strip() for b in out):
         if not b or b == MAIN_BRANCH:
@@ -415,10 +424,10 @@ def run_check(repo, cmd):
     return r.returncode, tail
 
 
-def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
+def criteria(repo, base_sha, check_cmd, do_check=True):
     """三条完成判据的只读核对 → [{n, name, ok, why}]。
     ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
-    全程只读：只跑 rev-parse / branch --list / merge-base，外加人自己配的验收命令。
+    全程只读：只跑 rev-parse / for-each-ref / merge-base，外加人自己配的验收命令。
 
     `do_check=False` 时第 3 条不跑命令、直接标「没查」。**渲染页面时必须用这个**：第 3 条
     可能是整套测试，页面 30 秒刷一次、每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。
@@ -436,23 +445,20 @@ def criteria(repo, base_sha, glob_pat, check_cmd, do_check=True):
                              f"还停在 {head[:7]}，送任务之后没有前进" if base_sha else
                              "没有记下送任务之前的 sha，没法比")})
 
-    name2 = "里程碑分支都合进去了"
-    if not glob_pat:
-        rows.append({"n": 2, "name": name2, "ok": None, "why": "没配 BRANCH_GLOB：这个项目不用里程碑分支"})
-    elif not base_sha:
+    name2 = "这次建的分支都合进去了"
+    if not base_sha:
         rows.append({"n": 2, "name": name2, "ok": None,
                      "why": "没有 base_sha：没记下送任务之前的 sha，无法判断哪些分支是这次的"})
     else:
-        brs, excluded, errors = milestone_branches(repo, glob_pat, base_sha)
+        brs, excluded, errors = task_branches(repo, base_sha)
         if errors:
             rows.append({"n": 2, "name": name2, "ok": False, "why": "\n".join(errors)})
         elif not brs:
-            # 对空集合「全都合进去了」恒真。前缀填错、分支命名换了、这件活压根没建分支，
-            # 从 git 这边看一模一样——都不能当作通过。见 ROADMAP 完成判据那一节。
-            rows.append({"n": 2, "name": name2, "ok": False,
-                         "why": (f"`{glob_pat}` 匹配到 {len(excluded)} 个，但全部被排除（不包含 base_sha，按遗留分支处理）："
+            # 合并后删掉分支是正常收尾；遗留分支仍逐个列出，便于核对排除是否合理。
+            rows.append({"n": 2, "name": name2, "ok": True,
+                         "why": (f"{len(excluded)} 个分支全部被排除（不包含 base_sha，按遗留分支处理）："
                                  + "、".join(excluded)) if excluded else
-                                f"`{glob_pat}` 一个都没匹配到。是写错了，还是这件活没建分支？"})
+                                "没有未合并的分支"})
         else:
             left = [b for b in brs
                     if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", b, MAIN_BRANCH],
@@ -585,7 +591,6 @@ def project_state(repo, conf):
          "state": "空闲", "since": None, "waiting": "", "needs_me": False, "human": []}
     p["last_activity"] = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
     p["main_agent"] = conf.get("MAIN_AGENT", "")
-    p["branch_glob"] = conf.get("BRANCH_GLOB", "")
     p["done_mark"] = conf.get("DONE_MARK", "收尾").strip()
     p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
@@ -683,7 +688,7 @@ def card_vm(p, tv):
     if not c:
         return None
     rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""))] + \
-        criteria(p["repo"], c["main"], p.get("branch_glob", ""),
+        criteria(p["repo"], c["main"],
                  task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
     last = ago(c["last_at"])
     return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],

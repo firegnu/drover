@@ -61,12 +61,12 @@ MOCK
 chmod +x "${TMP}/corral"
 # eta 派出去的那个 agent 跑在一个 worktree 里（corral-dispatch 就是这么干的）。
 # 看板以前会把 corral ls 报的 cwd 顺着 git worktree list 映射回项目，现在不了；这个 worktree
-# 留着是给判据第 2 条用的（里程碑分支有提交、还没合回 main）
+# 留着是给判据第 2 条用的（本次分支有提交、还没合回 main）
 git -C "${TMP}/eta/repo" worktree add -q -b m1-backend "${TMP}/eta/wt-m1" >/dev/null 2>&1
-# 里程碑分支上有提交、还没合回 main —— 判据第 2 条应当不过
+# 本次分支上有提交、还没合回 main —— 判据第 2 条应当不过
 printf 'wip\n' >> "${TMP}/eta/wt-m1/a.py"
 git -C "${TMP}/eta/wt-m1" add a.py; git -C "${TMP}/eta/wt-m1" commit -qm 'm1 wip'
-printf 'BRANCH_GLOB=m[0-9]*\nCHECK_CMD=pytest -q\n' >> "${TMP}/eta/repo/.drover.conf"
+printf 'CHECK_CMD=pytest -q\n' >> "${TMP}/eta/repo/.drover.conf"
 export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_ETA="${TMP}/eta/repo" MOCK_ETA_WT="${TMP}/eta/wt-m1" MOCK_DIR="${TMP}"
 export DROVER_CORRAL_BIN="${TMP}/corral"
 # 引擎每跳都会发「等你」通知：记录写 ~/.drover/board-notified.json、命令默认是 osascript。
@@ -686,7 +686,7 @@ printf 'working\n' > "${TMP}/iota.state"; rm -f "${TMP}/check.log"; tick2
 printf 'idle\n' > "${TMP}/iota.state"; tick2
 [ "$(done_ev)" = 0 ] || fail 'a task whose criteria are unmet must not be marked done'
 # main 前进了，三条门都过了，但主控还没打收尾记号 → 依据不成立 → 绝不自动记 done。
-# 这条挡的正是最弱的默认配置：没配 BRANCH_GLOB / CHECK_CMD 时，门只剩「main 前进了」，
+# 这条挡的正是最弱的默认配置：没配 CHECK_CMD 且没有其它分支时，只要 main 前进门就全开，
 # 主控提一行注释就能骗过去。见 ROADMAP 完成判据那一节。
 printf 'b\n' >> "${IO}/repo/a.py"; git -C "${IO}/repo" add .; git -C "${IO}/repo" commit -qm work
 rm -f "${TMP}/iota.checked" "${IO}/review/.criteria-checked"
@@ -763,8 +763,8 @@ task_file() {   # <路由那一行> <落到哪个文件>：一份像模像样的
 }
 kroute() { vm "${TMP}/projects-kappa"; }
 # 路由行在不在、解析成不成功，判据都必须一个字不变：kappa 是「收尾记号没有 + main 没前进」，
-# 两条不适用（没配 BRANCH_GLOB、没有验收命令），所以永远是 0/2。每一步都顺手验一遍。
-kmet() { is 'p("kappa")["queue"]["card"]["met"]' 0/2 "$1：完成判据一个字都没变"; }
+# 分支为空通过、验收命令不适用，所以永远是 1/3。每一步都顺手验一遍。
+kmet() { is 'p("kappa")["queue"]["card"]["met"]' 1/3 "$1：完成判据一个字都没变"; }
 
 kastate ""
 conf_dir 'docs/任务'
@@ -864,10 +864,10 @@ assert strip(with_route) == strip(without), "路由行影响到了别的东西�
 # 判断那一路上碰一下路由就当场炸：判据、收尾记号、「等人」、外层循环的一跳，一个都不许碰
 p = B.collect(projects)[0]
 rows = [B.find_done_mark(p["repo"], p["tasks"]["card"]["main"], p["done_mark"])] + \
-    B.criteria(p["repo"], p["tasks"]["card"]["main"], p["branch_glob"], "", do_check=False)
+    B.criteria(p["repo"], p["tasks"]["card"]["main"], "", do_check=False)
 B.task_route = lambda *a, **k: 1 / 0
 assert [B.find_done_mark(p["repo"], p["tasks"]["card"]["main"], p["done_mark"])] + \
-    B.criteria(p["repo"], p["tasks"]["card"]["main"], p["branch_glob"], "", do_check=False) == rows
+    B.criteria(p["repo"], p["tasks"]["card"]["main"], "", do_check=False) == rows
 B.wants_human(p)                                           # 「等人」也只看 git 和 corral
 B.loop_tick(projects)                                      # 主控空闲 + 有收尾记号 → 该自己记 done
 PY2

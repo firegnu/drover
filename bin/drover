@@ -36,7 +36,7 @@
 退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
         2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
 配置见 .drover.conf：MAIN_AGENT 送给谁（空 = 不自动送，打出来让人粘）、TASK_GATE 放行模式、
-BRANCH_GLOB 和 CHECK_CMD 是完成判据第 2、3 条用的。
+CHECK_CMD 是完成判据第 3 条用的。
 """
 import importlib.machinery
 import importlib.util
@@ -76,7 +76,7 @@ GATE = True
 
 
 def setup():
-    global REPO, D, Q, S, PAUSED, LOOP, GATE, BRANCH_GLOB, CHECK_CMD, MAIN_AGENT, DONE_MARK
+    global REPO, D, Q, S, PAUSED, LOOP, GATE, CHECK_CMD, MAIN_AGENT, DONE_MARK
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
         die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 drover。")
@@ -88,7 +88,6 @@ def setup():
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
-    BRANCH_GLOB = conf.get("BRANCH_GLOB", "")        # 判据第 2 条；空 = 这个项目不用里程碑分支
     CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条的默认值；队列条目的「验收：」行可覆盖
     MAIN_AGENT = conf.get("MAIN_AGENT", "")          # 送给谁；空 = 不自动送，打出来让人粘
     DONE_MARK = conf.get("DONE_MARK", "收尾").strip()  # 收尾记号的前缀；空 = 这个项目不打记号，判不出完成
@@ -203,7 +202,7 @@ def task_check_cmd(body):
 def check_done(task):
     """→ 问题列表。只读核对 git，不听主控一句话。
     三条门见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
-    「不适用」的那几条（没配 BRANCH_GLOB、没有验收命令）不算不过，但会照原样报出来——
+    「不适用」的那几条（没有 base_sha、没有验收命令）不算不过，但会照原样报出来——
     3 条里过了几条要看得见，不能让跳过的悄悄混成通过。
 
     **收尾记号（依据）不在这里拦。** 手动 `drover done` 是人在说「这件活完了」，drover 只报告
@@ -213,7 +212,7 @@ def check_done(task):
     dirty = tree_dirty()
     if dirty:
         probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
-    for r in B.criteria(REPO, task.get("main", ""), BRANCH_GLOB, task_check_cmd(task.get("body"))):
+    for r in B.criteria(REPO, task.get("main", ""), task_check_cmd(task.get("body"))):
         if r["ok"] is False:
             probs.append(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}')
     return probs
@@ -231,7 +230,7 @@ def criteria_report(task):
     拦人。它只负责把「我没认出完成」说清楚。自动那条路是另一回事——循环引擎见不到记号就
     不会走到这里（drover-board.close_if_done）。"""
     out = []
-    for r in [done_mark_row(task)] + B.criteria(REPO, task.get("main", ""), BRANCH_GLOB,
+    for r in [done_mark_row(task)] + B.criteria(REPO, task.get("main", ""),
                                                 task_check_cmd(task.get("body"))):
         mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
         out.append(f'  {mark} {r["n"] or "依据"} {r["name"]}：{r["why"]}')
@@ -656,13 +655,6 @@ HANDOFF_DIR={dir}
 # 主控的 corral 名字，`corral ls` 里看得到的那个。drover 只对它 send / status，
 # 不开、不关、不接入。留空就是不自动送：drover next 会把任务正文打出来让你自己粘。
 MAIN_AGENT=
-
-# 里程碑分支的匹配模式，原样交给 `git branch --list`。完成判据第 2 条用它找分支，
-# 再逐个问「合进 main 了没有」。留空 = 这个项目不用里程碑分支，第 2 条跳过。
-# 真实项目长这样：owlet 是 m8-2-backend，jb-finetune 是 m3/implementation，
-# 两边都能用 `m[0-9]*` 匹配到。别写 `m*` —— 它会把 main 自己也匹配进来。
-# 匹配到 0 个分支时第 2 条判**不过**（不是空过），因为「写错了」和「没建分支」从 git 看一样。
-BRANCH_GLOB=
 
 # 默认验收命令。完成判据第 3 条跑它，退出码 0 才算过。队列条目里写一行
 # 「验收：<命令>」可以按任务覆盖。例：CHECK_CMD=uv run pytest -q

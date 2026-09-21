@@ -85,9 +85,12 @@ rt next; code 0 'next again'; has 'TASK T3: 修一下登录页的超时' 'next r
 rt done T1; code 2 'done for a task that is not in progress'
 rt done T3; code 9 'main has not moved since the task was issued'; has '判据 1' 'names the criterion that failed'
 edit login.py 'timeout fix'
+# 老配置残留的键不报错，也不再影响第 2 条（旧逻辑会因匹配不到分支而拦住）。
+printf 'BRANCH_GLOB=does-not-match-*\n' >> "${REPO}/.drover.conf"
 rt done T3; code 8 'done in release mode stops the writer'; has '等人放行' 'release mode says wait for release'
 has '✓ 1 main 前进了' 'the passing criteria are printed'
-has '— 2 里程碑分支都合进去了' 'a skipped criterion is shown as skipped, not as passed'
+has '✓ 2 这次建的分支都合进去了：没有未合并的分支' 'no remaining branches pass criterion 2'
+has '— 3 验收命令过了' 'a skipped criterion is shown as skipped, not as passed'
 # 收尾记号是「依据」，三条判据是「门」。手动 drover done 是人自己的判断，不拦——但要把
 # 没看到记号这件事说出来，免得人以为 drover 认出了完成。循环那条路见 tests/drover-board.sh。
 has '✗ 依据 收尾记号' 'done reports the wrap-up mark as the basis, missing here'
@@ -366,6 +369,7 @@ ini() { set +e; ( cd "${NEW}" && HOME="${H2}" python3 "${RT}" "$@" ) > "${TMP}/o
 ini init 'Bad Name'; code 2 'init refuses a short name with spaces and capitals'
 ini init inksample; code 0 'init'
 [ -f "${NEW}/.drover.conf" ] || fail 'init writes .drover.conf'
+if grep -q 'BRANCH_GLOB' "${NEW}/.drover.conf"; then fail 'init must not emit the removed branch setting'; fi
 grep -qx '.drover.conf' "${NEW}/.gitignore" || fail 'init keeps the conf out of git'
 # 登记的是 git 给的仓库根（macOS 上 /var 是 /private/var 的软链，两边写法不同）
 python3 -c 'import os,sys
