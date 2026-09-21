@@ -146,3 +146,33 @@ drover done： ✓ 3 验收命令过了 : `for t in criteria drover ...`   ← �
 - 看板测试最初漏建 `queue.md`，因此没有卡片；补齐夹具后重新取得真正的行为 RED，未将夹具错误算作 RED。实现阶段统一了陈旧提示的空格，随后聚焦测试全绿。
 - 未修 done 重复跑验收命令；未改 ROADMAP、历史任务文件、HANDOFF；未改 corral / corral-dispatch；未访问真实交接目录或真实项目、未实际安装或动 launchd、未合并 main、未推送。
 - 没有需要主控决定的设计问题；交叉审查与后续合并由主控安排。
+
+## 主控审查
+
+2026-09-21，drover/main。**结论：通过，可以进交叉审查。**
+
+- **四个套件自己重跑全绿。** 新测试 `tests/check-result.py` 挂在 `drover-board.sh` 末尾，用 `DROVER_BIN` / `DROVER_BOARD_BIN` 两个环境变量指向实现，保住了本项目的植入自检跑法。
+- **自己独立植入三条要害，全部因目标断言变红**：
+  1. 陈旧判定不比 `cmd` → `test_board_stale_results` 红（`True is not None`）；
+  2. 显示去掉「多久之前跑的」→ `test_board_matching_results` 红（`'3m 前跑的' not found`）；
+  3. 让判断路径（`close_if_done`）去读 `.check-result` → `forbid_read` 开火，`判断路径读了 .check-result`。
+- **`test_result_never_enters_decisions` 比我要求的强**：它 `patch("builtins.open", forbid_read)`，**从机制上禁止判断路径读这个文件**，不是弱比对；三种内容（合法 JSON 说通过 / `not json` / 非法 UTF-8）各试一遍，并断言 `tasks.state` 字节不变、`.loop.log` 与基线一致、`drover done` 的 returncode/stdout/stderr 三样全同。
+- **抽看代码**：原子写 tmp+`os.replace`、tmp 名带 PID；`check_result_vm` 只在 `card_vm` 里替换第 3 条，`criteria()` / `wants_human()` / `close_if_done()` / `loop_tick()` 的判断逻辑一个字没动；坏文件走严格类型校验（含 `math.isfinite` 挡 NaN）降级成「没跑过」。
+- **范围核对**：只动了 `bin/drover`、`bin/drover-board`、`tests/drover-board.sh`、新增 `tests/check-result.py` 和本文件。ROADMAP 没碰，`cmd_done` 跑两次验收命令那个既有问题按要求**没修**。
+
+### 主控自己踩的两个坑，记下来免得重走
+
+1. **植入自检只复制 `drover-board` 一个文件会炸在成对检查上**：`task_bin_path()` 返回「board 副本旁边的 `drover`」，副本放临时目录就 `FileNotFoundError`。**两个文件要一起复制**（dev 的做法是对的）。以前只跑 `tests/criteria.sh` 没撞上，因为那条路不走 `close_if_done`。
+2. **植入代码里写 `except Exception: pass` 会把 `forbid_read` 的 `AssertionError` 吞掉**，造成「测试守不住」的假象。植入时要么显式 `except AssertionError: raise`，要么别包 try。
+
+### 取舍逐条表态
+
+1. **只在 `check_done()` 发布一次，不覆盖 `criteria_report()` 的第二次执行** —— 同意。它还补了一条测试（第一次通过、第二次失败的命令）证明「执行两次、只发布一次且是第一次的结果」，正好把那个既有问题的边界钉住了。
+2. **`main` 在核对前取值、时间在核对结束时记录** —— 同意。验收期间新出现的提交不会被当成已验证的版本，看板随后按 main 不一致判陈旧，方向正确。
+3. **只在 `card_vm()` 显示层替换，不碰 `wants_human()`** —— 同意。「等你」横幅不因这个文件改变，符合「绝不参与判断」。
+4. **原子写沿用 `.loop-wait` 模式，tmp 名按 PID 区分** —— 同意。
+
+### 留给交叉审查的两点（主控没有定论）
+
+1. **`rows[-1] = check_result_vm(...)`** 依赖「第 3 条永远是 `rows` 最后一行」。同一件事 `bin/drover` 里用的是 `next(r for r in rows if r["n"] == 3)`，两处风格不一致。现在 `criteria()` 恒定产出三行所以成立，但以后增减行就会错位。
+2. **`forbid_read` 的盲区**：它靠抛 `AssertionError` 报警，而生产代码里若写 `try: ... except Exception: pass` 就会把它吞掉，守线失效。现实中判断路径不太可能这么写，但这是这条守线的边界，请判断要不要加固。
