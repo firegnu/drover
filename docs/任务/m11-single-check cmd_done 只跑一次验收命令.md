@@ -81,3 +81,75 @@ drover 自己的验收命令是四个套件，**实测 22 秒**，所以 `drover
 ## 回复
 
 只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 实现时的取舍
+
+- `check_done(task)` 返回 `(probs, rows)`，`cmd_done` 将同一份 `rows` 传给 `criteria_report(task, rows)`；不加缓存、可选参数或新抽象，报告入口不能暗中重新执行验收。既有直接调用测试全部适配为完整元组相等断言，仍比较原来的问题列表，另覆盖三条门。
+- `.check-result` 仍在原位置原子发布一次；依据行仍每次调用 `done_mark_row(task)` 现算。三条门、问题顺序、打印格式、事件和退出码不变。
+- 原子发布用例保留“第二次会失败”的命令作为缺陷植入时的结果区分器，但核心改为明确断言 counter 只有一行；另加真实 CLI 计数测试，避免只证明发布次数。
+- 耗时用临时合成仓库的稳定命令 `sleep 1` 各测一次，隔离重复执行本身的成本；不把这组数字当成真实项目四套件的耗时。
+
+## 完成记录
+
+2026-09-21，基线 `6c696f4`，在 `m11-single-check` 完成。
+
+### 改动与 RED → GREEN
+
+- `bin/drover`：首次核对的三条门同时用于决定 done、发布结果及打印报告，只执行一次验收命令。
+- `tests/check-result.py`：新增真实 CLI 单次执行和完整报告/失败输出回归，改写原子发布测试，适配 `check_done` 的完整返回值。
+- 先运行以下命令，退出 1、两条真实目标失败：CLI counter 为 `['run', 'run']`，预期 `['run']`；报告的第三条门实际为第二次的 `✗`，预期第一次的 `✓`。没有语法错误或 fixture 错误。
+
+  ```sh
+  env -u PYTHONIOENCODING DROVER_BIN="$PWD/bin/drover" DROVER_BOARD_BIN="$PWD/bin/drover-board" \
+    python3 tests/check-result.py CheckResult.test_done_runs_check_once CheckResult.test_done_publishes_once_atomically
+  ```
+
+- 最小实现后同一命令退出 0，2 条全过。
+- 原子发布原有断言全部保留：禁止直接写目标、tmp 同目录且带 PID、发布前读到完整旧文件、发布后内容等于 tmp、每次只发布一次、不同进程不撞名、成功后无 tmp 残留；另核对六字段与首次核对的 `ok` / `why` / task / main / cmd。
+
+### 输出对照与耗时
+
+改动前先把两个可执行文件复制到同一临时目录。临时 `observe.py` 使用现有 `CheckResult` 的合成仓库 fixture 和假 corral，固定 git 提交日期；改动前保存原始 stdout/stderr 字节，改动后逐字节比较。临时证据目录为系统临时目录下的 `drover-m11-zfnosayn`，含 `before.json`、`after.json`、耗时、观察及植入脚本/日志。
+
+运行命令（`EVIDENCE` 指上述临时证据目录，两个实现路径均为绝对路径）：
+
+```sh
+env -u PYTHONIOENCODING python3 "$EVIDENCE/observe.py" "$PWD" "$EVIDENCE/before/drover" "$EVIDENCE/before"
+env -u PYTHONIOENCODING python3 "$EVIDENCE/observe.py" "$PWD" "$PWD/bin/drover" "$EVIDENCE/after"
+```
+
+五个场景全部相等：`true` 成功、`echo failed; exit 1` 失败、空验收不适用、工作区脏且三条门同时失败、`sleep 1` 成功。成功退出 8、事件 `start, done`、依据加三条门四行报告；失败退出 9、仅 `start`，`NOT DONE` 输出与问题内容/顺序不变。多项失败的顺序为工作区、门 1、门 2、门 3。事件与 `.check-result` 除时间戳外也完全相等。
+
+同一合成场景、`CHECK_CMD=sleep 1`，用 `time.perf_counter()` 包住真实 `drover done T1` 子进程，各测一次：
+
+| 实现 | 耗时 |
+|---|---|
+| 改动前 | 2.151203 秒 |
+| 改动后 | 1.121760 秒 |
+
+减少 1.029443 秒，约 47.9%；这是单次合成测量，不是整套验收命令的性能基准。
+
+### 断言有效性植入自检
+
+运行 `env -u PYTHONIOENCODING python3 "$EVIDENCE/mutate.py" "$PWD"`。每种缺陷独立复制 `drover` 与 `drover-board` 到同一临时目录，使用绝对 `DROVER_BIN` / `DROVER_BOARD_BIN`，前台运行对应测试；未设置 `PYTHONIOENCODING`，未吞断言异常。
+
+| 植入 | 对应测试与结果 |
+|---|---|
+| (a) 首次核对后额外跑一次 `B.criteria`，丢弃结果 | `test_done_runs_check_once` 退出 1：counter 两行，命中“验收命令只能执行一次” |
+| (b) 报告重新跑 `B.criteria`，用第二次结果 | `test_done_publishes_once_atomically` 退出 1：报告行实际 `✗ 3`，预期 `✓ 3` |
+| (c) 发布用第二次 `B.criteria` 的第 3 条，判断仍用首次结果 | `test_done_publishes_once_atomically` 退出 1：发布前检查 `saved["ok"]`，`False is not True` |
+
+三次均为目标断言失败（各 `FAILED (failures=1)`），没有假绿或启动错误。植入仅在临时副本，之后恢复两个文件并逐字节核对等于工作区实现。
+
+### 完整验证及边界
+
+```sh
+env -u PYTHONIOENCODING DROVER_BIN="$PWD/bin/drover" DROVER_BOARD_BIN="$PWD/bin/drover-board" python3 tests/check-result.py
+env -u PYTHONIOENCODING bash -c 'for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done'
+git diff --check
+```
+
+- 结果记录测试 17 条全绿；四个套件全部退出 0，含安装隔离测试 9 条与看板中的结果记录测试 17 条；diff 无空白错误。
+- 所有命令都等待前台执行完成；只用合成仓库、假 corral 和隔离安装测试，无真实 agent 或真实交接目录操作。
+- 未改 `drover-board.criteria`、记录字段/陈旧判定、ROADMAP 或历史任务文件；未修孤立代理码旧问题；未安装、启用 launchd、合并 main 或推送。
+- 无需主控另行决定实现事项；按原安排交主控审查。

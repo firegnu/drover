@@ -200,7 +200,7 @@ def task_check_cmd(body):
 
 
 def check_done(task):
-    """→ 问题列表。只读核对 git，不听主控一句话。
+    """→ (问题列表, 同次核对的三条门)。只读核对 git，不听主控一句话。
     三条门见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
     「不适用」的那几条（没有 base_sha、没有验收命令）不算不过，但会照原样报出来——
     3 条里过了几条要看得见，不能让跳过的悄悄混成通过。
@@ -214,7 +214,7 @@ def check_done(task):
         probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
     cmd, sha = task_check_cmd(task.get("body")), main_sha()
     rows = B.criteria(REPO, task.get("main", ""), cmd)
-    # 只记决定能否 done 的这次核对；criteria_report 的再次执行不覆盖它。
+    # 发布和报告都复用决定能否 done 的这次核对。
     check = next(r for r in rows if r["n"] == 3)
     mark = f"{D}/.check-result"
     tmp = f"{mark}.{os.getpid()}.tmp"
@@ -229,7 +229,7 @@ def check_done(task):
     for r in rows:
         if r["ok"] is False:
             probs.append(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}')
-    return probs
+    return probs, rows
 
 
 def done_mark_row(task):
@@ -237,15 +237,14 @@ def done_mark_row(task):
     return B.find_done_mark(REPO, task.get("main", ""), DONE_MARK)
 
 
-def criteria_report(task):
+def criteria_report(task, rows):
     """依据（收尾记号）+ 三条门各自什么状态，原样打给人看。跳过的也要出现。
 
     依据不满足时**照样打，不拦**：手动 `drover done` 是人在说「这件活完了」，drover 没资格
     拦人。它只负责把「我没认出完成」说清楚。自动那条路是另一回事——循环引擎见不到记号就
     不会走到这里（drover-board.close_if_done）。"""
     out = []
-    for r in [done_mark_row(task)] + B.criteria(REPO, task.get("main", ""),
-                                                task_check_cmd(task.get("body"))):
+    for r in [done_mark_row(task)] + rows:
         mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
         out.append(f'  {mark} {r["n"] or "依据"} {r["name"]}：{r["why"]}')
     return out
@@ -389,7 +388,7 @@ def cmd_done(tid):
     tasks, current, awaiting = fold()
     if not current or current["id"] != tid:
         die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
-    probs = check_done(current)
+    probs, rows = check_done(current)
     if probs:
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
@@ -397,7 +396,7 @@ def cmd_done(tid):
         print(f"处理完再运行 drover done {tid}。")
         return 9
     print(f"核对通过 {tid}：")
-    for line in criteria_report(current):
+    for line in criteria_report(current, rows):
         print(line)
     if done_mark_row(current)["ok"] is not True:
         print("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。")
