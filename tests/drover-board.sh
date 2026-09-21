@@ -399,6 +399,9 @@ long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished":
 short_pv = {**pv, "repo": "另一个仓库", "queue": None, "waits": []}
 equal_pv = {**long_pv, "repo": "等长的另一个仓库"}
 assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 25
+overflow_pv = {**long_pv, "queue": {**long_pv["queue"],
+    "counts": {"todo": 7, "done": 0, "dropped": 0}, "todo": long_pv["queue"]["todo"][:7]}}
+assert len(B.detail_lines(overflow_pv)) == 12
 vm = {**model, "projects": [long_pv, short_pv]}
 original = copy.deepcopy(vm)
 for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏和 rail = 0
@@ -439,6 +442,17 @@ for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏
     state["detail_offset"] = 19
     B.draw(screen, {**vm, "projects": [short_pv, long_pv]}, state)  # 刷新重排项目
     assert state["detail_offset"] == 0
+
+    # 同仓库缩短后仍溢出：旧偏移越界夹到非零末页，仍合法则原样保留。
+    for old_offset, expected in ((19, 6), (3, 3)):
+        state = {"sel": 0}
+        B.draw(screen, vm, state)
+        state["detail_offset"] = old_offset
+        B.draw(screen, vm, state)
+        assert state["detail_offset"] == old_offset
+        B.draw(screen, {**vm, "projects": [overflow_pv]}, state)
+        assert state["detail_total"] == 12 and state["detail_room"] == 7
+        assert state["detail_offset"] == expected, f"内容缩短后偏移应为 {expected}（旧偏移 {old_offset}）"
 
     # 等长项目让夹限无法顺带归零，单独守住切换和刷新重排时的项目身份判断。
     for change in ("切换", "重排"):
@@ -530,6 +544,13 @@ for k in (ord("r"), -1, curses.KEY_RESIZE):
 
 # 翻页只返回新偏移，不重跑数据；7 行正文留 1 行提示，每页 6 行。
 scroll = {**st(), "detail_offset": 0, "detail_total": 20, "detail_room": 7}
+# 每次调用立即验输入不变，不能让相反方向的副作用抵消。
+for key, name, start in ((curses.KEY_NPAGE, "PgDn", 0), (curses.KEY_PPAGE, "PgUp", 12)):
+    candidate = {**scroll, "detail_offset": start}
+    before = candidate.copy()
+    action = act(key, state=candidate)
+    assert candidate == before, f"{name} 单次调用不得修改输入 state"
+    assert action == ("scroll", 6), (name, action)
 assert act(curses.KEY_NPAGE, state=scroll) == ("scroll", 6), "PgDn 尚未滚动详情"
 assert act(curses.KEY_PPAGE, state=scroll) == ("scroll", 0)
 assert act(curses.KEY_NPAGE, state={**scroll, "detail_offset": 12}) == ("scroll", 14)
@@ -853,3 +874,15 @@ PY2
 grep -q '"ev": "done", "id": "T1"' "${KA}/review/tasks.state" \
   || { cat "${KA}/review/.loop.log" 2>/dev/null || true; fail 'the loop must close the task exactly as it would without the 路由 line'; }
 echo 'PASS 路由行只进显示：判据、收尾记号、等人、loop_tick 一概碰不到它'
+
+# 完成记录（2026-09-21，交叉审查返工；本轮限定只改本文件，记录也留在这里）：
+# 新增同仓库 25→12 行的溢出用例：偏移 19→6、合法偏移 3→3，宽窄屏均验；
+# PgDn 从 0、PgUp 从 12 独立调用，各自先复制输入、调用后立即验输入未变。原断言全部保留。
+# 变异自证使用临时 drover-board / drover 副本，以 DROVER_BOARD_BIN 指向副本跑 bash tests/drover-board.sh：
+# 1. 在 draw 的夹限前植入 if state.get("detail_total") != len(lines): offset = 0，
+#    退出 1，命中 AssertionError: 内容缩短后偏移应为 6（旧偏移 19）。
+# 2. 在 key_action 返回翻页动作前植入 state["detail_offset"] = offset，
+#    退出 1，命中 AssertionError: PgDn 单次调用不得修改输入 state。
+# 两个副本均还原并校验字节一致；生产代码全程未改，主仓库审查文件只读。
+# 原实现回归：for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done
+# 四套件全绿、退出 0（安装 9 项、看板 13 块）；bash -n 与 git diff --check 通过。
