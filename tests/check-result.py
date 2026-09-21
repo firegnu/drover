@@ -221,7 +221,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                 D.setup()
             finally:
                 os.chdir(previous)
-            expected = D.check_done(self.task)
+            expected_problems, expected_rows = D.check_done(self.task)
             real_open = open
 
             def denied_tmp(path, mode="r", *args, **kwargs):
@@ -233,7 +233,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                             patch.object(D.json, "dump", side_effect=OSError("disk full")),
                             patch.object(D.os, "replace", side_effect=OSError("replace denied"))):
                 with failure, redirect_stderr(io.StringIO()) as errors:
-                    self.assertEqual(D.check_done(self.task), expected)
+                    self.assertEqual(D.check_done(self.task), (expected_problems, expected_rows))
                 self.assertIn("未能发布", errors.getvalue())
 
     def test_board_matching_results(self):
@@ -362,10 +362,46 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
         self.assertNotIn("没跑过", row["why"])
         self.assertIn("前跑的", text)
 
+    def test_done_report_and_failure_output(self):
+        for cmd, code, check_line in [
+                ("true", 8, "  ✓ 3 验收命令过了：`true` 过了"),
+                ("", 8, "  — 3 验收命令过了：没有验收命令：CHECK_CMD 空着，队列条目也没写"),
+                ("echo failed; exit 1", 9, "")]:
+            with self.subTest(cmd=cmd):
+                self.configure(cmd)
+                r = self.done()
+                self.assertEqual(r.returncode, code)
+                self.assertEqual(r.stderr, "")
+                if code == 8:
+                    expected = ("核对通过 T1：\n"
+                                f"  ✓ 依据 收尾记号：{self.sha[:7]} 收尾: test\n"
+                                f"  ✓ 1 main 前进了：{self.base[:7]} → {self.sha[:7]}\n"
+                                "  ✓ 2 这次建的分支都合进去了：没有未合并的分支\n"
+                                f"{check_line}\n"
+                                "DONE T1：核对通过。放行模式：等人放行（drover go）。\n")
+                else:
+                    expected = ("NOT DONE: T1 还没收尾：\n"
+                                "  - 判据 3（验收命令过了）没满足：`echo failed; exit 1` 退出码 1\n"
+                                "failed\n处理完再运行 drover done T1。\n")
+                self.assertEqual(r.stdout, expected)
+                events = self.B.task_events((self.d / "tasks.state").read_text())
+                self.assertEqual([e["ev"] for e in events],
+                                 ["start", "done"] if code == 8 else ["start"])
+
+    def test_done_runs_check_once(self):
+        counter = self.root / "checks"
+        self.configure(f"echo run >> {counter}")
+        r = self.done()
+        self.assertEqual(r.returncode, 8, r.stdout + r.stderr)
+        self.assertEqual(counter.read_text().splitlines(), ["run"], "验收命令只能执行一次")
+        events = self.B.task_events((self.d / "tasks.state").read_text())
+        self.assertEqual([e["ev"] for e in events], ["start", "done"])
+
     def test_done_publishes_once_atomically(self):
         counter = self.root / "checks"
-        # 第一次过、第二次不过：保留既有的两次执行，只发布第一次判断的结果。
-        self.configure(f"echo run >> {counter}; test $(wc -l < {counter}) -eq 1")
+        # 计数断言守住只跑一次；若回归到重跑，第二次失败暴露报告或发布串错结果。
+        cmd = f"echo run >> {counter}; test $(wc -l < {counter}) -eq 1"
+        self.configure(cmd)
         D = load("drover_check_result", DROVER)
         previous_cwd = os.getcwd()
         try:
@@ -396,11 +432,18 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
             published.append(Path(src).name)
 
         for pid in (12345, 23456):
+            output = io.StringIO()
             with patch("builtins.open", guarded_open), patch.object(D.os, "replace", replace), \
-                    patch.object(D.os, "getpid", return_value=pid), redirect_stdout(io.StringIO()):
+                    patch.object(D.os, "getpid", return_value=pid), redirect_stdout(output):
                 self.assertEqual(D.cmd_done("T1"), 8)
-            self.assertEqual(counter.read_text().splitlines(), ["run", "run"])
-            self.assertIs(json.loads(self.result.read_text())["ok"], True)
+            self.assertEqual(output.getvalue().splitlines()[4],
+                             f"  ✓ 3 验收命令过了：`{cmd}` 过了")
+            self.assertEqual(counter.read_text().splitlines(), ["run"], "验收命令只能执行一次")
+            saved = json.loads(self.result.read_text())
+            self.assertEqual(set(saved), {"task", "main", "cmd", "ok", "why", "t"})
+            self.assertEqual((saved["task"], saved["main"], saved["cmd"], saved["why"]),
+                             ("T1", self.sha, cmd, f"`{cmd}` 过了"))
+            self.assertIs(saved["ok"], True)
             self.assertFalse(list(self.d.glob(".check-result.*.tmp")))
             counter.write_text("")
             self.configure(D.CHECK_CMD)
@@ -486,7 +529,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
             unchecked = B.criteria(str(self.repo), self.base, cmd, do_check=False)
             conf = B.parse_conf(str(self.repo / ".drover.conf"))
             human = B.project_state(str(self.repo), conf)["human"]
-            problems = D.check_done(self.task)
+            problems, rows = D.check_done(self.task)
             reset(cmd, None)
             baseline = self.done()
             self.assertEqual(baseline.returncode, expected_code)
@@ -505,7 +548,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                         self.assertEqual(B.criteria(str(self.repo), self.base, cmd), criteria)
                         self.assertEqual(B.criteria(str(self.repo), self.base, cmd, do_check=False), unchecked)
                         self.assertEqual(B.project_state(str(self.repo), conf)["human"], human)
-                        self.assertEqual(D.check_done(self.task), problems)
+                        self.assertEqual(D.check_done(self.task), (problems, rows))
                     reset(cmd, raw)  # check_done 已发布新值；每条路径重新喂伪造记录。
                     with self.observe_result_reads():
                         B.loop_tick(str(self.projects))
