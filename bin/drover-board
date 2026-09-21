@@ -122,10 +122,10 @@ def agents_of(repo, main_agent=""):
                        "idle_for": st.get("idle_for") or 0, "src": st.get("last_input_source", "")}}
 
 
-def ago(ts):
-    if not ts:
-        return ""
-    d = int(NOW - ts)
+def dur(sec):
+    """一段时长 → 给人看的短写法。看板上所有时长都走这里，**只有这一套口径**：
+    不满一分钟写秒（任务的耗时可能真就几十秒，写成 0m 等于没说）。"""
+    d = max(0, int(sec))
     if d < 60:
         return f"{d}s"
     if d < 3600:
@@ -133,6 +133,10 @@ def ago(ts):
     if d < 86400:
         return f"{d // 3600}h{(d % 3600) // 60:02d}m"
     return f"{d // 86400}d"
+
+
+def ago(ts):
+    return dur(NOW - ts) if ts else ""
 
 
 # ============================================================ 解析交接文件
@@ -240,6 +244,68 @@ def task_check_cmd(body, default=""):
     return m.group(1) if m else default
 
 
+# 正文里那行「任务文件：<相对路径>」，和上面的「验收：」同一套机制：人自己在 queue.md 里写的。
+TASK_FILE = re.compile(r'^\s*任务文件\s*[:：]\s*(\S.*?)\s*$', re.M)
+# 任务文件开头那行「路由：<档> / 交叉审查<要|不要>（路由：…；推翻：…）」。这是主控**本来就会写**
+# 的一行（corral-dispatch 的 SKILL.md 第 3 节规定的记录格式），drover 只读、只显示。
+TASK_ROUTE = re.compile(r'^\s*路由\s*[:：]\s*([^/（(]+?)\s*/\s*交叉审查\s*(不要|要)(?:\s*[（(](.*)[）)])?')
+TASK_OVERRIDE = re.compile(r'推翻\s*[:：]\s*(.*)')
+# 「推翻：无」后面主控常接着写别的话（把没推翻的理由也记在这一段里），只看开头那两个字
+TASK_NO_OVERRIDE = re.compile(r'^(?:无|没有)(?:[。；;.、,，]|$)')
+ROUTE_HEAD = 20         # 只看任务文件开头这些行：正文里举例子、引用格式的地方不算数
+
+
+def task_file_path(repo, body, title, task_dir):
+    """这件活的任务文件在哪 → 绝对路径，找不到就 ""。两条路：
+
+      1. 队列条目正文里写了「任务文件：<相对路径>」就用它（和「验收：」同一套机制）；
+      2. 没写，就在 TASK_FILE_DIR 里找**文件名以队列条目标题开头**的 .md。
+
+    两条都落空就是 ""。这只给显示用，找不到不是错。"""
+    m = TASK_FILE.search(body or "")
+    if m:
+        p = os.path.join(repo, os.path.expanduser(m.group(1)))
+        return p if os.path.isfile(p) else ""
+    if not task_dir or not title:
+        return ""
+    d = os.path.join(repo, os.path.expanduser(task_dir))
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".md") and n.startswith(title))
+    except OSError:
+        return ""
+    return os.path.join(d, names[0]) if names else ""
+
+
+def task_route(repo, body, title, task_dir):
+    """任务文件开头那行「路由：…」→ {"tier": 档位, "cross": 要不要交叉审查, "overridden": 主控推翻没有}，
+    任何一步不成立就 None（页面上这一项不显示）。
+
+    **只进显示，绝不参与任何判断**（ROADMAP 待定 4）：不进完成判据、不进 wants_human、不进
+    loop_tick 的任何分支。它依赖内循环的一个书写格式，算擦边，但不要求主控多做事；漏读只是
+    少显示一项，不影响判完成——所以不需要收尾记号那条例外的三条支撑。
+
+    降级是硬要求：没配 TASK_FILE_DIR、目录不在、文件找不到、没有那一行、格式对不上、编码坏了
+    ——一律返回 None，一个异常都不许漏出去，看板不能因为一行文案崩掉。"""
+    try:
+        path = task_file_path(repo, body, title, task_dir)
+        if not path:
+            return None
+        with open(path, encoding="utf-8") as f:
+            head = [next(f, "") for _ in range(ROUTE_HEAD)]
+    except Exception:
+        return None
+    for line in head:
+        m = TASK_ROUTE.match(line)
+        if not m:
+            continue
+        # 「推翻：无」和不写这一段都是没推翻；写了别的才算主控推翻了路由的结论
+        why = TASK_OVERRIDE.search(m.group(3) or "")
+        t = why.group(1).strip() if why else ""
+        return {"tier": m.group(1), "cross": m.group(2) == "要",
+                "overridden": bool(t) and not TASK_NO_OVERRIDE.match(t)}
+    return None
+
+
 def task_holds(evs):
     """tasks.state 里的 hold 事件 → 打着「做完停」的任务 key 集合（有编号按编号，没编号按标题；后来的事件覆盖前面的）。"""
     on = {}
@@ -286,6 +352,8 @@ def task_fold(evs):
             t = tasks.setdefault(tid, {"id": tid, "title": e.get("title", ""), "body": "", "key": e.get("key", ""), "start": ""})
             t.update(status="dropped", reason=e.get("reason", ""), t1=e.get("t"))
         elif ev == "go":
+            if tid in tasks:
+                tasks[tid]["t2"] = e.get("t")     # 放行的时刻。「等放行时长」= t2 - t1，只有放行模式才有
             awaiting = None
     current = next((t for t in tasks.values() if t["status"] == "doing"), None)
     return tasks, current, awaiting
@@ -440,10 +508,8 @@ def find_done_mark(repo, base_sha, mark):
 
 
 def task_span(a, b):
-    if not a or not b:
-        return ""
-    m = max(0, int(b - a)) // 60
-    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+    """两个时刻之间有多久。缺一头就不显示——写成 0 会被当成「真的是 0」。"""
+    return dur(b - a) if a and b else ""
 
 
 def task_view(repo, conf, p):
@@ -472,13 +538,20 @@ def task_view(repo, conf, p):
                 "on_main": len(on_main), "last_at": last_at,
                 "commits": n, "steps": steps, "body": t.get("body", ""),
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
-                "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW)}
+                "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW),
+                # 任务文件开头那行「路由：…」，只显示，不参与任何判断；读不出来就是 None
+                "route": task_route(repo, t.get("body", ""), t.get("title", ""), conf.get("TASK_FILE_DIR", ""))}
     finished = []
     for f in reversed([x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting][-5:]):
         if f["status"] == "dropped":
             finished.append({"id": f["id"], "title": f["title"], "dropped": True, "reason": f.get("reason", ""), "body": f.get("body", "")})
             continue
+        # 记账三项（ROADMAP 待定 3）：耗时、提交数、等放行时长。全部从现有事件流和 git 算，
+        # 不加新事件。**「返工轮数」不做**——drover 看不见主控和 dev agent 之间的往返（硬规矩
+        # 第 4 条），记不出来；提交数就叫提交数，不冒充它。
         finished.append({"id": f["id"], "title": f["title"], "dropped": False, "span": task_span(f.get("t0"), f.get("t1")),
+                         "commits": len(task_commits(repo, f.get("start"), f.get("end"))),
+                         "wait": task_span(f.get("t1"), f.get("t2")),   # 自动模式没有 go 事件：这一项没有，不是 0
                          "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
     try:
@@ -602,7 +675,7 @@ def card_vm(p, tv):
                  task_check_cmd(c.get("body"), p.get("check_cmd", "")), do_check=False)
     last = ago(c["last_at"])
     return {"id": c["id"], "title": c["title"], "waiting": c["waiting"], "held": c["held"],
-            "span": c["span"], "commits": c["commits"], "on_main": c["on_main"],
+            "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
             # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
             # 判据第 1 条看的是同一个 sha，两处说的是同一件事。
             "progress": (f'{MAIN_BRANCH} 上 {c["on_main"]} 个提交' + (f'，最后一次 {last} 前' if last else ""))
@@ -621,7 +694,8 @@ def queue_vm(p, tv):
             "todo": [{"id": b["id"] or "", "title": b["title"], "next": i == 0,
                       "held": task_held(b, tv["holds"])} for i, b in enumerate(tv["todo"])],
             "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
-                          "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", "")}
+                          "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", ""),
+                          "commits": f.get("commits", 0), "wait": f.get("wait", "")}
                          for f in tv["finished"]]}
 
 
@@ -702,6 +776,11 @@ def detail_lines(pv):
                               + ("  · 核对通过，等你按 g 放行" if c["waiting"] else "")
                               + ("  · 做完停" if c["held"] else "")))
         out.append(("dim", 2, c["progress"]))
+        if c["route"]:
+            rt = c["route"]
+            out.append(("dim", 2, f'路由 {rt["tier"]}' + ("" if rt["tier"].endswith("档") else "档")
+                                  + f' · 交叉审查{"要" if rt["cross"] else "不要"}'
+                                  + ("  · 主控推翻了路由" if rt["overridden"] else "")))
         out.append(("", 2, f'判据 {c["met"]}'))
         for r in c["criteria"]:
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
@@ -716,8 +795,11 @@ def detail_lines(pv):
     out.append(("h2", 0, f'做完的 · {q["counts"]["done"]}'
                          + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else "")))
     for f in q["finished"]:
+        # 记账：耗时 · 提交数 · 等放行时长。最后一项只有放行模式才有，没有就整项不出现
+        acct = " · ".join(x for x in (f["span"], f'{f["commits"]} 个提交',
+                                      f'等放行 {f["wait"]}' if f["wait"] else "") if x)
         out.append(("dim", 2, f'{f["id"]} {f["title"]}  '
-                              + (f'放弃：{f["reason"]}' if f["dropped"] else f["span"])))
+                              + (f'放弃：{f["reason"]}' if f["dropped"] else acct)))
     if not q["finished"]:
         out.append(("dim", 2, "还没有"))
     return out

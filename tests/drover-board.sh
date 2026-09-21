@@ -46,6 +46,7 @@ case "$1 $2" in
                           "$(cat "${MOCK_DIR}/eta.src" 2>/dev/null || echo send)";;
   'status theta/main') st theta/main "$(cat "${MOCK_DIR}/theta.status" 2>/dev/null || echo idle)";;
   'status iota/main')  st iota/main "$(cat "${MOCK_DIR}/iota.state" 2>/dev/null || echo idle)";;
+  'status kappa/main') st kappa/main idle;;
   'send iota/main')    printf '%s\n' "$3" >> "${MOCK_DIR}/sent-iota"
                        printf '{"ok":true,"name":"iota/main","instance":1,"confirmed":true}\n';;
   # ls 里有三个：alpha 的主控、eta 的主控、以及 eta 派出去的那个（cwd 在 eta 的 worktree 里）
@@ -87,11 +88,12 @@ printf 'MAIN_AGENT=theta/main\n' >> "${TMP}/theta/repo/.drover.conf"
 # 主控 blocked 但队列没事的项目，drover 这边一条「等你」都不该有。
 
 # 任务区 —— eta：T8 进行中（1 个提交）；队列里一个手写未编号的排在最前；
-# 已完成 T5（没有提交）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
+# 已完成 T5（没有提交，放行模式：做完 5 秒后才放行）、T7（1 个提交，自动模式没有 go）、放弃 T6。theta：T3 做完、放行模式下还没放行，并且暂停中。其余项目没有 queue.md，不出现任务区。
 E="${TMP}/eta"; EB=$(git -C "$E/repo" rev-parse HEAD~1); EH=$(git -C "$E/repo" rev-parse HEAD); ES=$(git -C "$E/repo" rev-parse --short HEAD)
 printf '## T8 把 CSV 导入改成流式\n约束：内存不超过 200MB\n\n## 修一下登录页的超时\n\n## T9 订单列表分页\n只动分页参数\n### 范围\n- 别碰 <b>旧接口</b> & 文档\n' > "$E/review/queue.md"
 { printf '{"t": %s, "ev": "start", "id": "T5", "title": "给导出加进度条", "body": "", "key": "给导出加进度条", "sha": "%s"}\n' "$((now - 9000))" "$EB"
-  printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": false}\n' "$((now - 7800))" "$EB"
+  printf '{"t": %s, "ev": "done", "id": "T5", "sha": "%s", "gate": true}\n' "$((now - 7800))" "$EB"
+  printf '{"t": %s, "ev": "go", "id": "T5"}\n' "$((now - 7795))"
   printf '{"t": %s, "ev": "start", "id": "T7", "title": "实验脚本换参数", "body": "", "key": "实验脚本换参数", "sha": "%s"}\n' "$((now - 7790))" "$EB"
   printf '{"t": %s, "ev": "done", "id": "T7", "sha": "%s", "gate": false}\n' "$((now - 7750))" "$EH"
   printf '{"t": %s, "ev": "drop", "id": "T6", "title": "迁移到新日志库", "key": "迁移到新日志库", "reason": "和 T2 冲突"}\n' "$((now - 7700))"
@@ -107,8 +109,8 @@ printf '## T3 补登录接口的回归测试\n\n## T4 清理旧的 feature flag\
 printf '%s/alpha/repo\n%s/beta/repo\n%s/gamma/repo\n%s/delta/repo\n%s/epsilon/repo\n%s/zeta/repo\n%s/eta/repo\n%s/theta/repo\n# comment\n%s/nonexistent\n' "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" "${TMP}" > "${TMP}/projects"
 
 # ============================================================ view_model：看板要显示的一切
-vm() {   # 重跑一遍 collect + view_model，结果落成 JSON。「刷新等于重跑」，看板不存自己的状态
-  python3 - "${BOARD}" "${TMP}/projects" "${VM}" <<'PY2' || fail 'view_model() 跑不起来'
+vm() {   # [项目清单] 重跑一遍 collect + view_model，结果落成 JSON。「刷新等于重跑」，看板不存自己的状态
+  python3 - "${BOARD}" "${1:-${TMP}/projects}" "${VM}" <<'PY2' || fail 'view_model() 跑不起来'
 import importlib.machinery, importlib.util, json, sys
 sys.dont_write_bytecode = True
 l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
@@ -215,6 +217,47 @@ is '[f["id"] for f in p("eta/repo")["queue"]["finished"]]' "['T6', 'T7', 'T5']" 
 is 'p("eta/repo")["queue"]["finished"][0]["dropped"]' True 'dropped row marked'
 is 'p("eta/repo")["queue"]["finished"][0]["reason"]' '和 T2 冲突' 'drop reason shown'
 is 'p("eta/repo")["queue"]["finished"][2]["span"]' 20m 'finished row with duration'
+
+# ---- 「做完的」栏的记账三项：耗时、提交数、等放行时长（ROADMAP 待定 3 的结论） ----
+# 三项全部从现有的 tasks.state 事件流和 git 算出来，不加新事件、不改事件格式。
+# **「返工轮数」不做**：drover 看不见主控和 dev agent 之间的往返（硬规矩第 4 条），记不出来。
+# 提交数就叫提交数，任何文案里都不许把它说成或暗示成返工轮数。
+is 'p("eta/repo")["queue"]["finished"][2]["id"]' T5 'the oldest finished row is T5'
+is 'p("eta/repo")["queue"]["finished"][2]["commits"]' 0 '记账·提交数：T5 起止 sha 一样，一个提交都没有'
+is 'p("eta/repo")["queue"]["finished"][2]["wait"]' 5s '记账·等放行时长 = go 的 t 减 done 的 t'
+is 'p("eta/repo")["queue"]["finished"][1]["id"]' T7 'the next finished row is T7'
+is 'p("eta/repo")["queue"]["finished"][1]["span"]' 40s '记账·耗时 = done 的 t 减 start 的 t，沿用 ago() 的口径（40 秒就写秒）'
+is 'p("eta/repo")["queue"]["finished"][1]["commits"]' 1 '记账·提交数用 task_commits 算，不另写一份'
+# 自动模式（done 事件不带 gate，没有 go 事件）：这一项**不显示**，不是 0
+is 'p("eta/repo")["queue"]["finished"][1]["wait"]' '' '自动模式没有 go 事件：等放行时长不显示，不是 0'
+lacks '返工' '提交数就叫提交数：任何文案里都不许把它说成返工轮数（ROADMAP 待定 3：记不出来）'
+# 放弃的那件不记账：它没做完，耗时和提交数都无从谈起
+is 'p("eta/repo")["queue"]["finished"][0]["dropped"]' True 'the dropped row stays a dropped row'
+# 时长只有一套口径：ago() 那套（秒 / 分 / 时分 / 天），耗时和等放行时长都走它，不另发明格式。
+# 顺带验「做完的」那一行真把三项画出来了——view_model 有数据、画面上没有的话等于没做。
+python3 - "${BOARD}" "${TMP}/projects" <<'PY2' || fail '记账：时长口径 + 「做完的」那一行'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+
+# 一段时长怎么写：和 ago() 一个字不差（不满一分钟写秒——老的 task_span 在这里写 0m）
+for sec, want in ((0, "0s"), (45, "45s"), (1200, "20m"), (3780, "1h03m"), (90000, "1d")):
+    assert B.task_span(1e9, 1e9 + sec) == want, (sec, B.task_span(1e9, 1e9 + sec))
+    assert B.ago(B.NOW - sec) == want, (sec, B.ago(B.NOW - sec))
+assert B.task_span(None, 5) == "" and B.task_span(5, None) == "", "缺一头就不显示"
+
+pv = next(x for x in B.view_model(B.collect(sys.argv[2]))["projects"] if x["name"] == "eta/repo")
+rows = [t for _, _, t in B.detail_lines(pv)]
+t5 = next(t for t in rows if t.startswith("T5 "))
+assert "20m" in t5 and "0 个提交" in t5 and "等放行 5s" in t5, t5
+t7 = next(t for t in rows if t.startswith("T7 "))
+assert "40s" in t7 and "1 个提交" in t7, t7
+assert "等放行" not in t7, f"自动模式不该有等放行时长：{t7}"
+assert not any("返工" in t for t in rows), rows
+PY2
+echo 'PASS 「做完的」栏记账：耗时 / 提交数 / 等放行时长，口径沿用 ago()'
+
 is 'p("eta/repo")["queue"]["mode"]' 放行模式 'release-mode chip'
 is 'p("theta/repo")["queue"]["mode"]' 暂停中 'paused chip replaces the mode chip'
 
@@ -540,3 +583,144 @@ grep -q '"ev": "done", "id": "T2"' "${IO}/review/tasks.state" \
   || { cat "${IO}/review/.loop.log" 2>/dev/null || true; fail 'a long-running loop must re-read corral every tick, not cache the agent list'; }
 
 echo 'PASS loop engine: checks the criteria only when the 主控 is idle, closes the task itself, throttled'
+
+# ============================================================ 任务文件开头那行「路由：…」
+# ROADMAP 待定 4 的结论：**读，但降级处理**——解析不出来就不显示这一项，绝不参与任何判断。
+# 自己一份合成项目，免得和上面那八个的断言搅在一起。
+KA="${TMP}/kappa"; KR="${KA}/kappa"; mkdir -p "${KR}/docs/任务" "${KA}/review"
+git -C "${KR}" init -q -b main
+git -C "${KR}" config user.name t; git -C "${KR}" config user.email t@example.com
+printf 'a\n' > "${KR}/a.py"; git -C "${KR}" add .; git -C "${KR}" commit -qm base
+KAB=$(git -C "${KR}" rev-parse main)
+printf 'HANDOFF_DIR=%s\nMAIN_AGENT=kappa/main\nTASK_GATE=0\n' "${KA}/review" > "${KR}/.drover.conf"
+printf '## T1 把 CSV 导入改成流式\n' > "${KA}/review/queue.md"
+printf '%s/kappa/kappa\n' "${TMP}" > "${TMP}/projects-kappa"
+TF="${KR}/docs/任务/把 CSV 导入改成流式 流式改造.md"      # 文件名以队列条目标题开头
+
+conf_dir() {   # <TASK_FILE_DIR 的值>：只动这一个键
+  grep -v '^TASK_FILE_DIR=' "${KR}/.drover.conf" > "${TMP}/kconf"; cp "${TMP}/kconf" "${KR}/.drover.conf"
+  printf 'TASK_FILE_DIR=%s\n' "$1" >> "${KR}/.drover.conf"
+}
+kastate() {   # <正文>：T1 进行中；正文里写不写「任务文件：」那一行，是两条路的分水岭
+  printf '{"t": %s, "ev": "start", "id": "T1", "title": "把 CSV 导入改成流式", "body": "%s", "key": "把 CSV 导入改成流式", "sha": "%s", "main": "%s"}\n' \
+    "$((now - 3600))" "$1" "${KAB}" "${KAB}" > "${KA}/review/tasks.state"
+}
+task_file() {   # <路由那一行> <落到哪个文件>：一份像模像样的任务文件
+  { printf '# 任务：把 CSV 导入改成流式\n\n'
+    printf '2026-09-21，kappa/main 交给 kappa/dev-csv（Claude Code，重档）。\n'
+    printf '%s\n' "$1"
+    printf '你是被委派的 agent：照本文件做，不要再开别的 agent。\n'; } > "$2"
+}
+kroute() { vm "${TMP}/projects-kappa"; }
+# 路由行在不在、解析成不成功，判据都必须一个字不变：kappa 是「收尾记号没有 + main 没前进」，
+# 两条不适用（没配 BRANCH_GLOB、没有验收命令），所以永远是 0/2。每一步都顺手验一遍。
+kmet() { is 'p("kappa")["queue"]["card"]["met"]' 0/2 "$1：完成判据一个字都没变"; }
+
+kastate ""
+conf_dir 'docs/任务'
+# TASK_FILE_DIR 是 drover init 写出来的配置模板里的一个键，parse_conf 照常读得到
+python3 - "${BOARD}" "${DROVER}" "${KR}/.drover.conf" <<'PY2' || fail 'TASK_FILE_DIR：模板里有，parse_conf 读得到'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+def mod(name, path):
+    l = importlib.machinery.SourceFileLoader(name, path)
+    m = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, l)); l.exec_module(m); return m
+B = mod("rb", sys.argv[1])
+D = mod("drover_cli", sys.argv[2])
+assert "\nTASK_FILE_DIR=\n" in D.CONF_TEMPLATE, "配置模板里没有 TASK_FILE_DIR"
+assert "TASK_FILE_DIR=" in D.CONF_TEMPLATE.format(dir="/x")           # 新项目默认留空
+assert B.parse_conf(sys.argv[3]).get("TASK_FILE_DIR") == "docs/任务", B.parse_conf(sys.argv[3])
+PY2
+
+task_file '路由：重 / 交叉审查不要（路由：档=重（0.9），交叉审查=拿不准；推翻：无）。' "${TF}"
+kroute
+is 'p("kappa")["queue"]["card"]["route"]["tier"]' 重 '路由行：档位解析出来了'
+is 'p("kappa")["queue"]["card"]["route"]["cross"]' False '路由行：要不要交叉审查解析出来了'
+is 'p("kappa")["queue"]["card"]["route"]["overridden"]' False '「推翻：无」不算推翻'
+kmet '正常解析'
+
+# 「推翻：无」后面接着写别的（主控真就这么写过）：还是没推翻，别当成推翻了
+task_file '路由：常规 / 交叉审查不要（路由：档=拿不准（常规 0.85），交叉审查=拿不准；推翻：无。档按「按任务文件写功能」定为常规；交叉审查定为不要——这件活只写文件不执行）。' "${TF}"
+kroute
+is 'p("kappa")["queue"]["card"]["route"]["overridden"]' False '「推翻：无。」后面接着写理由的，还是没推翻'
+is 'p("kappa")["queue"]["card"]["route"]["tier"]' 常规 '档位照样认得'
+
+# 主控推翻了路由的那一版
+task_file '路由：常规 / 交叉审查要（路由：档=拿不准（倾向重 0.76），交叉审查=要（核心规则 0.91）；推翻：档位路由拿不准，主控定为常规——修法 ROADMAP 已经写死）。' "${TF}"
+kroute
+is 'p("kappa")["queue"]["card"]["route"]["tier"]' 常规 '换一档也认得'
+is 'p("kappa")["queue"]["card"]["route"]["cross"]' True '交叉审查要'
+is 'p("kappa")["queue"]["card"]["route"]["overridden"]' True '主控推翻了路由，看得出来'
+kmet '推翻那一版'
+
+# 队列条目正文里写了「任务文件：<相对路径>」→ 用它，不走标题前缀匹配（和「验收：」同一套机制）
+task_file '路由：轻 / 交叉审查不要（路由：档=轻（0.95），交叉审查=不要（0.93）；推翻：无）。' "${KR}/docs/任务/另外指名的那一份.md"
+kastate '任务文件：docs/任务/另外指名的那一份.md'
+kroute
+is 'p("kappa")["queue"]["card"]["route"]["tier"]' 轻 '正文指名了任务文件就用它，不再按标题前缀找'
+kmet '指名任务文件'
+kastate ''
+
+# ---- 降级：任何一种都只是不显示这一项，看板照常渲染，不抛异常、判据不受影响 ----
+degrade() {   # <说明>
+  kroute
+  is 'p("kappa")["queue"]["card"]["route"]' None "$1：路由那一项不显示"
+  is 'p("kappa")["queue"]["card"]["id"]' T1 "$1：看板照常渲染"
+  kmet "$1"
+}
+conf_dir ''                     ; degrade 'TASK_FILE_DIR 留空'
+conf_dir 'docs/没有这个目录'     ; degrade '配的目录不存在'
+conf_dir 'docs/任务'
+mv "${TF}" "${KR}/docs/任务/对不上标题的名字.md"
+degrade '目录在、找不到这件活的文件'
+task_file '路由：写成大白话了，没有斜杠也没有交叉审查那半句' "${TF}"
+degrade '那一行格式对不上'
+printf '\xff\xfe 路由：重 / 交叉审查不要（路由：档=重；推翻：无）\n' > "${TF}"
+degrade '文件编码坏了'
+task_file '路由：重 / 交叉审查不要（路由：档=重（0.9），交叉审查=拿不准；推翻：无）。' "${TF}"
+kroute
+is 'p("kappa")["queue"]["card"]["route"]["tier"]' 重 '修好了又显示出来'
+echo 'PASS 任务文件的「路由：」行：档位 / 交叉审查 / 推翻；两条找法，六种降级都只是不显示'
+
+# ---- 守住「绝不参与任何判断」：路由行只进显示，判据、wants_human、loop_tick 都不许碰它 ----
+git -C "${KR}" add -A; git -C "${KR}" commit -qm 'task files'      # 工作区要干净，drover done 才肯核对
+printf 'b\n' >> "${KR}/a.py"; git -C "${KR}" add -A; git -C "${KR}" commit -qm work
+git -C "${KR}" commit -q --allow-empty -m '收尾: 头一件做完了'
+: > "${KA}/review/loop"
+python3 - "${BOARD}" "${TMP}/projects-kappa" "${KR}/.drover.conf" <<'PY2' || fail '路由行绝不参与任何判断'
+import importlib.machinery, importlib.util, json, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+projects, conf = sys.argv[2], sys.argv[3]
+frozen = B.time.time(); B.time.time = lambda: frozen      # 两次算的 NOW 一样，剩下的差别才说明问题
+
+def strip(x):     # 把 route 这一项摘掉，别的必须一模一样
+    if isinstance(x, dict):
+        return {k: strip(v) for k, v in x.items() if k != "route"}
+    return [strip(v) for v in x] if isinstance(x, list) else x
+
+with_route = B.view_model(B.collect(projects))
+assert with_route["projects"][0]["queue"]["card"]["route"], "底子不对：这一版本该解析得出路由"
+text = open(conf, encoding="utf-8").read()
+open(conf, "w", encoding="utf-8").write("".join(
+    l for l in text.splitlines(keepends=True) if not l.startswith("TASK_FILE_DIR=")))
+without = B.view_model(B.collect(projects))
+open(conf, "w", encoding="utf-8").write(text)
+assert without["projects"][0]["queue"]["card"]["route"] is None, "没配 TASK_FILE_DIR 时不该有路由"
+assert strip(with_route) == strip(without), "路由行影响到了别的东西：\n" + \
+    json.dumps([strip(with_route), strip(without)], ensure_ascii=False, indent=1)
+
+# 判断那一路上碰一下路由就当场炸：判据、收尾记号、「等人」、外层循环的一跳，一个都不许碰
+p = B.collect(projects)[0]
+rows = [B.find_done_mark(p["repo"], p["tasks"]["card"]["main"], p["done_mark"])] + \
+    B.criteria(p["repo"], p["tasks"]["card"]["main"], p["branch_glob"], "", do_check=False)
+B.task_route = lambda *a, **k: 1 / 0
+assert [B.find_done_mark(p["repo"], p["tasks"]["card"]["main"], p["done_mark"])] + \
+    B.criteria(p["repo"], p["tasks"]["card"]["main"], p["branch_glob"], "", do_check=False) == rows
+B.wants_human(p)                                           # 「等人」也只看 git 和 corral
+B.loop_tick(projects)                                      # 主控空闲 + 有收尾记号 → 该自己记 done
+PY2
+grep -q '"ev": "done", "id": "T1"' "${KA}/review/tasks.state" \
+  || { cat "${KA}/review/.loop.log" 2>/dev/null || true; fail 'the loop must close the task exactly as it would without the 路由 line'; }
+echo 'PASS 路由行只进显示：判据、收尾记号、等人、loop_tick 一概碰不到它'
