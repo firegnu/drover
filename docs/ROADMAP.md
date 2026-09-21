@@ -295,7 +295,11 @@ corral 主控提过第三条路：drover 别判断完成，把下一件直接送
    - **脚本改名在第 5 步做了**：`review-task` → `bin/drover`，`review-board` → `bin/drover-board`，`herdsman-init` 收进 `drover init`（少一个文件、少一种语言）。六个 `REVIEW_*` 环境变量一并换成 `DROVER_*`。
    - 「`install.sh` 和 `tests/` 里引用已删文件的地方」这半句作废：`install.sh` 在 `9a48774` 之后已经删了；`tests/` 里那些引用不是坏的，它们随第 3、4 步的改造一起改掉了。
 1. **配置文件**（2026-09-20 做完）：仓库里的 `.drover.conf` + `~/.drover/<短名>` 交接目录 + `~/.drover/projects` 清单，沿用老结构。字段：`HANDOFF_DIR`、`MAIN_AGENT`（主控的 corral 名字）、`CHECK_CMD`（默认验收命令）、`TASK_GATE`（放行模式）。（`BRANCH_PREFIX` → `BRANCH_GLOB` → **2026-09-21 整个删掉**，判据第 2 条改用 `base_sha` 认分支，理由见完成判据那一节。）命名规则：环境变量带 `DROVER_` 前缀，配置键不带。项目发现只认 `~/.drover/projects`，**不扫目录**——原先还扫 `~/Developer/personal_projs/*/.drover.conf`，那正是老看板够到真 jb-finetune 的那条路。「任务文件目录」这个字段没有加，它唯一的用处是待定 4，挪到那里去了。
-2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `drover-board.criteria` 里，看板和队列共用；队列条目用正文里一行「验收：`<命令>`」覆盖 `CHECK_CMD`（只认 `queue.md` 里写的，网页表单拒收——那行会被当 shell 命令跑）；「等人」的识别见 `wants_human`。合成测试在 `tests/criteria.sh`。
+2. **完成判据**（2026-09-20 做完）：三条的只读核对在 `drover-board.criteria` 里，看板和队列共用；「等人」的识别见 `wants_human`。
+
+   > **队列条目「验收：`<命令>`」的覆盖语法 2026-09-21 删掉了**（用户定）。它来自老 herdsman（`4ccaf51`），`bbca61f` 改名时原样搬来，drover 从没重新评估。删它的理由：`drover --help` 对 `queue.md` 写着「下面随意写约束和验收」，而那条语法又把 `^验收[:：](.*)$` 当 shell 命令跑——**一句话邀请你在自由文本里写验收，另一处规定其中一种写法会被执行，两句话不能同时成立**。自举第三件活（T3）就栽在这上面：队列条目按「验收标准」的意思写了散文，drover 按「验收命令」的意思执行了它，退出码 127，而且任务一旦开始正文就冻在 `tasks.state` 里再也改不了。它当初的安全边界是「只认 `queue.md` 里写的，网页表单拒收」，而网页那一层 `01c4424` 已经整个删掉。
+   >
+   > 现在验收命令**只有 `.drover.conf` 的 `CHECK_CMD` 一个来源**。`drover` 自己这个仓库把它留空——第 3 条恒为「不适用」（`ok=None`，不拦）。**机制保留、默认为空**：以后前端项目想「每个人做完跑一遍测试」时填上即可。合成测试在 `tests/criteria.sh`。
    **渲染页面时只算前两条。** 第 3 条可能是整套测试，而页面 30 秒一刷、每个项目都渲染，全算一遍等于每半分钟把所有项目的测试跑一遍（`criteria(..., do_check=False)`）。前两条是纯 git，便宜，「等人」的识别靠它们就够——主控停下等人时，main 基本都还没前进。
 3. **换传输层**（2026-09-20 做完）：herdr 的四个调用（`agent list` / `get` / `read` / `prompt`）换成 corral 的三个（`ls` / `status` / `send`）。`HERDR_PANE_ID` 和那一整套 pane 身份核对**删掉**而不是换掉：这个工具现在只在 drover 这边跑，送给谁看配置里的 `MAIN_AGENT`，`.loop-wait` 里只剩原因和时间。叫醒改成送任务正文——老的往写手窗格注入「运行 review-task next，按它的输出办」是内依赖外，已经没有了；送出去的文本里现在连 `drover` 这个词都不许出现，有测试守着。「正在调什么工具 / 这一轮多久」不再去抠 `agent read` 的输出（corral 契约明写 `read`「只作排查用，不要解析」），改用 `status` 的 `last_tool` + `turn_started`。没配 `MAIN_AGENT` 时 `next` 把任务正文打出来让人自己粘，内循环全靠人手工做的项目照样能用。
 4. **看板改造**（2026-09-20 做完大半）：按上面的留 / 改 / 删；`loop_tick` 换 corral 在第 3 步一起做了。「当前这件活」块齐了：主控状态 / 正在调什么工具 / 这一轮多久、派出去的 agent 各自状态、分支进展（`main` 上几个提交、最后一次多久前）、完成判据过了几条。「等你」每条带 `corral attach <名字>`（只是给人抄的一句话，drover 自己不跑 attach）。
