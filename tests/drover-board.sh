@@ -278,7 +278,7 @@ for sec, want in ((0, "0s"), (45, "45s"), (1200, "20m"), (3780, "1h03m"), (90000
 assert B.task_span(None, 5) == "" and B.task_span(5, None) == "", "缺一头就不显示"
 
 pv = next(x for x in B.view_model(B.collect(sys.argv[2]))["projects"] if x["name"] == "eta/repo")
-# 判据理由只压平 ASCII CR/LF；整串相等才能抓到肉眼难分的 Unicode 改写。
+# 判据理由压平旧 split() 识别的 ASCII 空白控制字符；Unicode 必须整串相等。
 for why, want in (
     ("还没合进 main：feature/name\xa0", "✗ 门2：还没合进 main：feature/name\xa0"),
     ("还没合进 main：feature/name\u2028tail", "✗ 门2：还没合进 main：feature/name\u2028tail"),
@@ -287,11 +287,13 @@ for why, want in (
     ("\n".join(["git 查询失败：分支甲", "git 查询失败：分支乙"]),
      "✗ 门2：git 查询失败：分支甲 git 查询失败：分支乙"),
     ("错误甲\r\n\n\r错误乙\r错误丙\n\n错误丁", "✗ 门2：错误甲 错误乙 错误丙 错误丁"),
-    ("\r\n  错误甲\t \n  错误乙  \r", "✗ 门2：   错误甲\t    错误乙   "),
+    ("错误甲\t错误乙\x1f错误丙\v\f\x1c\x1d\x1e\n\r错误丁", "✗ 门2：错误甲 错误乙 错误丙 错误丁"),
+    ("\r\n  错误甲\t \n  错误乙  \r", "✗ 门2：   错误甲     错误乙   "),
 ):
     detail_pv = {**pv, "waits": [], "queue": {**pv["queue"], "crew": [],
         "card": {**pv["queue"]["card"], "criteria": [{"name": "门2", "ok": False, "why": why}]}}}
     actual = [t for style, _, t in B.detail_lines(detail_pv) if style == "bad"]
+    assert not any("\x00" <= ch <= "\x1f" for ch in actual[0]), f"详情残留 ASCII 控制字符：{ascii(actual[0])}"
     assert actual == [want], f"详情理由被改写：{ascii(actual)} != {ascii([want])}"
     assert "\n" not in actual[0] and "\r" not in actual[0], ascii(actual[0])
 rows = [t for _, _, t in B.detail_lines(pv)]

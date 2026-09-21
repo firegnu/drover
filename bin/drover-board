@@ -895,8 +895,8 @@ def detail_lines(pv):
         out.append(("", 2, f'判据 {c["met"]}'))
         for r in c["criteria"]:
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
-            # 只压平 ASCII 换行；合法分支名里的 Unicode 空白必须原样保留。
-            why = re.sub(r"[\r\n]+", " ", r["why"])
+            # 压平旧 split() 识别的 ASCII 空白控制字符，保留普通空格和非 ASCII 字符。
+            why = re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", r["why"])
             out.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 3,
                         f'{mark} {r["name"]}：{why}'))
     crew = q.get("crew") or []

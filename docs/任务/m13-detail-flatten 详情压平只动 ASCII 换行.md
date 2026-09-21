@@ -165,3 +165,13 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ### 要改的测试
 
 第 7 组用例 `"\r\n  错误甲\t \n  错误乙  \r"` 现在断言 tab 被保留，改法落地后期望值要跟着变（tab 变一个空格）。另外**补一条断言守住这次的回退**：理由里塞 `\t` 和 `\x1f`，断言输出里 `"\t" not in` 且不含任何 `\x00-\x1f` 的字符；同时 NBSP / U+2028 那几条一个字不动，证明两类确实分开处理。
+
+## 返工记录
+
+- 已处理主控审查的 1 条必须改：`detail_lines()` 改用 `re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", why)`，恢复旧 `split()` 对九种 ASCII 空白控制字符的压平，普通空格和非 ASCII 字符仍原样保留，注释同步更新。
+- 原第 7 组期望值改成 tab 被替换为空格；新增一组含 tab、U+001F 及其余七种目标控制字符的理由，整串相等，并断言输出中无 U+0000–U+001F 字符。共 **8 组**，原 NBSP / U+2028 / U+2029 / U+0085 四组一个字未改。
+- **RED**：只改测试，未改生产代码时运行 `bash tests/drover-board.sh`，退出 **1**，新断言报 `详情残留 ASCII 控制字符`，实际串明确残留 `\t`、`\x1f`、`\x0b`、`\x0c`、`\x1c`、`\x1d`、`\x1e`；无语法、导入或 fixture 错误。
+- **GREEN**：修改实现后运行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，退出 **0**：criteria **2 个 PASS 块**、drover **2 个 PASS 块**、install **9 项**、drover-board **13 个 PASS 块 + 17 项 check-result 测试**，新增断言全部通过。
+- **独立植入自检**：在 `/tmp/drover-m13-rework-jeda3fna` 成对复制两个脚本，覆盖变量均用绝对路径。每个变体先经 `compile()`，再独立运行看板套件：① 退回仅 CR/LF 的正则，退出 **1**，命中新增 ASCII 控制字符残留断言（`crlf-only.log`）；② 退回旧 `" ".join(r["why"].split())`，退出 **1**，命中 NBSP 精确断言（`unicode-split.log`）。恢复后两个副本与工作区逐字节一致，重跑退出 **0**，13 块 + 17 项全绿（`restored.log`）；临时缺陷未进入工作区或提交。
+- **取舍与边界**：按主控指定集合处理，不泛化为吞掉所有 ASCII 控制字符；测试输入不含 NUL，不改变 `\x00` 的既有行为。保留普通空格，不 `strip()`，不修改判据、绘制层或其他显示功能。原完成记录中“保留 tab”的取舍由本节更正。
+- `bash -n tests/drover-board.sh`、`git diff --check` 通过；四条 Unicode 用例与审查提交逐行一致。所有命令前台等待结束，只提交本分支的三个指定文件，不合并、不推送，无需主控另作决定。
