@@ -6,7 +6,7 @@
 
 ## 2026-09-22（凌晨）—— 自举开跑了
 
-**这一节最新，先读它。** **D2 第 3 层自举正式开始了**：`MAIN_AGENT=drover/main` 已填，drover 从自己的队列里发任务给主控，主控照 corral-dispatch 拆活派 agent。**第一件（`T1` / `m11-single-check`）已经走完整个循环并合并**。
+**这一节最新，先读它。** **D2 第 3 层自举正式开始了**：`MAIN_AGENT=drover/main` 已填，drover 从自己的队列里发任务给主控，主控照 corral-dispatch 拆活派 agent。**头两件（`T1` / `m11-single-check`、`T2` / `m12-ref-names`）已经走完整个循环并合并**。
 
 **档位是「什么都不自动」**（用户 2026-09-22 定的）：`loop` **关着**，`TASK_GATE=1`。每一步都要人动手——按 `n` 发任务、跑 `drover done` 核对、按 `g` 放行。**不要擅自 `drover loop on`**，那是下一档。
 
@@ -27,9 +27,32 @@
 
 **一个容易误会的显示**：主控状态常常是「空闲」，但那恰恰是它最忙的时候（派完活等 dev agent，可能几十分钟）。这是 ROADMAP 记死的三个死路之一，所以 drover **绝不拿 idle 当完成信号**，依据只认收尾记号。
 
+### 第二件活：T2 → `m12-ref-names`（2026-09-22）
+
+修了一个**危险方向的误判**：`task_branches` 用 `splitlines()` + `strip()`，把末尾带 NBSP 的未合入分支裁成了同名的已合入分支，门 2 判过。主控实测复现：
+
+```
+git 眼里：    feature/merged / feature/merged\u{a0}（未合入）/ main
+drover 眼里： 'feature/merged' / 'feature/merged'      ← 裁成同一个
+门 2 → ✓ 过 | 2 个都已经是 main 的祖先：feature/merged、feature/merged
+```
+
+改法：`%(refname)` 完整 ref、只按 ASCII 换行切、不做 Unicode `strip()`、查询用完整 ref（顺带消解同名 tag 的歧义）。
+
+**这次交叉审查给了「可以合并，0 条必须改」**——比 `m10` 那三轮利落得多。原因是任务文件里加了一条分级标准：
+
+> **分级按「正常用会不会撞上」来定**：需要特意构造畸形输入才触发的，标「建议改」或「可以不改」，不要标「必须改」。
+
+**这条以后每次派交叉审查都写上。**
+
+### 两个主控自己犯的错，记下来
+
+1. **写审查结论时用 `git add -A`，把 dev worktree 的 `bin/__pycache__/*.pyc`（81KB 二进制）提交进了分支**，交叉审查逮到的。`m10` 审查时踩过一次、手动清掉但没修根因。这次连同 `.gitignore` 一起补了（`__pycache__/`、`*.pyc`）。**审查结论用 `git add <具体文件>`，别用 `-A`。**
+2. **`git commit -F -` 的 heredoc 里别写带引号和反斜杠转义的内容**，shell 会炸（`unmatched "`）。消息复杂时写到临时文件再 `-F <文件>`。
+
 ### 下一步
 
-队列空了。往里加活、按 `n` 发下一件即可。**验收口径不变**：一律放行模式跑够 5 件、没有「没做完却判成做完了」，再上靶场。现在是 **1/5**。
+队列空了。往里加活、按 `n` 发下一件即可。**验收口径不变**：一律放行模式跑够 5 件、没有「没做完却判成做完了」，再上靶场。现在是 **2/5**。
 
 队列里的活可以直接从下面欠账清单取（还剩 5 条）。
 
@@ -316,13 +339,15 @@ drover 驱动自己的开发。**一律放行模式**（`TASK_GATE=1`，每件�
 4. ~~**TUI 详情区不滚动**~~（**2026-09-21 晚做完**，`m8-detail-scroll`，详见顶上那节）。
 5. ~~**判据第 3 条在看板上只显示命令、不显示结果**~~（**2026-09-21 夜做完**，`m10-check-result`，详见顶上那节）。
 6. **`install.sh` 把安装时那条 shell 的整条 PATH 烤进 plist**。好处是常驻引擎一定找得到 `corral` 和 `git`；代价是换条 PATH 再装会拒绝（失败方向安全，有提示），装时若激活着 venv 会一直用那个 venv 的 `python3`。**真装的时候用干净的 shell。** 要改就是收成白名单加 `~/.local/bin`，但那样可能找不到 `corral`。
-7. **分支名里的 Unicode 空白会被 `splitlines()` / `strip()` 改写**（`bin/drover-board` 的 `task_branches`，2026-09-21 交叉审查发现，**旧版也有，不是 `m9` 引入的**）。git 接受某些 Unicode 空白（如末尾 NBSP），但 Python 的 `strip()` 会把 `feature/x\u00a0` 裁成 `feature/x`，于是**未合入的那个被当成已合入的那个**，门 2 误过；含 U+2028 的名字会被 `splitlines()` 拆成两条不存在的 ref。审查者实测复现过。改法：解析时只按 ASCII 换行切分、不做 Unicode `strip()`，查询用完整 ref、显示时再去 `refs/heads/` 前缀。方向在危险那侧，但触发要人真去建这种分支名。
+7. ~~**分支名里的 Unicode 空白会被 `splitlines()` / `strip()` 改写**~~（**2026-09-22 做完**，`m12-ref-names`——**自举第二件活**）。`%(refname)` 取完整 ref、只按 ASCII 换行切分、不做 Unicode `strip()`、查询用完整 ref（顺带消解同名 tag 的歧义）。
 
 8. ~~**`cmd_done` 判据通过时会跑两次验收命令**~~（**2026-09-21 深夜做完**，`m11-single-check`——**drover 自举的第一件活**）。`check_done()` 返回 `(probs, rows)`，`criteria_report(task, rows)` 复用同一次结果；`B.criteria` 的调用点 2 处减到 1 处，`drover done` 快一半。老的计数器 fixture 留着当回归探测器。
 9. **强杀进程会留下 `.check-result.<pid>.tmp`，没有清扫机制，会积累。** 交叉审查实测：精确 kill 掉正在写的进程，旧 `.check-result` 完好，但 tmp 残留下来。看板不把它当核对记录，无害但会攒。不要贸然加清扫——会误删正在写的文件。
 10. **两个 `drover done` 并发会写出两条 `done` 事件**（实测退出码 `[8, 8]`、事件 `start, done, done`）。来自既有的「先 fold 再 append、无锁」流程，**不是 `m10` 引入的**，`.check-result` 的写法既没解决也没加重它。
 11. **`drover done` 遇到任务正文含孤立代理码时 `print(line)` 会崩**（`bin/drover` 的 `criteria_report` 输出路径）。**既有问题，改动前的 `main` 一模一样会崩**（实测两边都是退出 1、一处 `UnicodeEncodeError`）。
     > 连带后果：`m10` 给发布旁路加的 `except (OSError, UnicodeError)` **没有测试守着**。原来那条回归依赖调用者的 `PYTHONIOENCODING`（设了就绿、不设就红），2026-09-21 夜用户定：撤掉测试、保留修复、记这条欠账。要补测试得先修 `print`。
+12. **看板详情会把修好的分支名再次折叠**（`bin/drover-board` 的 `detail_lines`，`m12` 交叉审查发现）。`" ".join(r["why"].split())` 按 Unicode 空白拆分，把 `feature/name\xa0` 显示成 `feature/name`、把 U+2028 变成空格。**判据理由本身是对的、门 2 正确阻挡**，`drover done` 的输出也原样；只有看板详情里的名字被改写。**既有显示问题，不是 `m12` 引入的。** 改法：压平多行理由时只处理 ASCII 换行/回车。
+13. **其它 `main` 查询仍用短名**（门 1、收尾记号范围、提交统计、`.check-result` 新鲜度、派发起点；`bin/drover-board` 多处 + `bin/drover:110`）。同名 tag 时 git 优先解析 tag。`m12` 把门 2 改成完整 ref 了，**其余没动**——既有边界，本次没制造也没扩大。要改就得把这些读点连同派发保存的起点一起核对，配同名 tag 回归。
 
 
 ## 悬着等人定的
