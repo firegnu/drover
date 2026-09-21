@@ -80,3 +80,33 @@ drover 眼里： 'feature/merged'
 ## 回复
 
 只写：做完了哪些、测试结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 实现时的取舍
+
+- 保留 `task_branches()` 返回短名列表的接口：枚举和祖先查询使用完整 `refs/heads/…`，查询后仅去掉固定前缀；`criteria()` 再补前缀查询分支和 main，显示保留原始 Unicode 字符，不引入转义格式。
+- 复用已有普通分支、遗留分支、main 排除和错误处理回归，新增同名 tag 场景覆盖 Git 短名歧义；不改判据语义，无需主控另作决定。
+
+## 完成记录
+
+- `bin/drover-board`：枚举改用 `%(refname)`，只按 ASCII `\n` 切分，不再对 ref 做 `strip()`；按完整 ref 排除 main，门 2 两次祖先查询均使用完整 ref。枚举失败、退出码三分、`LC_ALL=C`、超时和异常处理保持原样。
+- `tests/criteria.sh`：合成仓库验证普通已合入分支与末尾 NBSP 未合入分支并存、NBSP 合入后通过、U+2028 分支合入前后结论与完整名字对应、同名 tag 与 `core.warnAmbiguousRefs` 两种设置；精确断言理由文本，显示不带 `refs/heads/`。
+
+### RED → GREEN
+
+逐步执行 `env -u PYTHONIOENCODING bash tests/criteria.sh`，每步都等待前台命令结束：
+
+1. NBSP 回归先以退出码 1 失败：门 2 错判 True，理由中出现两个 `feature/merged`；去掉 `strip()` 后整个判据套件通过。
+2. U+2028 回归先以退出码 1 失败：已合入的分支被拆成 `feature/line` / `separator`，两条查询均退出 128；改为 `split("\n")` 后整个判据套件通过。
+3. 同名 tag 回归先以退出码 1 失败：理由错误显示 `heads/feature/line\u2028separator`；改用完整 ref、显示仅去固定前缀后整个判据套件通过。
+
+### 全套与植入自检
+
+- `env -u PYTHONIOENCODING bash -c 'for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done'`：退出码 0，四套全绿，含安装 9 项和核对记录 17 项；安装测试只使用临时 HOME 和现有沙箱。所有命令均在前台跑完，未设置 `PYTHONIOENCODING`。
+- 自检用标准库 Python 驱动：将 `drover` 与 `drover-board` 一起复制到同一临时目录，`DROVER_BIN` / `DROVER_BOARD_BIN` 均为绝对路径；先跑未改副本的 `bash tests/criteria.sh`，退出码 0。随后每次从原始实现独立植入一条缺陷，再跑同一套件：
+  - (a) `result.stdout.split("\n")` → `result.stdout.splitlines()`：退出码 1，`U+2028 branch must stay intact` 断言失败。
+  - (b) `for b in out:` → `for b in (b.strip() for b in out):`：退出码 1，`NBSP branch must block` 断言失败。
+  - (c) 去掉完整 main ref 的排除条件：退出码 1，`criterion 2 explains the empty branch set` 断言失败（main 被计入）。
+  - (d) 三处短名清单的显示统一加回 `refs/heads/` 前缀：退出码 1，NBSP 未合入理由的精确文本断言失败。
+- 四个副本均先通过 Python `compile()`；失败输出没有 `SyntaxError` / `FileNotFoundError`，没有吞掉断言的异常处理；生产工作区未植入缺陷。
+- `git diff --check`：通过。
+- 未改 ROADMAP、历史任务文件、`.check-result` 或孤立代理码既有问题；未访问真实交接目录、改 corral、安装到真实 HOME、动 launchd、开关 agent、合并 main 或推送。只提交在 `m12-ref-names`，交叉审查留给主控安排。
