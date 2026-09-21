@@ -94,3 +94,44 @@ for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; do
 ## 回复
 
 回复里只写：做完了哪些、测试结果、植入自检结果、取舍各一句话、有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+### 做了什么
+
+- `bin/drover` 增加仅供输出使用的 `print_text()`，只替换三个调用点：`cmd_done()` 的成功报告、失败理由，以及未配置主控时 `issue()` 打印的任务正文。
+- `tests/check-result.py` 新增三项回归：含高低代理码正文的真实 CLI 返回正常判据码 8 / 9；手动重发正文正确显示且不改状态文件；发布遇到真实 UTF-8 编码错误时保留旧 `.check-result`、打印 `WARNING: 未能发布`，并保持 done / 未完成事件语义。
+- 判据函数、报告生成、原始理由、看板渲染均未修改。
+
+### 测试命令和结果
+
+1. RED（生产代码未改）：`python3 tests/check-result.py CheckResult.test_publish_encoding_error_preserves_done`，退出 1；`true` / `false` 两个子用例分别在原第 394 / 389 行裸 `print` 抛 `UnicodeEncodeError`。失败不是导入或 fixture 问题。
+2. GREEN：修复两个报告出口后，同命令退出 0。
+3. 正文出口 RED：`python3 tests/check-result.py CheckResult.test_surrogate_body_preserves_done CheckResult.test_surrogate_body_manual_resend`，正文 done 用例通过，手动重发因 `issue()` 的裸 `print(text)` 抛 `UnicodeEncodeError`、CLI 退出 1 而失败；修复该出口后，连同发布回归共 3 项全部通过。
+4. 全量：`for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，退出 0。criteria：2 个 PASS 块；drover：2 个 PASS 块；install：9 项测试；drover-board：13 个 PASS 块，附带 check-result：20 项测试（16.514 秒），全绿。
+5. 调用者环境对照：分别清除 `PYTHONIOENCODING`、在外层设成 `ascii:strict`、在外层设成 `utf-8:surrogateescape`，逐次运行三项新增测试，每次均 3 项通过。测试本身不设置该环境变量。
+6. `git diff --check`、两个改动 Python 文件的 `ast.parse` 语法检查通过。
+
+### 独立缺陷植入自检
+
+用前台 Python 脚本创建临时目录，将 `bin/drover` 和 `bin/drover-board` 一起复制进去，`DROVER_BIN` / `DROVER_BOARD_BIN` 均指向绝对路径；每次只改一个缺陷，再运行对应新增测试：
+
+| 临时植入 | 结果 | 还原后 |
+|---|---|---|
+| 成功报告改回 `print(line)` | 退出 1，`UnicodeEncodeError` | 退出 0 |
+| 失败理由改回 `print(f"  - {p}")` | 退出 1，`UnicodeEncodeError` | 退出 0 |
+| 手动重发正文改回 `print(text)` | 退出 1，CLI 因 `UnicodeEncodeError` 崩溃 | 退出 0 |
+| 发布旁路移除 `UnicodeError` 捕获 | 退出 1，真实 JSON 写入发生 `UnicodeEncodeError` | 退出 0 |
+
+两个临时副本最终均与工作区文件逐字节一致；植入改动没有进入工作区或提交。
+
+### 实现时的取舍
+
+- 显示形式选择小写十六进制 `\ud800` / `\udcff` 等可读转义；仅输出字符串中的 U+D800–U+DFFF 被转换，正常中文、NBSP、emoji 原样保留，不改原始正文或理由，也不改变全局标准流错误策略。
+- 只处理确实承载任务正文或判据理由的三个输出点；手动重发属于任务文件要求一并检查的正文出口，其余打印点不扩展。
+- 当前分支已经删除正文「验收：…」覆盖 `CHECK_CMD` 的功能，旧回归不能原样搬回。新发布回归在 `setup()` 后直接给内存中的 `CHECK_CMD` 赋含 U+DCFF 的 shell 注释，真实执行判据、真实触发 JSON 文件编码错误、真实调用 `cmd_done()`；不伪造判据结果或写文件异常。独立的真实 CLI 测试覆盖含代理码正文返回 8 / 9，不重新启用旧覆盖语法。
+- 发布回归自建严格 UTF-8 `TextIOWrapper`，CLI 回归用 `-I` 忽略 Python 环境变量并显式固定标准流为严格 UTF-8，因此调用者环境不能掩盖裸 `print` 的缺陷。
+
+### 遇到的问题、没做的事
+
+唯一与任务原描述不同的是正文已不再进入验收命令，以上测试拆分保留了现行设计和原回归要守的发布旁路。无需主控另作设计决定。未处理欠账 9 / 10，未改 ROADMAP、看板或判据逻辑，未装依赖、未安装服务、未接触真实项目或 corral；只提交当前分支，不合并、不推送。所有命令都已在前台等待结束。

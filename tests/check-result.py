@@ -74,6 +74,15 @@ class CheckResult(unittest.TestCase):
         return subprocess.run([sys.executable, str(DROVER), "done", "T1"], cwd=self.repo,
                               env=self.env, capture_output=True, text=True)
 
+    def strict_cli(self, *args):
+        code = ("import runpy, sys; "
+                "sys.stdout.reconfigure(encoding='utf-8', errors='strict'); "
+                "sys.stderr.reconfigure(encoding='utf-8', errors='strict'); "
+                "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')")
+        # -I 忽略调用者的 Python 环境；流编码也显式固定，不设置 PYTHONIOENCODING。
+        return subprocess.run([sys.executable, "-I", "-c", code, str(DROVER), *args],
+                              cwd=self.repo, env=self.env, capture_output=True)
+
     def saved(self, **changes):
         return {"task": "T1", "main": self.sha, "cmd": "true", "ok": True,
                 "why": "`true` 过了", "t": time.time() - 180, **changes}
@@ -211,6 +220,75 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                         self.assertTrue(self.result.is_dir(), "不能删除异常目标")
                     finally:
                         self.result.rmdir()
+
+    def test_surrogate_body_preserves_done(self):
+        for cmd, code in (("true", 8), ("false", 9)):
+            with self.subTest(cmd=cmd):
+                self.configure(cmd)
+                self.task["body"] = "验收：正常前缀\ud800正常中间\udfff正常后缀"
+                state = self.d / "tasks.state"
+                state.write_text(json.dumps(self.task) + "\n", encoding="utf-8")
+                actual = self.strict_cli("done", "T1")
+                self.assertEqual(actual.returncode, code, actual.stderr)
+                self.assertNotIn(b"UnicodeEncodeError", actual.stderr)
+                self.assertEqual(self.B.task_events(state.read_text())[0], self.task)
+
+    def test_surrogate_body_manual_resend(self):
+        with (self.repo / ".drover.conf").open("a") as f:
+            f.write("MAIN_AGENT=\n")
+        self.task["body"] = "正文\ud800甲\udbff乙\udc00丙\udcff丁\udfff尾\u00a0🙂"
+        state = self.d / "tasks.state"
+        original = json.dumps(self.task) + "\n"
+        state.write_text(original, encoding="utf-8")
+        actual = self.strict_cli("next")
+        self.assertEqual(actual.returncode, 0, actual.stderr)
+        self.assertEqual(actual.stderr, b"")
+        self.assertIn("正文\\ud800甲\\udbff乙\\udc00丙\\udcff丁\\udfff尾\u00a0🙂",
+                      actual.stdout.decode("utf-8"))
+        self.assertEqual(state.read_text(), original, "输出不能改写任务正文")
+
+    def test_publish_encoding_error_preserves_done(self):
+        D = load("drover_encoding_check", DROVER)
+        for cmd, code in (("true", 8), ("false", 9)):
+            with self.subTest(cmd=cmd):
+                self.configure(cmd)
+                previous = os.getcwd()
+                try:
+                    os.chdir(self.repo)
+                    D.setup()
+                finally:
+                    os.chdir(previous)
+                # 正文已不再覆盖 CHECK_CMD；直接给核对入口传入含代理码的命令。
+                # U+DCFF 可经 POSIX surrogateescape 传给 shell，注释不影响执行。
+                D.CHECK_CMD = cmd + " # 正常前缀\udcff正常后缀"
+                rows = D.B.criteria(str(self.repo), self.base, D.CHECK_CMD)
+                why = ("`" + D.CHECK_CMD + "` " + ("过了" if code == 8 else "退出码 1"))
+                self.assertEqual(rows[2]["why"], why)
+                self.assertIs(rows[2]["ok"], code == 8)
+                self.assertIn(why, D.criteria_report(self.task, rows)[-1])
+                self.assertEqual(rows[2]["why"], why, "报告生成不能改写判据理由")
+                self.result.write_text("previous complete result", encoding="utf-8")
+                # 自建严格流，不继承调用者 stdout 的编码或错误策略。
+                with io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict") as output, \
+                        io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict") as errors:
+                    with redirect_stdout(output), redirect_stderr(errors):
+                        actual = D.cmd_done("T1")
+                    output.flush()
+                    errors.flush()
+                    stdout = output.buffer.getvalue().decode("utf-8")
+                    stderr = errors.buffer.getvalue().decode("utf-8")
+                self.assertEqual(actual, code)
+                self.assertNotIn("UnicodeEncodeError", stderr)
+                self.assertIn("正常前缀\\udcff正常后缀", stdout)
+                self.assertIn("WARNING: 未能发布", stderr)
+                self.assertIn(".check-result", stderr)
+                self.assertIn("surrogates not allowed", stderr)
+                self.assertEqual(self.result.read_text(), "previous complete result")
+                self.assertEqual(D.B.criteria(str(self.repo), self.base, D.CHECK_CMD), rows,
+                                 "显示不能改写判据理由")
+                events = self.B.task_events((self.d / "tasks.state").read_text())
+                self.assertEqual([e["ev"] for e in events],
+                                 ["start", "done"] if code == 8 else ["start"])
 
     def test_publish_io_errors_preserve_check_done(self):
         D = load("drover_io_check", DROVER)

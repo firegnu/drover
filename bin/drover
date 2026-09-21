@@ -50,6 +50,11 @@ import time
 sys.dont_write_bytecode = True   # 下面按文件路径加载看板；别在 bin/ 里留下 __pycache__
 
 
+def print_text(text):
+    """只在输出时转义代理码；任务正文和判据理由仍保留原字符。"""
+    print(re.sub(r"[\ud800-\udfff]", lambda m: f"\\u{ord(m[0]):04x}", text))
+
+
 def die(code, msg):
     print(msg)
     sys.exit(code)
@@ -166,7 +171,7 @@ def issue(t, again=False):
     drover 照样能用，只是少了自动送这一步（ROADMAP「怎么算成功」里那条依赖方向的验证）。"""
     text = task_text(t, again)
     if not MAIN_AGENT:
-        print(text)
+        print_text(text)
         print("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）")
         return start_task(t, again)
     code, j = B.corral("send", MAIN_AGENT, text, timeout=60)
@@ -386,12 +391,12 @@ def cmd_done(tid):
     if probs:
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
-            print(f"  - {p}")
+            print_text(f"  - {p}")
         print(f"处理完再运行 drover done {tid}。")
         return 9
     print(f"核对通过 {tid}：")
     for line in criteria_report(current, rows):
-        print(line)
+        print_text(line)
     if done_mark_row(current)["ok"] is not True:
         print("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。")
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
