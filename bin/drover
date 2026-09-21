@@ -212,7 +212,21 @@ def check_done(task):
     dirty = tree_dirty()
     if dirty:
         probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
-    for r in B.criteria(REPO, task.get("main", ""), task_check_cmd(task.get("body"))):
+    cmd, sha = task_check_cmd(task.get("body")), main_sha()
+    rows = B.criteria(REPO, task.get("main", ""), cmd)
+    # 只记决定能否 done 的这次核对；criteria_report 的再次执行不覆盖它。
+    check = next(r for r in rows if r["n"] == 3)
+    mark = f"{D}/.check-result"
+    tmp = f"{mark}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"task": task["id"], "main": sha, "cmd": cmd, "ok": check["ok"],
+                       "why": check["why"], "t": int(time.time())}, f, ensure_ascii=False)
+        os.replace(tmp, mark)
+    except (OSError, UnicodeError) as e:
+        # 显示记录是可失败的旁路，不能成为完成判断或队列推进的新前提。
+        print(f"WARNING: 未能发布 {mark}：{e}", file=sys.stderr)
+    for r in rows:
         if r["ok"] is False:
             probs.append(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}')
     return probs
