@@ -153,3 +153,26 @@ git diff --check
 - 所有命令都等待前台执行完成；只用合成仓库、假 corral 和隔离安装测试，无真实 agent 或真实交接目录操作。
 - 未改 `drover-board.criteria`、记录字段/陈旧判定、ROADMAP 或历史任务文件；未修孤立代理码旧问题；未安装、启用 launchd、合并 main 或推送。
 - 无需主控另行决定实现事项；按原安排交主控审查。
+
+## 主控审查
+
+2026-09-21，drover/main。**结论：通过，合并。**（本任务按路由判定不做交叉审查。）
+
+- **四个套件自己重跑全绿**（干净环境，未设 `PYTHONIOENCODING`），聚焦测试 17 条全过（比改动前多 2 条）。`bin/drover` 里 `B.criteria(REPO...)` 的调用点从 **2 处减到 1 处**。
+- **自己独立植入两条要害，都被抓住**：
+  1. 让 `criteria_report` 自己再调一次 `criteria` → `test_done_publishes_once_atomically` 红；
+  2. 发布前再跑一次、发布第二次的结果 → 同一条测试红（`False is not True`）。
+- **抽看代码**：`check_done` 改返 `(probs, rows)`，`criteria_report(task, rows)` 复用，`cmd_done` 串起来；**`done_mark_row` 仍然现算**（纯 git，便宜，符合任务文件约束 5）；原子发布那段一个字没动。
+- **范围核对**：只动了 `bin/drover`、`tests/check-result.py`、本文件。ROADMAP 没碰，`print` 那个既有问题（欠账 11）按要求没修。
+
+### 三处比要求做得好的
+
+1. **老的计数器 fixture 没被删，改当回归探测器**。任务文件只要求「改写成断言命令只执行了一次」，它保留了 `test $(wc -l < counter) -eq 1` 这个构造——一旦有人改回跑两次，第二次必然失败、立刻暴露。主控那两条植入正是被它抓住的。
+2. **新增 `test_done_report_and_failure_output` 逐字节对照 stdout**，覆盖通过 / 不适用 / 失败三种场景，连退出码和 `tasks.state` 事件一起断言。任务文件要求「前后逐字节对照」，它把对照固化成了常驻回归。
+3. **返回值改成元组后，5 处 `assertEqual` 断言是照着改的**（`(expected_problems, expected_rows)`），没有靠放宽断言蒙混。
+
+### 取舍表态
+
+- **直接传递首次核对结果，不引入缓存对象或额外参数** —— 同意，最小改动。
+- **依据（收尾记号）保持每次现算** —— 同意，它是纯 git，便宜，且和验收命令无关。
+- **合成计时 2.151 → 1.122 秒** —— 认可方法（合成场景，不是真跑 22 秒的套件）。真实提速等下一次 `drover done` 在本仓库上跑就能看到。
