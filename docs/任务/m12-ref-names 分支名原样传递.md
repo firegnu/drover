@@ -110,3 +110,30 @@ drover 眼里： 'feature/merged'
 - 四个副本均先通过 Python `compile()`；失败输出没有 `SyntaxError` / `FileNotFoundError`，没有吞掉断言的异常处理；生产工作区未植入缺陷。
 - `git diff --check`：通过。
 - 未改 ROADMAP、历史任务文件、`.check-result` 或孤立代理码既有问题；未访问真实交接目录、改 corral、安装到真实 HOME、动 launchd、开关 agent、合并 main 或推送。只提交在 `m12-ref-names`，交叉审查留给主控安排。
+
+## 主控审查
+
+2026-09-22，drover/main。**结论：通过，可以进交叉审查。**
+
+- **四个套件自己重跑全绿**（干净环境）。
+- **用主控那个 NBSP 合成仓库实测，修好了**：
+
+  ```
+  改动前： 本次分支 ['feature/merged', 'feature/merged']   门 2 → ✓ 过（误过）
+  改动后： 本次分支 ['feature/merged', 'feature/merged\xa0'] 门 2 → ✗ 不过
+  ```
+
+  理由里保住了 NBSP：`'还没合进 main：feature/merged\xa0'`——报的确实是真正未合入的那个，不是裁过的同名分支。这条单看终端输出分辨不出（NBSP 不可见），**用 `repr` 验的**。
+- **自己独立植入三条，全部因目标断言变红**：改回 `splitlines()` → `U+2028 branch must stay intact`；把 `strip()` 加回来 → `NBSP branch must block`；去掉 `main` 排除 → `criterion 2 explains the empty branch set`。
+- **`m9` / `m10` 的成果逐条核对都还在**：`LC_ALL=C`、`ignoring broken ref` 检测、退出码三分（`== 1` 那支）、枚举失败进 `errors`。改 `task_branches` 最容易顺手把这些一起重写掉，没有发生。
+- **范围核对**：只动了 `bin/drover-board`、`tests/criteria.sh`、本文件。ROADMAP 没碰，判据语义没动，`.check-result` 那套没碰。
+
+### 取舍表态
+
+- **查询用完整 ref、接口和显示保留短名** —— 同意。`b = b[len("refs/heads/"):]` 放在 `merge-base` 之后，查询拿到的是完整 ref、返回给调用方的是短名，`criteria()` 里第二次查询也补了前缀。两层各用各的形态，没有混。
+
+### 留给交叉审查的点
+
+1. **`split("\n")` 对 `for-each-ref` 输出的假设**：末尾换行产生的空串靠 `if not b` 跳过。ref 名里能不能出现别的东西让这个切分失效（比如 `\r`）？`%(refname)` 的输出保证是什么？
+2. **去前缀用的是固定长度切片** `b[len("refs/heads/"):]`。`for-each-ref refs/heads/` 保证每条都带这个前缀吗？有没有路径能拿到不带前缀的 ref。
+3. **`main` 的排除改成比完整 ref** 之后，`MAIN_BRANCH` 若被配成别的值（现在硬编码 `"main"`）会不会有层级错配。
