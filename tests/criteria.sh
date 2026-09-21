@@ -85,6 +85,98 @@ assert errors == [], errors
 assert "main" in B.git(sys.argv[2], "branch", "--list"), "前提：本地分支清单里确实有 main"
 PY2
 
+# ---- 2. 合法 Unicode 空白是分支名的一部分，不能裁成已合入的同名分支 ----
+python3 - "${BOARD}" "${TMP}/unicode-repo" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+repo = sys.argv[2]
+pathlib.Path(repo).mkdir()
+def git(*args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True).stdout
+git("init", "-q", "-b", "main")
+git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+git("commit", "-q", "--allow-empty", "-m", "base")
+base = git("rev-parse", "refs/heads/main").rstrip("\n")
+git("branch", "feature/merged")
+branch = "feature/merged\u00a0"
+git("checkout", "-qb", branch)
+git("commit", "-q", "--allow-empty", "-m", "unfinished")
+git("checkout", "-q", "main")
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is False, f"NBSP branch must block: {row!r}"
+assert row["why"] == "还没合进 main：" + branch, row
+assert B.task_branches(repo, base) == (["feature/merged", branch], [], [])
+git("merge", "-q", "--ff-only", "refs/heads/" + branch)
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is True, row
+assert row["why"] == "2 个都已经是 main 的祖先：feature/merged、" + branch, row
+
+# U+2028 是 ref 内的字符；已合入时不能因为拆成两条而误报查询失败。
+separated = "feature/line\u2028separator"
+git("branch", separated)
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is True, f"U+2028 branch must stay intact: {row!r}"
+assert row["why"] == "3 个都已经是 main 的祖先：" + "、".join([
+    separated, "feature/merged", branch]), row
+git("checkout", "-q", separated)
+git("commit", "-q", "--allow-empty", "-m", "separator unfinished")
+git("checkout", "-q", "main")
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is False, row
+assert row["why"] == "还没合进 main：" + separated, row
+assert B.task_branches(repo, base) == ([separated, "feature/merged", branch], [], [])
+
+# 同名 tag 已合入，分支未合入；关闭短名歧义警告后也必须查真实分支。
+git("tag", separated, base)
+git("config", "core.warnAmbiguousRefs", "false")
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is False, f"same-name tag must not hide the branch: {row!r}"
+assert row["why"] == "还没合进 main：" + separated, row
+assert B.task_branches(repo, base) == ([separated, "feature/merged", branch], [], [])
+
+# 开启警告时 Git 的 short 格式会带 heads/；显示仍只剥固定 refs/heads/。
+git("config", "core.warnAmbiguousRefs", "true")
+row = B.criteria(repo, base, "")[1]
+assert row["ok"] is False and row["why"] == "还没合进 main：" + separated, row
+assert B.task_branches(repo, base) == ([separated, "feature/merged", branch], [], [])
+PY2
+
+# ---- 2. 两次祖先查询分别消歧：分支同名 tag 不能改变分类，main 同名 tag 不能冒充合入 ----
+python3 - "${BOARD}" "${TMP}" <<'PY2'
+import importlib.machinery, importlib.util, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+l = importlib.machinery.SourceFileLoader("rb", sys.argv[1])
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("rb", l)); l.exec_module(B)
+for scenario, tag_name in [("branch-tag", "feature/task"), ("main-tag", "main")]:
+    repo = str(pathlib.Path(sys.argv[2]) / scenario)
+    pathlib.Path(repo).mkdir()
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                              text=True, check=True).stdout.rstrip("\n")
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+    git("commit", "-q", "--allow-empty", "-m", "early")
+    early = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("checkout", "-qb", "feature/task")
+    git("commit", "-q", "--allow-empty", "-m", "pending")
+    pending = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    # 第一个场景的 tag 不含 base；第二个场景的 tag 冒充已包含 pending 的 main。
+    git("tag", tag_name, early if scenario == "branch-tag" else pending)
+    assert git("rev-parse", "refs/heads/main") == base, scenario
+    branches, excluded, errors = B.task_branches(repo, base)
+    assert branches == ["feature/task"], f"{scenario} current branches: {branches!r}"
+    assert excluded == [], f"{scenario} excluded branches: {excluded!r}"
+    assert errors == [], f"{scenario} query errors: {errors!r}"
+    row = B.criteria(repo, base, "")[1]
+    assert row["ok"] is False, f"{scenario} must block pending branch: {row!r}"
+    assert row["why"] == "还没合进 main：feature/task", f"{scenario} reason: {row!r}"
+PY2
+
 # ---- 3. 验收命令退出码 0 → 过 ----
 [ "$(line1 "${BASE}" 'true')" = "1:ok 2:ok 3:ok" ] \
   || fail "passing check: $(line1 "${BASE}" 'true')"

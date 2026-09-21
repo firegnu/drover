@@ -388,7 +388,7 @@ def task_branches(repo, base_sha):
     """所有本地分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
     try:
         result = subprocess.run(
-            ["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+            ["git", "-C", repo, "for-each-ref", "--format=%(refname)", "refs/heads/"],
             capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.SubprocessError) as exc:
         detail = getattr(exc, "stderr", None) or ""
@@ -397,14 +397,15 @@ def task_branches(repo, base_sha):
         return [], [], [f"枚举本地分支失败：{exc}" + (f"\n{detail}" if detail else "")]
     if result.returncode or "warning: ignoring broken ref" in result.stderr:
         return [], [], [f"枚举本地分支失败（git 退出码 {result.returncode}）：{result.stderr.strip()}"]
-    out = result.stdout.splitlines()
+    out = result.stdout.split("\n")
     current, excluded, errors = [], [], []
-    for b in (b.strip() for b in out):
-        if not b or b == MAIN_BRANCH:
+    for b in out:
+        if not b or b == f"refs/heads/{MAIN_BRANCH}":
             continue
         result = subprocess.run(
             ["git", "-C", repo, "merge-base", "--is-ancestor", base_sha, b],
             capture_output=True, text=True)
+        b = b[len("refs/heads/"):]
         if result.returncode == 0:
             current.append(b)
         elif result.returncode == 1:
@@ -462,7 +463,8 @@ def criteria(repo, base_sha, check_cmd, do_check=True):
                                 "没有未合并的分支"})
         else:
             left = [b for b in brs
-                    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", b, MAIN_BRANCH],
+                    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor",
+                                       f"refs/heads/{b}", f"refs/heads/{MAIN_BRANCH}"],
                                       capture_output=True).returncode != 0]
             rows.append({"n": 2, "name": name2, "ok": not left,
                          "why": (f"{len(brs)} 个都已经是 {MAIN_BRANCH} 的祖先：" + "、".join(brs)) if not left
