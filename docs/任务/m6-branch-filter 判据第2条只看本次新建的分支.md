@@ -147,3 +147,39 @@
 - ROADMAP 保留原句开头的“修法（还没做）”，严格遵守仅改算法措辞的范围；落地状态记在本完成记录，HANDOFF 由主控收尾时更新。
 
 没有需要主控决定的新事项。
+
+### 交叉审查修订（2026-09-21）
+
+按主控本轮裁定，只处理意见 2、3、4；意见 1 的判别式设计边界仍待主控向人确认，本轮没有改判别式、ROADMAP 或引入任何新状态。
+
+- **意见 2**：祖先查询退出码 0 保留、1 排除，其它退出码归入独立的错误列表；`criteria` 只要收到错误就令第 2 条 `ok=False`，`why` 包含故障分支名、退出码与 Git stderr。错误分支不再冒充遗留分支。正常排除名单在查询失败时仍可显示。
+- **意见 3**：新增两个包含 `base_sha` 的本次分支混合状态场景：`m6/impl` 已合入、`m6/second` 未合入时必须不过且点名后者，两者都合入后必须过；单个及混合本次分支的阻塞状态均断言显示 `m4/planning` 的排除信息。
+- **意见 4**：整个历史场景放进子 shell，`R` 和场景变量不再污染外层；退出后用原 `R`、`BASE` 再核对一次判据，验证恢复后的配对可用。
+
+**新增回归的 RED：** 未改实现时前台运行 `bash tests/criteria.sh`，退出码 1。合成仓库中已合入分支仍正常，另一个有未合入提交的 `m6/z-broken` 被暂时移走中间提交对象；测试先确认分支列表查询成功、正常分支祖先查询为 0、故障分支查询为 128 且 stderr 非空，再检查公开的 `criteria` 结果。失败输出：
+
+```text
+Traceback (most recent call last):
+  File "<stdin>", line 20, in <module>
+AssertionError: branch query error must block despite merged siblings: {'n': 2, 'name': '里程碑分支都合进去了', 'ok': True, 'why': '2 个都已经是 main 的祖先：m6/impl、m6/second；已排除不包含 base_sha 的遗留分支：m6/z-broken'}
+```
+
+这不是整个 `base_sha` 无效的全失败场景，也不是测试前提构造错误；失败正是第 2 条将单分支查询故障排除后误过。对象在 `finally` 中恢复，所有操作仅发生在测试的临时合成仓库。
+
+**意见 3 的变异验证：** 修复后在临时目录复制 `bin/drover-board`，分别将返回值改成 `return current[:1], excluded, errors`，以及将显示排除名单的条件改成 `if excluded and rows[-1]["ok"]:`；逐一通过 `DROVER_BOARD_BIN=<临时副本> bash tests/criteria.sh` 前台运行，两个变异均退出 1，输出如下（工作区实现未变异）：
+
+```text
+first-branch-only: exit=1
+FAIL: second current branch must still block: 1:ok 2:ok 3:skip
+  1 main 前进了: ebc6b89 → 1496b2c
+  2 里程碑分支都合进去了: 1 个都已经是 main 的祖先：m6/impl；已排除不包含 base_sha 的遗留分支：m4/planning
+  3 验收命令过了: 没有验收命令：CHECK_CMD 空着，队列条目也没写
+hide-excluded-when-blocked: exit=1
+FAIL: a blocking criterion must name the excluded legacy branch
+```
+
+**GREEN 和回归：** 实现后 `bash tests/criteria.sh` 退出 0；补完子 shell 退出后的核对及变异验证，再前台顺序执行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit; done`，退出 0，四个套件全绿（安装 9 项、看板 10 块通过）。`git diff --check` 通过；本轮 `docs/ROADMAP.md` 无差异。
+
+**实现时的取舍：** 将已有两份名单扩为 `(本次分支, 被排除分支, 查询错误)`，两个调用点同步适配，避免异常控制流或重复 Git 查询；`criteria` 签名及返回结构不变。保留完整 stderr（仅去掉首尾空白）便于排查，不把异常退出码解释为否定结果。
+
+**遇到的问题／没做的事：** 没有新增阻塞问题；意见 1 按主控裁定暂不处理，不能把本轮修复当作该设计边界已解决。未改其它判据、收尾记号、配置、HANDOFF、真实项目或靶场，未合并、未推送。
