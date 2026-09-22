@@ -217,6 +217,70 @@ for gate, held, looping, paused in ((1, False, False, False), (0, False, False, 
     assert events()[-1]["id"] == "T2" and sends() != before, "next/engine must send T2"
     assert checks() == 1, "release must not repeat the completion check"
 print("PASS direct g/go: warning, existing done, gate/hold/pause, engine continuation")
+
+# 真 TUI → run_drover → CLI → draw：只替换 curses 终端边界，不能绕过结果消息路径。
+from unittest.mock import patch
+
+class Terminal:
+    def __init__(self, width):
+        self.width, self.rows, self.frames = width, [], []
+        self.keys = iter((ord("g"), ord("q")))
+    def getmaxyx(self): return 24, self.width
+    def erase(self): self.rows = []
+    def refresh(self): pass
+    def timeout(self, ms): assert ms == B.REFRESH_MS
+    def addstr(self, y, x, text, attr=0):
+        assert not any(c in text for c in "\t\n\v\f\r\x1c\x1d\x1e\x1f"), repr(text)
+        assert 0 <= y < 24 and 0 <= x < self.width, (y, x)
+        assert x + B.width(text) <= self.width - (y == 23), repr(text)
+        self.rows.append((y, x, text))
+    def getch(self):
+        self.frames.append(list(self.rows))
+        return next(self.keys)
+
+missing = []
+for case, width in (("no-mark", 80), ("dirty", 80), ("marked", 80), ("no-mark", 40), ("dirty", 40)):
+    fixture(f"tui-{case}-{width}")
+    git("commit", "--allow-empty", "-qm", "收尾: first" if case == "marked" else "work")
+    if case == "dirty":
+        (repo / "work").write_text("dirty\n")
+    before = sends()
+    screen = Terminal(width)
+    with patch.object(B.curses, "curs_set"), patch.object(B.curses, "start_color", side_effect=B.curses.error):
+        B.tui(screen, str(projects))
+    msg = next(text for y, x, text in screen.frames[-1] if y == 23)
+    expected = {"no-mark": ("已放行", "没看到收尾记号", "这次算你自己判断的"),
+                "dirty": ("未放行", "工作区有没提交的改动", "work"),
+                "marked": ("已放行",)}[case]
+    if case == "no-mark" and width == 40:
+        expected = ("已放行", "没看到收尾记号")
+    missing.extend(f"{case}/{width}: missing {word!r} in TUI message {msg!r}" for word in expected if word not in msg)
+    assert checks() == 1 and sends() == before, (case, checks(), sends())
+    assert [e["ev"] for e in events()] == (["start"] if case == "dirty" else ["start", "done", "go"]), events()
+assert not missing, "\n".join(missing)
+print("PASS real TUI g: missing-mark warning, dirty reason, released status visible at 40/80 columns")
+
+fixture("tui-check-controls")
+git("commit", "--allow-empty", "-qm", "work")
+with (repo / ".drover.conf").open("a") as f:
+    f.write(f"CHECK_CMD=echo ran >> '{d}/checks'; printf 'failed\\twith\\nsecond'; exit 1\n")
+before, evs = sends(), events()
+msg = B.run_drover(str(repo), "go")
+assert "未放行" in msg and "判据 3" in msg and "退出码 1" in msg, msg
+assert "failed with" in msg and "second" in msg, repr(msg)
+assert not any(c in msg for c in "\t\n\v\f\r\x1c\x1d\x1e\x1f"), repr(msg)
+vm = B.view_model(B.collect(str(projects)))
+for width in (20, 40, 80, 2000):
+    screen = Terminal(width)
+    B.draw(screen, vm, {"sel": 0, "msg": msg})
+    visible = next(text for y, x, text in screen.rows if y == 23)
+    assert "未放行" in visible, visible
+    if width >= 40:
+        assert "判据 3" in visible, visible
+    if width == 2000:
+        assert "failed with" in visible and "second" in visible, visible
+assert checks() == 1 and events() == evs and sends() == before, (checks(), events())
+print("PASS run_drover: real failed check output survives and control characters are safe for draw")
 PY
 
 # ---- 加任务：编号自增；手写的可以不带编号，写在哪一块前面就排在哪 ----
