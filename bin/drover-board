@@ -812,6 +812,8 @@ COLORS = {}          # 样式名 → curses 属性。TUI 启动时填；没填�
 
 def init_colors():
     """深色：只设前景色，背景交给终端自己（use_default_colors）。看板一直是深色的，不为浅色折中。"""
+    COLORS.update(h1=curses.A_BOLD, h2=curses.A_BOLD, sel=curses.A_BOLD | curses.A_REVERSE,
+                  key=curses.A_BOLD, bar=0, history=0, account=curses.A_DIM, line=curses.A_DIM)
     try:
         curses.start_color()
         curses.use_default_colors()
@@ -828,7 +830,6 @@ def init_colors():
         COLORS[kind] = curses.color_pair(i)
     for kind in ("h1", "h2", "sel"):
         COLORS[kind] = COLORS.get(kind, 0) | curses.A_BOLD
-    COLORS["bar"] = curses.A_REVERSE
     COLORS["sel"] = COLORS.get("sel", 0) | curses.A_REVERSE
     COLORS["line"] = COLORS.get("line", 0) | curses.A_DIM
 
@@ -875,8 +876,8 @@ def task_metrics(pv):
             + (" · 做完停" if c["held"] else ""))
 
 
-def detail_sections(pv, body=None):
-    """主辅栏逻辑行；body 可替换正文显示区，默认仍返回完整文本。"""
+def detail_sections(pv, body=None, presentation=False):
+    """主辅栏逻辑行；默认保留共享详情格式，绘制时才分开判据标签和理由。"""
     main, side = [], []
     if pv["waits"]:
         main.append(("wait", 0, f'等你 · {len(pv["waits"])}'))
@@ -904,8 +905,11 @@ def detail_sections(pv, body=None):
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
             # 只压平 ASCII 控制空白，合法 Unicode 名称原样保留。
             why = re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", r["why"])
-            main.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 2,
-                         f'{mark} {r["name"]}：{why}'))
+            kind = "ok" if r["ok"] else ("dim" if r["ok"] is None else "bad")
+            label = f'{mark} {r["name"]}：'
+            main.append((kind, 2, label if presentation else label + why))
+            if presentation:
+                main.append(("", 4, why))
         main.append(("", 0, ""))
     crew = q.get("crew") or []
     if crew:
@@ -923,14 +927,15 @@ def detail_sections(pv, body=None):
                            + t["title"] + ("  · 做完停" if t["held"] else "")))
     if not q["todo"]:
         side.append(("dim", 2, "暂无待办"))
-    side += [("", 0, ""), ("h2", 0, f'历史 · 完成 {q["counts"]["done"]}'
+    side += [("", 0, ""), ("history" if presentation else "h2", 0, f'历史 · 完成 {q["counts"]["done"]}'
                           + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else ""))]
     for f in q["finished"]:
         acct = " · ".join(x for x in (route_chip(f["route"]), f["span"], f'{f["commits"]} 个提交',
                                       f'等放行 {f["wait"]}' if f["wait"] else "") if x)
-        side.append(("bad" if f["dropped"] else "", 2,
+        side.append(("history" if presentation else "bad" if f["dropped"] else "", 2,
                      f'{"✕" if f["dropped"] else "✓"} {f["id"]} {f["title"]}'))
-        side.append(("dim", 4, f'放弃：{f["reason"]}' if f["dropped"] else acct))
+        side.append(("account" if presentation and not f["dropped"] else "dim", 4,
+                     f'放弃：{f["reason"]}' if f["dropped"] else acct))
     if not q["finished"]:
         side.append(("dim", 2, "还没有"))
     return main, side
@@ -955,6 +960,9 @@ def wrap_lines(lines, cols):
             if used + size > room:
                 out.append((kind, indent, part))
                 part, used = "", 0
+                if kind == "history" and indent == 2:
+                    indent = min(4, max(0, cols - 2))
+                    room = max(2, cols - indent)
             part += char
             used += size
         out.append((kind, indent, part))
@@ -967,6 +975,20 @@ def detail_viewport(total, room, offset, pages=0):
     limit = max(0, total - page) if page else 0
     offset = min(max(0, offset), limit)
     return min(max(0, offset + pages * page), limit), page
+
+
+def footer_only_message(msg, card, cols):
+    """只认已知普通回执；不确定、带额外说明或末行放不下时保留正文。"""
+    if (not msg or any(ch != "\t" and not ch.isprintable() for ch in msg)
+            or width(msg.replace("\t", "    ")) > cols
+            or any(word in msg for word in ("警告", "拒绝", "WARNING", "ERROR", "↑", "未放行"))):
+        return False
+    if msg in ("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。",
+               "已恢复：写手下次运行 drover next 会拿到新任务。",
+               "循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。"):
+        return True
+    return bool(card and re.fullmatch(r"已送给 [^\s：:]+[：:] ?" + re.escape(
+        f'{card["id"]} {card["title"]}'), msg))
 
 
 def draw(stdscr, vm, state):
@@ -996,7 +1018,7 @@ def draw(stdscr, vm, state):
         for key in ("body_task", "body_offset", "body_total", "body_page"):
             state.pop(key, None)
     if pv:
-        main, side = detail_sections(pv, body=[("body", 0, "")] if local_body else None)
+        main, side = detail_sections(pv, body=[("body", 0, "")] if local_body else None, presentation=True)
         if c and c.get("body") and state.get("body_mouse") is False:
             main = [("dim", 0, "滚轮不可用 · PgUp/PgDn 查看完整正文")] + main
         # 固定摘要放不下的标题/指标仍在正文开头完整可达。
@@ -1004,7 +1026,10 @@ def draw(stdscr, vm, state):
         prefix = [("h1", 0, heading)] if compact or width(heading) > cols else []
         if compact or width(metrics) > cols:
             prefix.append(("dim", 0, metrics))
-        main = prefix + ([("wait", 0, "操作消息"), ("", 2, msg), ("", 0, "")] if msg else []) + main
+        message = ([("wait", 0, "操作消息")]
+                   + [("", 2, line) for line in msg.split("\n")] + [("", 0, "")]
+                   if msg and not footer_only_message(msg, c, w - 2) else [])
+        main = prefix + message + main
     else:
         heading, metrics = "○ 空闲  没有登记过的项目", "到仓库里运行 drover init <短名>"
         main, side = [("", 0, metrics)], []
@@ -1042,7 +1067,7 @@ def draw(stdscr, vm, state):
             + (" · 循环开" if q["loop"] else " · 循环关")) if q else ""
     head = " · ".join(t for t in ("drover", pv["name"] if pv else "0 个项目", mode,
                                   vm["health"]["text"], f'! 等你 {len(vm["waits"])}' if vm["waits"] else "") if t)
-    put(stdscr, 0, 0, trunc(head, w) + " " * max(0, w - width(head)), h, w, "bar")
+    put(stdscr, 0, 1, head, h, w - 1, "bar")
     if tabs:
         label = f'↑↓/jk [{sel + 1}/{len(ps)}] ▸ {pv["name"]}'
         if sel + 1 < len(ps):
@@ -1075,9 +1100,15 @@ def draw(stdscr, vm, state):
     if total > room:
         put(stdscr, bot, x, f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}", h, w - 1, "dim")
     if not compact:
-        keys = "g 核对放行 n 下一件 p 暂停 a 加任务 l 循环 r 刷新 q 退出 ↑↓/jk PgUp/Dn"
-        put(stdscr, h - 2, 0, keys, h, w, "bar")
-    put(stdscr, h - 1, 0, msg, h, w, "wait" if msg else "")
+        key_x = 1
+        for key, hint in (("g", " 核对放行 "), ("n", " 下一件 "), ("p", " 暂停 "),
+                          ("a", " 加任务 "), ("l", " 循环 "), ("r", " 刷新 "),
+                          ("q", " 退出 "), ("↑↓/jk", " "), ("PgUp/Dn", "")):
+            put(stdscr, h - 2, key_x, key, h, w, "key")
+            key_x += width(key)
+            put(stdscr, h - 2, key_x, hint, h, w, "bar")
+            key_x += width(hint)
+    put(stdscr, h - 1, 1, msg.split("\n")[0].replace("\t", "    "), h, w, "wait" if msg else "")
 
 
 # ============================================================ 按键

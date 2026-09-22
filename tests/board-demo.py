@@ -23,7 +23,7 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-SCENES = ("working", "failed", "waiting", "idle", "empty", "warning", "long", "body")
+SCENES = ("working", "sent", "failed", "waiting", "idle", "empty", "warning", "long", "body")
 
 
 def load_board():
@@ -59,6 +59,8 @@ def fixture(scene="working", multi=False):
           "head": "a1f3c2", "state": "进行中", "waiting": False, "needs_me": False,
           "badge": "none", "age": "", "waits": [], "queue": q}
     msg = ""
+    if scene == "sent":
+        msg = f'已送给 demo/main：{card["id"]} {card["title"]}'
     if scene == "failed":
         card["criteria"][3].update(ok=False, why="pytest tests/checkout：退出码 1；优惠券已过期的提示与预期不符")
         card["met"] = "0/4"
