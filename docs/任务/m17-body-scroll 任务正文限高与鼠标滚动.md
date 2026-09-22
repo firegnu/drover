@@ -287,3 +287,12 @@ python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-default-mouse.json -
 ## 最终主控审查（2026-09-22）
 
 独立 Codex 对 `885d49f`（生产 `6b914a7`）结论可以合并，必须改0、建议改0。主控已在《m17-body-scroll 交叉审查.md》逐条接受7项判断；无待修项，按用户确认的原生 curses + 现有支持 Python 范围本地合并。原有两套与PTY验证不重复；审查新增的5项定向、内存RED/缺陷自证及3个真实PTY生命周期检查通过。物理鼠标/触控板与桌面目视仍由用户验收，未冒称完成。
+
+
+## 本地合并与收尾（2026-09-22）
+
+合并提交 `c3aabe9`，收尾空提交 `1ca190d`。三份文档冲突保留主仓库最新文本，逐行核对开发分支中的全部非空行均已包含；合并后 `bin/` 与 `tests/` 对被审 `885d49f` 字节比较无差异，无代码冲突或新增行为，无须重复全量测试。
+
+确认开发/审查agent均idle、attached=0，两worktree干净、开发分支已为main祖先后，按顺序移除两个worktree、立即关闭各自的 `drover/dev-body-scroll-1` 与 `drover/dev-review-body-1`（工作目录已删，一并关闭），删除已合并的 `m17-body-scroll`，再补收尾记号。审查使用detached HEAD，没有审查分支。drover只剩主控，未动其他项目agent。
+
+兼容实验stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff` 原样保留，不纳入main，不恢复、不删除。未推送，未操作真实done/go/next/loop，T4继续暂缓。真实鼠标/触控板与桌面目视尚待用户手动验收，推荐先运行无真实业务操作的合成演示，命令见HANDOFF。

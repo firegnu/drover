@@ -4,14 +4,31 @@
 
 ---
 
-## 2026-09-22 —— T8 简单方案已交独立审查
+## 2026-09-22 —— T8 已本地合并收尾，等用户实际滚轮验收
 
-**这一节最新。** 用户已确认使用与 corral 相同的支持滚轮 Python 运行原生 curses 简单版本，不再自写鼠标协议。采用 `/opt/anaconda3/bin/python3`，不安装、不改 PATH/启动器。此前 `00a2f6a` 的兼容返工授权由此取代，旧提醒不得恢复兼容开发。
+**这一节最新。** T8 正文限高/鼠标局部滚动已本地合并：被审 `885d49f`（生产 `6b914a7`），合并 `c3aabe9`，收尾空提交 `1ca190d`。采用用户确认的原生 curses 简单方案，使用现有 `/opt/anaconda3/bin/python3`，不再做旧curses鼠标协议兼容。不安装、不改 PATH/启动器；未推送。
 
-- 开发分支 `m17-body-scroll` HEAD `885d49f`，生产实现仍为 `6b914a7`。原生路径的两套回归、定向/PTY/Tab已过；本轮确认恢复后生产与测试逐字一致，不重复全量。R1按用户调整的运行范围关闭，不声称旧curses被修复。
-- 未提交兼容实验完整保存于Git stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff`，不纳入合并、不pop/drop；开发worktree干净，开发agent保留idle。独立Codex审查已派给 `drover/dev-review-body-1`（gpt-6-astra/xhigh），detached worktree `../drover-worktrees/review-m17-body-scroll` 固定 `885d49f`；完成提醒已挂。读 `docs/任务/m17-body-scroll 交叉审查.md` 逐条裁定，通过后本地合并、清两worktree/开发分支及对应自开agent、补收尾空提交。
-- 优先读任务文件末尾“最终范围裁定”、ROADMAP最终运行范围、QUICKSTART。真实鼠标/触控板仍由用户验收；合成演示：`/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi`。不要绕过Terminal Computer Use拒绝。
-- 未合并、未推送，不操作真实done/go/next、不启循环，T4继续暂缓。其它未决事项沿用历史交接。
+### 下一步
+
+用户在常用终端手动验收物理鼠标/触控板。可先运行安全合成演示（不读取真实项目配置、不执行队列命令）：
+
+```sh
+/opt/anaconda3/bin/python3 tests/board-demo.py --scene body
+/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi
+```
+
+检查鼠标悬停正文无需点击即可上下滚动、能到末行、判据/侧栏不动、区域外不误操作，及缩放后的命中。实际看板入口为 `/opt/anaconda3/bin/python3 ./bin/drover board`。默认 `python3` 若指向同样的支持运行时也可用；旧curses只会提示滚轮不可用并保留整页翻页，不声称它已支持局部滚轮。
+
+- 主控未操作真实done/go/next，也没有启动循环；任务推进仍由用户操作。T4继续暂缓，不自动恢复；开发/交叉审查仍只派Codex。
+- 真实设备及桌面字体/配色未验收。Computer Use已拒绝Terminal访问，不绕过；实际PTY中的合成事件不能写成物理设备已验收。
+
+### 已完成与留存
+
+主控两套回归、定向/PTY/Tab与可达性已过；独立Codex结论可以合并，必须改0、建议改0，主控逐项接受。独立补验5项定向、内存RED/缺陷自证、3个实际PTY生命周期（编辑返回、q/SIGINT/异常退出与终端恢复）通过；本轮不重复全量。合并文档保留最新运行范围，bin/tests与被审提交完全一致。
+
+开发和审查两个worktree及开发分支已清理；对应自开 `drover/dev-body-scroll-1`、`drover/dev-review-body-1` 随工作目录删除一并关闭。drover只剩main，其他项目agent未动。兼容实验另存Git stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff`，原样保留，不属于交付、不恢复/删除；旧兼容返工提醒不得触发恢复。
+
+优先读 `docs/任务/m17-body-scroll 任务正文限高与鼠标滚动.md` 末尾最终裁定/收尾、`docs/任务/m17-body-scroll 交叉审查.md` 末尾。设计与运行范围在ROADMAP，操作入口在QUICKSTART。其它欠账沿用下方历史交接。
 
 ---
 
