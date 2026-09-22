@@ -44,7 +44,7 @@ for scene in D['SCENES']:
         vm, msg = fixture(scene, multi)
         original = copy.deepcopy(vm)
         for h, w in ((32, 120), (24, 80), (32, 160), (16, 60), (10, 40), (6, 20), (3, 12), (1, 1)):
-            screen, state = Screen(h, w), {'sel': 0, 'n': len(vm['projects']), 'msg': msg}
+            screen, state = Screen(h, w), {'sel': 0, 'n': len(vm['projects']), 'msg': msg, 'body_mouse': True}
             B.draw(screen, vm, state)
             assert screen.rows or (h, w) == (1, 1)
             if (h, w) == (32, 120) and not multi and scene == 'working':
@@ -63,6 +63,11 @@ for scene in D['SCENES']:
             seen = []
             while True:
                 seen.extend(t for y, _, t, _ in screen.rows if 0 < y < h - 1)
+                # 布局遍历也进入正文局部视口；输入分发/步长另由 T8 回归守住。
+                if state.get('body_rect') and state['body_offset'] < state['body_total'] - state['body_page']:
+                    state['body_offset'] += 1
+                    B.draw(screen, vm, state)
+                    continue
                 before = state.copy()
                 act = B.key_action(curses.KEY_NPAGE, vm['projects'][0], state)
                 assert state == before
@@ -94,4 +99,4 @@ assert state['detail_offset'] == 0
 for key in ('h', '\t', '?', 'e'):
     assert B.key_action(ord(key), vm['projects'][0], state) is None
 runpy.run_path(str(Path(__file__).with_name('board-tab-pty.py')), run_name='__main__')
-print('PASS 字符网格：单/多项目、七类状态、列宽、双栏全部末尾、缩放和输入不变')
+print('PASS 字符网格：单/多项目、各类状态、列宽、双栏及正文全部末尾、缩放和输入不变')
