@@ -4,12 +4,12 @@
 
 ---
 
-## 2026-09-22 —— T8 回到简单方案，准备独立审查
+## 2026-09-22 —— T8 简单方案已交独立审查
 
 **这一节最新。** 用户已确认使用与 corral 相同的支持滚轮 Python 运行原生 curses 简单版本，不再自写鼠标协议。采用 `/opt/anaconda3/bin/python3`，不安装、不改 PATH/启动器。此前 `00a2f6a` 的兼容返工授权由此取代，旧提醒不得恢复兼容开发。
 
 - 开发分支 `m17-body-scroll` HEAD `885d49f`，生产实现仍为 `6b914a7`。原生路径的两套回归、定向/PTY/Tab已过；本轮确认恢复后生产与测试逐字一致，不重复全量。R1按用户调整的运行范围关闭，不声称旧curses被修复。
-- 未提交兼容实验完整保存于Git stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff`，不纳入合并、不pop/drop；开发worktree干净，开发agent保留idle。继续独立Codex交叉审查，通过后本地合并、清两worktree/开发分支及对应自开agent、补收尾空提交。
+- 未提交兼容实验完整保存于Git stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff`，不纳入合并、不pop/drop；开发worktree干净，开发agent保留idle。独立Codex审查已派给 `drover/dev-review-body-1`（gpt-6-astra/xhigh），detached worktree `../drover-worktrees/review-m17-body-scroll` 固定 `885d49f`；完成提醒已挂。读 `docs/任务/m17-body-scroll 交叉审查.md` 逐条裁定，通过后本地合并、清两worktree/开发分支及对应自开agent、补收尾空提交。
 - 优先读任务文件末尾“最终范围裁定”、ROADMAP最终运行范围、QUICKSTART。真实鼠标/触控板仍由用户验收；合成演示：`/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi`。不要绕过Terminal Computer Use拒绝。
 - 未合并、未推送，不操作真实done/go/next、不启循环，T4继续暂缓。其它未决事项沿用历史交接。
 
