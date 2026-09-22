@@ -271,3 +271,14 @@ python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-default-mouse.json -
 5. ROADMAP 记清最小解析方案、报告格式及恢复策略；任务文件追加 RED/GREEN/证据与未验事项。本轮完成后交主控增量复核，之后才独立 Codex 交叉审查；不合并、不清理、不收尾、不推送。
 
 不操作真实 done/go/next/loop，不改真实队列、不动受保护项目/服务，T4继续暂缓。所有命令前台等待退出，最后回复 DONE。
+
+
+## 最终范围裁定：采用 corral 同类简单方案（2026-09-22）
+
+用户在主控提出“与 corral 相同的支持滚轮 Python 运行简单版本、不再自写鼠标协议解析；兼容实验保留、不纳入合并”后明确回复：「对就是这个意思」。此决定覆盖此前 `00a2f6a` 的协议适配返工授权以及暂停待核对状态。
+
+- 采用首版的原生 curses 双向滚轮和局部视口，运行时使用现有 `/opt/anaconda3/bin/python3`（与已查到的 corral viewer 一致）；不安装、不改 PATH、不硬编码启动器、不改 corral。主控不能再把自己执行工具的 Homebrew Python 当作用户运行环境，也不能再为旧 ABI 扩大实现。
+- R1 按用户调整后的运行范围关闭，不宣称旧环境已修复。旧环境保留明确提示及完整 PgUp/PgDn 退化；支持环境下的限高/局部滚轮仍须满足原 T8 全部要求。物理鼠标/触控板按原任务由用户验收，不作为已通过的自动化项目。
+- 原开发 agent idle、attached=0 且回复已暂停、无遗留测试进程后，主控将全部未提交兼容实验（含两个新增输入测试）存入 Git stash：`e039c0163f1582e89cb162f9dab45f71ba3b3bff`，说明 `T8 stopped compatibility experiment; preserve only, do not merge`。保留 stash、不 pop/drop，不纳入审查/合并；worktree 已干净。
+- 被审分支 `m17-body-scroll` HEAD `885d49f`；该提交仅增加诊断脚本与记录。生产代码与既有测试逐字等于已通过主控审查的 `6b914a7`，不重复主控两套回归/PTY矩阵。诊断脚本保留为非默认测试入口，其 require-dual 在旧环境预期失败，不是产品回归失败。
+- 主控结论：按最终范围可以进入独立 Codex 交叉审查；正常运行入口记录为 `/opt/anaconda3/bin/python3 ./bin/drover board`，安全合成验收入口为 `/opt/anaconda3/bin/python3 tests/board-demo.py --scene body [--multi]`。未执行真实看板/队列操作，未合并、推送或打收尾记号。独立审查通过后再本地合并收尾。

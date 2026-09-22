@@ -4,28 +4,14 @@
 
 ---
 
-## 2026-09-22 —— T8 兼容返工已中断，先核对用户实际运行环境，未合并
+## 2026-09-22 —— T8 回到简单方案，准备独立审查
 
-**这一节最新。** T8 正文限高/局部滚轮开发分支 `m17-body-scroll`：实现 `6b914a7`，R1调查 `885d49f`。支持双向鼠标的现有 Anaconda Python 路径自动验收通过，但默认 Python 的旧 curses 不能可靠解码下滚，当前会退回整页翻页，故 T8 主目标在默认启动下尚未达标。未合并、未清理、未打收尾记号、未推送。
+**这一节最新。** 用户已确认使用与 corral 相同的支持滚轮 Python 运行原生 curses 简单版本，不再自写鼠标协议。采用 `/opt/anaconda3/bin/python3`，不安装、不改 PATH/启动器。此前 `00a2f6a` 的兼容返工授权由此取代，旧提醒不得恢复兼容开发。
 
-### 最新调整
-
-用户质疑兼容开发复杂化。主控已通过 corral esc 中断开发并确认 idle，再通知只确认暂停，不继续实现/测试/提交。不要按旧提醒自动恢复。新证据：当时存活的 corral `tools/board --viewer` PID66523 实际使用 `/opt/anaconda3/bin/python3.12` 及其 ncurses；这只证明该 viewer 的运行时，尚不能证明此前主面板或用户 drover 的运行时。主控此前将自己的 Homebrew 默认 Python 当作用户默认环境，证据不足。先核对用户常用终端启动环境，决定是否需要额外兼容，不继续加码。
-
-开发分支 HEAD 仍为 `885d49f`，本轮兼容修改尚未提交（bin/drover-board、若干定向测试/演示，新增两个输入测试）；全部保留，不回滚、不清理、不合并。下方“干净”是暂停前的旧状态，现以上述为准。
-
-### 下一步
-
-- 先读 `docs/任务/m17-body-scroll 任务正文限高与鼠标滚动.md` 末尾的 R1 调查与主控裁定。用户要求参考 corral board last reply，只允许窄范围只读参考；没有同意更换 Anaconda 启动。不得改 corral/corral-dispatch。
-- 用户已明确批准默认 Python 中增加专门的鼠标报告解析，保留 curses、不安装或改 PATH/解释器。任务末尾“R1 用户授权与返工要求”和 ROADMAP 已补边界，交原开发 agent 最小返工；不要再次要求用户确认同一授权。
-- 修复后只做增量验证，再开独立 Codex 交叉审查；通过后本地合并、清理、关闭对应自开 agent、补收尾记号并更新交接。真实鼠标/触控板及桌面目视交用户，不绕过已有 Terminal Computer Use 拒绝。
-- 不操作真实 done/go/next，不启动真实循环，不推送。T4继续暂缓，只派Codex。
-
-### 已完成与留存
-
-主控前轮已过看板/drover两套、10项定向、支持路径8组实际PTY/208帧、默认退化8组PTY、Tab8组及32组演示/270帧，不要无变化重复。本轮仅核对默认解码8样本和3项输入回归；确认下滚/按钮7/移动在旧curses中混同。证据、命令和限制见任务文件；实际PTY输入均为合成事件，物理设备未验收。
-
-开发worktree：`../drover-worktrees/m17-body-scroll`，干净。自开 `drover/dev-body-scroll-1` 派发前 idle、attached=0，本轮继续交它返工。尚未创建T8审查worktree/agent。T7已收尾且后来由用户完成；下方T7“仍进行中”是历史快照，不作为当前队列状态。本轮没有操作真实队列。
+- 开发分支 `m17-body-scroll` HEAD `885d49f`，生产实现仍为 `6b914a7`。原生路径的两套回归、定向/PTY/Tab已过；本轮确认恢复后生产与测试逐字一致，不重复全量。R1按用户调整的运行范围关闭，不声称旧curses被修复。
+- 未提交兼容实验完整保存于Git stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff`，不纳入合并、不pop/drop；开发worktree干净，开发agent保留idle。继续独立Codex交叉审查，通过后本地合并、清两worktree/开发分支及对应自开agent、补收尾空提交。
+- 优先读任务文件末尾“最终范围裁定”、ROADMAP最终运行范围、QUICKSTART。真实鼠标/触控板仍由用户验收；合成演示：`/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi`。不要绕过Terminal Computer Use拒绝。
+- 未合并、未推送，不操作真实done/go/next、不启循环，T4继续暂缓。其它未决事项沿用历史交接。
 
 ---
 
