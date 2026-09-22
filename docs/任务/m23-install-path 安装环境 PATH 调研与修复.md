@@ -238,3 +238,12 @@ cd /Users/firegnu/Developer/personal_projs/drover-worktrees/m23-install-path
 4. **静态检查**：`sh -n install.sh tests/install.sh`、`plutil -lint launchd/dev.drover.loop.plist`、`git diff --check` 均退出 0。另核对原 9 项测试仍在、只增加指定 2 项，bin/、模板、HANDOFF、AGENTS 与本轮起点一致。
 
 全部命令前台等待结束。没有扩大为全仓库测试、再次环境矩阵或额外变异检查；未运行真实 corral、安装或服务，未改全局 PATH、真实队列和其它项目。不合并、不推送、不清理 worktree/分支、不打收尾记号。实现与隔离验证已完成；后续为主控审查，真实安装与服务启用仍需另行授权。
+
+
+## 主控第二阶段审查及本地合并（2026-09-22）
+
+结论：通过，必须改 0。被审 `a1b64fc`，开发 worktree 干净；已核对生产 diff 仅固定 PATH 和两条相关提示，原预检、未知目标保护、plist 字节比较及启动边界均不变，bin/ 和模板未动。认可固定值、保留旧配置拒绝覆盖、只更换过时 PATH 断言及简短同步文档的全部取舍；未引入原调研的复杂方案。
+
+主控已读取开发 RED/GREEN 日志：旧实现两项测试因目标缺陷失败（重装三个子场景及临时目录断言），新实现同项通过。主控在被审 worktree 前台重跑完整隔离安装套件，11 项全部通过；sh -n、plutil -lint、git diff --check 均通过。未跑全仓库、未新增独立交叉审查，未执行真实安装、服务或推进。
+
+已本地合并。主仓库原任务文字经字节前缀核对全部在开发提交中，且备份到 `/var/folders/vs/3tm61ygs569g764_td0zxtym0000gn/T/drover-m23-main-review-datepb9g/`，合并保留完整调研、审查和用户授权；原 HANDOFF 改动保留。下一步按安全条件清理本任务 worktree/分支、自开 agent，再补收尾与交接；不推送。
