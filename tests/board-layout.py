@@ -93,4 +93,5 @@ B.draw(screen, vm, state)
 assert state['detail_offset'] == 0
 for key in ('h', '\t', '?', 'e'):
     assert B.key_action(ord(key), vm['projects'][0], state) is None
+runpy.run_path(str(Path(__file__).with_name('board-tab-pty.py')), run_name='__main__')
 print('PASS 字符网格：单/多项目、七类状态、列宽、双栏全部末尾、缩放和输入不变')

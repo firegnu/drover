@@ -949,7 +949,8 @@ def wrap_lines(lines, cols):
         indent = min(indent, max(0, cols - 2))
         room = max(2, cols - indent)
         part, used = "", 0
-        for char in text:
+        # Tab 在展示副本中固定为四个空格，避免 curses 按屏幕制表位展开后越过栏界。
+        for char in text.replace("\t", "    "):
             size = cell(char)
             if used + size > room:
                 out.append((kind, indent, part))
