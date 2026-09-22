@@ -132,7 +132,8 @@ assert finished["id"] == "T1" and finished["commits"] == 1, finished
 assert finished["span"] == B.dur(evs[1]["t"] - evs[0]["t"]), finished
 assert finished["wait"] == B.dur(evs[2]["t"] - evs[1]["t"]), finished
 lines = [line for _, _, line in B.detail_lines(pv)]
-assert any("T1 first" in line and "1 个提交" in line and "等放行" in line for line in lines), lines
+assert any("T1 first" in title and "1 个提交" in metrics and "等放行" in metrics
+           for title, metrics in zip(lines, lines[1:])), lines
 assert checks() == 1, "board rendering must not run CHECK_CMD"
 dv("go", code=2)
 assert events() == evs and checks() == 1 and sends() == before, "repeat go must do nothing"
