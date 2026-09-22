@@ -6,7 +6,7 @@
 
 ## 2026-09-22 —— T10 list异常字符输出修复已正式接单
 
-**这一节最新。** 用户已发出TASK T10。按项目流程委派Codex常规档gpt-6-astra/high，路由tier拿不准由主控选常规，交叉审查不要。分支 `m19-list-surrogate`，worktree `../drover-worktrees/m19-list-surrogate`；任务文件 `docs/任务/m19-list-surrogate 列表异常字符安全输出.md`。
+**这一节最新。** 用户已发出TASK T10。已委派 `drover/dev-list-surrogate-1`（Codex常规档gpt-6-astra/high），完成提醒已挂，路由tier拿不准由主控选常规，交叉审查不要。分支 `m19-list-surrogate`，worktree `../drover-worktrees/m19-list-surrogate`；任务文件 `docs/任务/m19-list-surrogate 列表异常字符安全输出.md`。
 
 只改cmd_list输出及定向回归，复用print_text，不改其它行为。先有效RED再GREEN，严格UTF-8/合成数据，覆盖各类标题及放弃原因、后续输出与原数据不变。主控轻量审查后本地合并清理收尾，不跑全仓库，不扩大编码兼容范围。
 
