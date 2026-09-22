@@ -24,6 +24,7 @@ UNICODE = 'feature/a\u00a0b\u2028c  Cafe\u0301'
 def capture(screen, output):
     demo = runpy.run_path(str(DEMO))
     board = demo['load_board']()
+    board.init_colors()
     results = []
     for h, w in ((32, 120), (24, 80)):
         for tabs in (False, True):
@@ -54,12 +55,40 @@ def capture(screen, output):
                 assert vm == original, 'draw/翻页不得改写原 VM 或 Tab/Unicode 正文'
                 results.append({'size': [w, h], 'tab': tabs, 'padding': padding,
                                 'body_mouse': state['body_mouse'], 'frames': frames})
+    # T12：同一消息从完整容纳缩到差一列再放大，检查 curses 最终屏幕而非入参。
+    for multi in (False, True):
+        vm, _ = demo['fixture']('working', multi)
+        vm['projects'][0]['queue']['card']['title'] = '中A\t完成'
+        msg = '已送给 demo/main：T42 中A\t完成'
+        expected = msg.replace('\t', '    ')
+        boundary = board.width(expected) + 2  # 一列左边距 + 右下角保留格
+        original = copy.deepcopy(vm)
+        state = {'sel': 0, 'msg': msg, 'body_mouse': board.init_mouse()}
+        for w in (120, boundary, boundary - 1, 80):
+            h = 24
+            win = curses.newwin(h, w, 0, 0)
+            board.draw(win, vm, state)
+            win.refresh()
+            frame = [win.instr(y, 0).decode('utf-8') for y in range(h)]
+            fits = w >= boundary
+            assert ('操作消息' in ''.join(frame)) != fits, (w, multi, frame)
+            if fits:
+                assert frame[-1].strip(' ') == expected, (w, multi, frame[-1])
+                assert sum(expected in line for line in frame) == 1
+            assert not win.inch(0, 1) & curses.A_REVERSE
+            assert win.inch(h - 2, 1) & curses.A_BOLD
+            assert not win.inch(h - 2, 3) & (curses.A_BOLD | curses.A_REVERSE)
+            assert state['msg'] == msg and vm == original
+            results.append({'message': True, 'size': [w, h], 'multi': multi, 'frames': [frame]})
     output.write_text(json.dumps(results, ensure_ascii=False, indent=2))
 
 
 def check(output):
     failures = []
     for case in json.loads(output.read_text()):
+        if case.get('message'):
+            print('PASS', case['size'], 'multi=' + str(case['multi']), '短消息/临界列宽/缩放和顶底栏最终属性')
+            continue
         # 在实际画面的主栏内连接换行；仅去掉 ASCII 边距，不折叠 Unicode/内部空格。
         pages = [''.join(line.split('│', 1)[0].strip(' ') for line in frame)
                  for frame in case['frames']]
