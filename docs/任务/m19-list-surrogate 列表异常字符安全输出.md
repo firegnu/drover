@@ -54,3 +54,10 @@ AGENTS.md、HANDOFF.md、README.md；ROADMAP现行完成判据/命令边界；�
 主控阅读完整定向测试并重跑 `python3 -B tests/list-output.py`：1项测试/6子场景通过。严格UTF-8子进程和JSON构造有效，完整输出断言覆盖五类异常文字、转义、后续条目及正常中文/合法Unicode，内存深拷贝和临时文件字节/mtime/目录前后相同。主控另用临时旧生产副本（a766296）配同一数据模块复跑：退出1、恰好5个UnicodeEncodeError断言失败、正常对照通过，证明RED针对目标缺陷。未运行其它套件或真实队列操作。
 
 `git diff --check`通过，修改范围仅生产脚本、新测试与任务文件。接受独立定向入口，无需为小修扩展测试框架；无剩余审查问题。按任务不加独立交叉审查，批准本地合并收尾，未推送。
+
+
+## 合并收尾（2026-09-22）
+
+本地合并 `5df101c`，收尾空提交 `d55230c`。合并后bin/tests与被审 `491d7f6` 相同。确认worktree干净、分支已合并及agent idle/attached=0后，移除worktree并关闭自开 `drover/dev-list-surrogate-1`（工作目录已删，一并关闭）、删除开发分支，再补收尾记号。
+
+未推送，未操作真实done/go/next/loop。T4继续暂缓，T8实验stash原样保留。HANDOFF已更新，下一步交用户按g核对并放行。
