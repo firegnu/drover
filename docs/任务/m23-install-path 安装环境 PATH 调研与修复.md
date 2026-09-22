@@ -247,3 +247,8 @@ cd /Users/firegnu/Developer/personal_projs/drover-worktrees/m23-install-path
 主控已读取开发 RED/GREEN 日志：旧实现两项测试因目标缺陷失败（重装三个子场景及临时目录断言），新实现同项通过。主控在被审 worktree 前台重跑完整隔离安装套件，11 项全部通过；sh -n、plutil -lint、git diff --check 均通过。未跑全仓库、未新增独立交叉审查，未执行真实安装、服务或推进。
 
 已本地合并。主仓库原任务文字经字节前缀核对全部在开发提交中，且备份到 `/var/folders/vs/3tm61ygs569g764_td0zxtym0000gn/T/drover-m23-main-review-datepb9g/`，合并保留完整调研、审查和用户授权；原 HANDOFF 改动保留。下一步按安全条件清理本任务 worktree/分支、自开 agent，再补收尾与交接；不推送。
+
+
+## 收尾记录（2026-09-22）
+
+本地合并 `b3b2485`，主控审查记录 `97759a1`，收尾空提交 `a8326cb`。开发 worktree 干净、分支已合入 main，agent idle 且 attached=0 后，正常移除 worktree、删除已合并分支并关闭自开 `drover/dev-install-path-1`（工作目录已删，一并关闭）。现场只剩 drover/main。HANDOFF 已更新，T8 stash 保留；未推送、未真实安装或启动服务、未操作真实推进。由用户按 g 核对并放行 T14。
