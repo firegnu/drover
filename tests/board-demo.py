@@ -127,14 +127,15 @@ def demo(screen, args):
     if args.capture:
         frame("top")
         while True:
-            while state.get("body_rect"):
-                x, y = state["body_rect"][:2]
-                action = B.key_action(curses.KEY_MOUSE, vm["projects"][state["sel"]], state,
-                                      (0, x, y, 0, curses.BUTTON5_PRESSED))
-                if action[1] == state["body_offset"]:
-                    break
-                state["body_offset"] = action[1]
-                frame("body")
+            for region in ("body", "history"):
+                while state.get(region + "_rect"):
+                    x, y = state[region + "_rect"][:2]
+                    action = B.key_action(curses.KEY_MOUSE, vm["projects"][state["sel"]], state,
+                                          (0, x, y, 0, curses.BUTTON5_PRESSED))
+                    if action[1] == state[region + "_offset"]:
+                        break
+                    state[region + "_offset"] = action[1]
+                    frame(region)
             offset = B.key_action(curses.KEY_NPAGE, vm["projects"][state["sel"]], state)[1]
             if offset == state["detail_offset"]:
                 break
@@ -166,8 +167,8 @@ def demo(screen, args):
             return
         if act[0] == "scroll":
             state["detail_offset"] = act[1]
-        elif act[0] == "body_scroll":
-            state["body_offset"] = act[1]
+        elif act[0] in ("body_scroll", "history_scroll"):
+            state[act[0].replace("_scroll", "_offset")] = act[1]
         elif act[0] == "sel":
             state["sel"] = act[1]
         elif act[0] in ("run", "edit"):

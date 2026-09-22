@@ -132,7 +132,13 @@ class BodyScroll(unittest.TestCase):
                     if not rect:
                         seen_absent = True
                         self.assertEqual(rows, [])
-                        self.assertIsNone(self.wheel(vm, state, 3, min(5, h - 1)))
+                        action = self.wheel(vm, state, 3, min(5, h - 1))
+                        history = state.get('history_rect')
+                        if history and history[0] <= 3 < history[2] and history[1] <= min(5, h - 1) < history[3]:
+                            self.assertEqual(action, ('history_scroll', min(3, history[3] - history[1],
+                                                                           state['history_total'] - state['history_page'])))
+                        else:
+                            self.assertIsNone(action)
                         continue
                     seen_rect = True
                     x0, y0, x1, y1 = rect
