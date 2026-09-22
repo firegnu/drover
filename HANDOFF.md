@@ -12,7 +12,7 @@
 
 用户明确反馈：「我测试了一下，可以了，已经放行了」。据此记录 T8 实际使用验收通过、已由用户放行；不再列作待验收或待放行。用户未细分设备/场景，本记录不扩写成每种鼠标、触控板或尺寸均逐项验过。
 
-- T9「修正文档中已过时的验收命令说明」已收到正式TASK，委派轻档Codex（gpt-5.6-luna/medium），分支 `m18-check-docs`，worktree `../drover-worktrees/m18-check-docs`。任务文件 `docs/任务/m18-check-docs 验收命令说明纠偏.md`；仅改两份文档及完成记录。路由轻/不要交叉审查，主控轻量审查后本地合并收尾，不跑测试套件。T4继续暂缓，只派Codex。
+- T9「修正文档中已过时的验收命令说明」已收到正式TASK，已委派 `drover/dev-check-docs-1`，轻档Codex（gpt-5.6-luna/medium），完成提醒已挂，分支 `m18-check-docs`，worktree `../drover-worktrees/m18-check-docs`。任务文件 `docs/任务/m18-check-docs 验收命令说明纠偏.md`；仅改两份文档及完成记录。路由轻/不要交叉审查，主控轻量审查后本地合并收尾，不跑测试套件。T4继续暂缓，只派Codex。
 - 实际入口为 `/opt/anaconda3/bin/python3 ./bin/drover board`；安全合成演示为 `/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi`。旧curses退化行为未改变。
 - 主控未操作真实done/go/next。本次仅依据用户确认更新文档，未重新核对真实队列、未推送。自动化证据仍是合成输入/实际PTY，实际使用通过的依据是用户反馈。
 
