@@ -216,3 +216,11 @@ git diff --check
 3. 原body-pty只增加可选历史fixture/检查入口以复用传输，默认8组正文断言全保留并重跑通过。新增历史PTY是独立定向入口，不扩大为设备验收。
 
 只提交本worktree的bin/drover-board、直接相关测试及ROADMAP/本任务记录。不改主仓库/HANDOFF、真实队列、corral或其源码/状态目录；不安装、推送、合并、打收尾记号或清worktree/分支。T4暂缓、T8实验stash原样保留。未访问或绕过被拒绝的Ghostty/Terminal；上述仅证明合成数据和实际PTY，真实鼠标/触控板、字体配色仍由用户验收。
+
+## 本地合并与收尾（2026-09-22）
+
+主控定向审查通过后，本地合并 `ed93868`，被审 `b0a586e`；合并后 bin/tests/ROADMAP 与被审提交逐字一致，主仓库原调查裁定、98fb26c授权及最终审查均保留，无冲突。未扩大测试，无独立交叉审查。
+
+清理前确认自开 agent idle、attached=0，worktree干净且分支已合入main；随后无force删除 `m22-history-scroll` worktree、用branch -d清开发分支，工作目录已删，一并关闭 `drover/dev-history-scroll-1`。本任务未开审查worktree/agent；当前corral仅剩本主控 drover/main。收尾空提交 `d8dad55`，随后更新HANDOFF。
+
+未操作真实done/go/next/loop、未推送；用户仍需在常用终端确认实际鼠标/触控板体验，再自行按g核对放行。T4继续暂缓，T8实验stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff` 已核对原样保留，不恢复、不删除。
