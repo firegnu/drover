@@ -169,3 +169,34 @@ python3 tests/board-demo.py --record /tmp/m16-visual-replay
 
 独立审查 R1（Tab 正文在双栏被覆盖）经主控真实 PTY 复现成立，阻挡合并；其余 A1–A6 取舍全部采纳。逐条裁定和最小返工要求见主仓库 docs/任务/m16-kanban-ui 交叉审查.md 末尾。交回原开发 agent 只修 R1，定向 RED/GREEN，不重复全仓库测试。修复后先更新 detached 审查 worktree，再由原审查者仅复核本条。
 桌面目视和单条 tests/drover.sh 断言授权仍待用户确认；本轮不合并、不清理、不打收尾记号，不操作真实队列，不推送。
+
+
+## 第 1 轮返工完成记录：R1 Tab 正文覆盖
+
+2026-09-22，按主仓库交叉审查末尾「主控逐条裁定与第 1 轮返工」只修 R1，A1–A6 不重开。
+
+- **生产修复**：`wrap_lines` 在展示副本中将每个 ASCII Tab 替换为四个普通空格，再逐字符换行；后续 `draw` 使用该展示文本，不把 Tab 交给 curses 展开。生产 diff 仅两行，AST 对比确认只有 `wrap_lines` 改变。原 VM、正文、业务/按键/命令代码以及 `cell/width/trunc` 全局契约不变；未使用 `split/strip` 折叠 Unicode。
+- **回归边界**：新增 `tests/board-tab-pty.py`，在真实 PTY/curses 中调用生产 `draw`，等主栏、辅栏、竖线全部画完，再从最终 curses 屏幕 `instr` 读取；用生产 PgDn 翻到底。断言完整 `python3 -m pytest tests/checkout/test_coupon_validation.py --verbose` 在最终画面可读，允许正常换行；不以中间逻辑行或 `addstr` 入参代替最终画面。另逐字检查 NBSP、U+2028、组合字符和内部双空格，并断言原 VM 不变。
+- **矩阵**：120×32 双栏 / 80×24 单栏 × 有 Tab / 无 Tab × 正文首屏 / 36 行占位后的后续页，共八组。`tests/board-layout.py` 接入此 PTY 回归，使已有看板测试入口也会执行；未改已有断言。
+
+验证命令和证据：
+
+1. RED：在未修复的 `4cc7a91` 上先运行 `python3 -B tests/board-tab-pty.py`，退出 1。仅 120×32、Tab=True 的首屏和后续页两组报「最终屏幕缺少 … --verbose」，六组对照通过，Unicode 和 VM 保真断言均未失败。日志 `/tmp/m16-r1-red.log`。
+2. GREEN：应用两行修复后，同命令退出 0，八组全部通过。日志 `/tmp/m16-r1-green.log`。
+3. 定向布局回归：`python3 -B tests/board-layout.py` 退出 0，包含原布局/Unicode/输入检查及新增实际 PTY 回归。日志 `/tmp/m16-r1-layout.log`。
+4. 撤修复自证：使用 Python `TemporaryDirectory` 创建生产脚本副本，只撤去上述两行；先断言副本逐字等于 `git show 4cc7a91:bin/drover-board`，再以 `DROVER_BOARD_BIN=<副本>` 运行新 PTY 回归。再次退出 1，仍仅两组双栏 Tab 缺完整命令、六组对照通过。日志 `/tmp/m16-r1-mutation.log`；工作树生产文件未撤回，临时副本随测试结束清理。
+5. 对比 `4cc7a91` 的生产 AST，只有 `wrap_lines` 变化；三个涉及的 Python 文件 `compile()` 检查及 `git diff --check` 通过。
+
+所有命令前台运行并等到退出；本轮未重跑四套或全仓库测试，未操作真实队列、corral、agent 或配置。没有修改主仓库交叉审查文件、`tests/drover.sh`，没有合并、推送或收尾。
+
+**保留待办**：桌面字体/配色目视验收和主控会话中的 `tests/drover.sh` 单条断言额外授权核实，均仍待主控处理。本轮只确认 R1 的代码与定向回归，不补签上述两项，不宣称全任务验收通过。主控及原独立审查者后续只需复核 R1 增量。
+
+
+## 主控 R1 增量核对（2026-09-22，3486cf5）
+
+R1 主控通过，交原审查者仅复核本条；尚不等于整体验收可合并。
+- 核对 4cc7a91..3486cf5：生产仅 wrap_lines 的展示副本 Tab→四空格，原 VM/Unicode/全局宽度契约/命令与按键均未改；新增最终 curses 画面回归并接入 board-layout，无旧断言删除。
+- 主控前台运行 python3 -B tests/board-layout.py：退出 0，八组真实 PTY 与原布局检查通过；git diff --check 通过。
+- 主控将 git show 4cc7a91:bin/drover-board 写入临时副本，以 DROVER_BOARD_BIN 跑新 board-tab-pty.py：退出 1，恰为两组 120×32 Tab 首屏/后续页缺完整参数，六组对照通过。证据 /tmp/m16-main-r1-red.log；未改工作树生产代码。
+- 接受每个 Tab 在展示副本固定四空格的取舍；完整命令允许正常换行，因此复核旧探针时须按最终主栏可见字符重组，不能强求整条命令同一物理行。
+- 不重跑全仓库测试。桌面目视及 tests/drover.sh 单条断言授权确认仍未收到用户答复，不自行补签。不合并、不操作真实队列、不推送，T4 暂缓。
