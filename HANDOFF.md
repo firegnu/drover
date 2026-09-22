@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-09-22 —— T8 默认 Python 鼠标兼容待用户裁定，未合并
+
+**这一节最新。** T8 正文限高/局部滚轮开发分支 `m17-body-scroll`：实现 `6b914a7`，R1调查 `885d49f`。支持双向鼠标的现有 Anaconda Python 路径自动验收通过，但默认 Python 的旧 curses 不能可靠解码下滚，当前会退回整页翻页，故 T8 主目标在默认启动下尚未达标。未合并、未清理、未打收尾记号、未推送。
+
+### 下一步
+
+- 先读 `docs/任务/m17-body-scroll 任务正文限高与鼠标滚动.md` 末尾的 R1 调查与主控裁定。用户要求参考 corral board last reply，只允许窄范围只读参考；没有同意更换 Anaconda 启动。不得改 corral/corral-dispatch。
+- 等用户裁定是否允许在默认 Python 中增加专门的鼠标报告适配。若批准，补任务边界并交原开发 agent 最小返工；否则继续讨论运行时选择。当前不自行实施协议解析或改变解释器。
+- 修复后只做增量验证，再开独立 Codex 交叉审查；通过后本地合并、清理、关闭对应自开 agent、补收尾记号并更新交接。真实鼠标/触控板及桌面目视交用户，不绕过已有 Terminal Computer Use 拒绝。
+- 不操作真实 done/go/next，不启动真实循环，不推送。T4继续暂缓，只派Codex。
+
+### 已完成与留存
+
+主控前轮已过看板/drover两套、10项定向、支持路径8组实际PTY/208帧、默认退化8组PTY、Tab8组及32组演示/270帧，不要无变化重复。本轮仅核对默认解码8样本和3项输入回归；确认下滚/按钮7/移动在旧curses中混同。证据、命令和限制见任务文件；实际PTY输入均为合成事件，物理设备未验收。
+
+开发worktree：`../drover-worktrees/m17-body-scroll`，干净。自开 `drover/dev-body-scroll-1` idle、attached=0，保留等返工。尚未创建T8审查worktree/agent。T7已收尾且后来由用户完成；下方T7“仍进行中”是历史快照，不作为当前队列状态。本轮没有操作真实队列。
+
+---
+
 ## 2026-09-22 —— T7 已本地合并收尾，桌面视觉由用户单独验收
 
 **这一节最新。** T7 看板字符网格视觉优化已本地合并 main：被审代码 `3486cf5`，合并 `e2a40a7`，收尾空提交 `1cca95d`。未推送。开发/审查两个 worktree 和开发分支已清理；自开的 `drover/dev-kanban-ui-1`、`drover/dev-review-ui-1` 已随工作目录清理一并关闭。drover 侧仅剩 `drover/main`，未动别人的 `corral/main`、`globalmesh/main`。
