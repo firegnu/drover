@@ -201,6 +201,7 @@ is 'p("eta/repo")["queue"]["card"]["criteria"][3]["ok"]' None 'the check command
 is '"pytest -q" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'but the board still says what it is'
 # 说法是「没在刷新时跑」，不是「没在页面上跑」——页面没有了，看板每刷新一次就要算一遍判据
 is '"没在刷新时跑" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'and why it was skipped'
+is '"按 g / drover go 核对并放行" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'the check hint leads directly to g/go'
 
 # 派出去的 agent：2026-09-22 用户要求显示状态（m5 删掉的是重量级的那版，见 crew_of 的注释）。
 # eta/m1-backend 在假 corral 的 ls 里、cwd 落在 eta 的 worktree 上——正该被认出来。

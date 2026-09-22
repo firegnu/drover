@@ -18,7 +18,7 @@
   drover list                    看进行中、队列、已完成
   drover next                    把下一件送进主控；有进行中的就重发它
   drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
-  drover go                      人：放行（放行模式）
+  drover go                      人：核对并记完成、放行；已完成的只放行，不发下一件
   drover drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
   drover drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
   drover pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
@@ -204,7 +204,7 @@ def check_done(task):
     「不适用」的那几条（没有 base_sha、没有验收命令）不算不过，但会照原样报出来——
     3 条里过了几条要看得见，不能让跳过的悄悄混成通过。
 
-    **收尾记号（依据）不在这里拦。** 手动 `drover done` 是人在说「这件活完了」，drover 只报告
+    **收尾记号（依据）不在这里拦。** 手动 `drover go` / `done` 是人在说「这件活完了」，drover 只报告
     自己有没有认出来（见 criteria_report）。自动那条路由 drover-board.close_if_done 卡死：
     见不到记号就不跑到这里来。"""
     probs = []
@@ -239,7 +239,7 @@ def done_mark_row(task):
 def criteria_report(task, rows):
     """依据（收尾记号）+ 三条门各自什么状态，原样打给人看。跳过的也要出现。
 
-    依据不满足时**照样打，不拦**：手动 `drover done` 是人在说「这件活完了」，drover 没资格
+    依据不满足时**照样打，不拦**：手动 `drover go` / `done` 是人在说「这件活完了」，drover 没资格
     拦人。它只负责把「我没认出完成」说清楚。自动那条路是另一回事——循环引擎见不到记号就
     不会走到这里（drover-board.close_if_done）。"""
     out = []
@@ -354,16 +354,21 @@ def loop_on():
     return os.path.exists(LOOP)
 
 
+def mark_loop_wait(reason):
+    """留下队列推进标记，下一件由引擎调用 next。"""
+    mark = f"{D}/.loop-wait"
+    tmp = f"{mark}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"reason": reason, "t": int(time.time())}, f, ensure_ascii=False)
+    os.replace(tmp, mark)
+
+
 def loop_stop(reason, msg):
     """停在队列那一步（队列空 / 暂停 / 等放行）。循环开着时留下标记，引擎（`drover loop`）
     等条件重新满足就再跑一次 next。标记里只有原因和时间——要送给谁看配置里的 MAIN_AGENT，
     不需要记 pane，也不需要核对 pane 的身份（那是老 herdsman 往写手窗格里注入时才要的）。"""
-    mark = f"{D}/.loop-wait"
     if loop_on():
-        tmp = f"{mark}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"reason": reason, "t": int(time.time())}, f, ensure_ascii=False)
-        os.replace(tmp, mark)
+        mark_loop_wait(reason)
         return stop(msg + "（循环开着：条件满足后会自动接着往下发。）")
     return stop(msg)
 
@@ -383,17 +388,16 @@ def cmd_next():
     return issue({"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]})
 
 
-def cmd_done(tid):
-    tasks, current, awaiting = fold()
-    if not current or current["id"] != tid:
-        die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
+def record_done(current, retry):
+    """核对一次、报告并记完成；返回 (gate, held)，失败返回 None，不推进下一件。"""
+    tid = current["id"]
     probs, rows = check_done(current)
     if probs:
         print(f"NOT DONE: {tid} 还没收尾：")
         for p in probs:
             print_text(f"  - {p}")
-        print(f"处理完再运行 drover done {tid}。")
-        return 9
+        print(f"处理完再运行 {retry}。")
+        return None
     print(f"核对通过 {tid}：")
     for line in criteria_report(current, rows):
         print_text(line)
@@ -402,6 +406,17 @@ def cmd_done(tid):
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
     gate = GATE or held                          # 循环开不开都听 TASK_GATE；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
+    return gate, held
+
+
+def cmd_done(tid):
+    tasks, current, awaiting = fold()
+    if not current or current["id"] != tid:
+        die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
+    result = record_done(current, f"drover done {tid}")
+    if result is None:
+        return 9
+    gate, held = result
     if gate and loop_on():
         why = "人标了「做完停」" if held else "放行模式"
         return loop_stop("release", f"DONE {tid}：核对通过。{why}：等人放行（drover go）。")
@@ -412,7 +427,13 @@ def cmd_done(tid):
 
 
 def cmd_go():
-    _, _, awaiting = fold()
+    _, current, awaiting = fold()
+    if current:
+        if record_done(current, "drover go") is None:
+            return 9
+        awaiting = current["id"]
+        if loop_on():
+            mark_loop_wait("release")
     if not awaiting:
         die(2, "ERROR: 没有在等放行的任务")
     append({"ev": "go", "id": awaiting})
