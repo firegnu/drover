@@ -187,3 +187,54 @@ cd /Users/firegnu/Developer/personal_projs/drover-worktrees/m23-install-path
 已交付可复核矩阵、三类必需复现、解析链、一个具体推荐方案、兼容代价、设计裁定点和后续测试计划。提交范围仅本任务文件，探针及生成物留在上述临时目录。不改真实 PATH、shell rc、安装目录、LaunchAgents、真实任务状态或 TASK_GATE；未碰 T8 stash、受保护项目、corral 实现和其它 agent；不合并、不推送、不清理分支/worktree、不打收尾记号。
 
 剩余：主控审阅并明确第二阶段设计/实施范围；实施后按原任务安排独立审查。真实 corral 的运行时完整性、真实 launchd 启用及设备使用均未验证，本轮没有把这些列为已通过。DONE 只表示第一阶段调研结束。
+
+
+## 主控第一阶段审查（2026-09-22）
+
+调研通过，T14 未完成；实施暂未启动。被审提交 `8c2e7b4`，agent idle、工作区干净，仅本任务文档变化。主控读取探针源码与解析入口后，在原开发 worktree 前台重跑两项缺陷检查（均因目标缺陷 FAIL）、55 次矩阵观察（退出 0）及现有隔离安装套件（9 项通过）。主控矩阵证据 `/private/tmp/drover-m23-ua0xpt1r/matrix-4y8j22pq/`；两项目标 RED 分别在 `test_temporary_python_not_saved-mtg7wqnz/`、`test_unrelated_path_reinstall-uy4e6tlp/`。未运行真实服务、真实 corral 或全仓库测试。
+
+逐项意见：
+
+- 认可固定默认服务 PATH + 单一显式完整覆盖的最小方案，拟采用报告中的默认目录顺序；显式输入只接受非空绝对分量，保持输入顺序并去重，不隐式补目录。这替代 ROADMAP 的继承安装 PATH 行为，尚需用户裁定，不因本审查自动获准。
+- 认可不自动识别临时环境、不猜 corral 运行时、不改 bin/ 与看板 Python 选择。默认目录中人为放入的临时软链仍可能失效；查到入口不等于运行时完整，文档不能保证后台必然可用。
+- 认可旧 plist 仍逐字节保护、不自动迁移或认领未知文件；已有安装配置不同仍需人工核对。认可既有安全回归保留及定向 RED→GREEN 计划。
+- 不采纳“三项入口任一缺失就拒绝整个安装”的建议：安装两条手动命令与启用后台服务相互独立，缺少默认服务 PATH 中的 corral 不应新增全局安装失败条件。建议仅打印最终服务 PATH、三项入口及明确缺项警告，提示启用前补齐；不执行真实工具做验证。显式 PATH 语法无效和未知目标冲突仍在写入前拒绝。这一调整随整体方案交用户裁定。
+- 兼容代价需说明：自定义 corral、其运行时和 CHECK_CMD 工具目录以后需在显式完整 PATH 中列全；重装需提供同一显式值。旧 plist 不一致时仍拒绝。手动 n → g → n、loop、TASK_GATE 不变。
+
+待用户批准上述 PATH 政策及“缺项警告、不新增安装硬阻断”后，再更新 ROADMAP、续派同一 agent 实施，并按路由独立交叉审查。本轮不合并、不清 worktree/agent、不打收尾、不推送。主控将调研报告完整同步到主仓库任务文件供审阅；开发分支仍停在调研提交。
+
+
+## 第二阶段授权：固定常用目录的最小修复（2026-09-22）
+
+用户明确批准：后台配置只使用固定常用目录，不再复制终端整条 PATH；原 agent 实施、补两项回归，审查通过收尾。不新增环境配置项、不实际安装或启动服务。此前默认值加 DROVER_LAUNCHD_PATH、依赖预检/缺项警告、拆分安装命令的提议均未获采用，不实现。
+
+本机主控已验证：默认终端 python3 为 /opt/homebrew/bin/python3（3.14.7），drover list 成功；下列固定 PATH 下 python3 --version、git --version、corral --version 均退出 0。只证明这些入口可运行，不扩大成真实后台引擎验证。
+
+实施范围：
+1. 先在 ROADMAP 安装段记下获批取舍，再最小修改 install.sh：生成的服务 PATH 固定为 `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，HOME 仍按原逻辑展开；不依赖调用 shell 的 PATH。安装器自身的 exec python3、ProgramArguments 及其它安装保护照旧。
+2. tests/install.sh 加两项聚焦回归：无关 PATH 增加/换顺序后重装成功且目标不变；合成临时 Python 目录在安装 PATH 最前时不会进入生成的服务 PATH。先在旧实现跑出有效 RED，再最小实现并确认 GREEN。原 PATH 分量包含断言改成固定值精确断言，其它保护断言不删。
+3. 保留旧 plist 字节不一致拒绝覆盖、未知目标保护和全量预检。仅按需要修正已有报错中“安装时 PATH 已变”的过时措辞；不增加新依赖检查、选项、配置输入、环境探测或迁移机制。旧 plist 不一致仍人工处理，不自动更新。
+4. 同步 README、QUICKSTART 和手册中直接受影响的安装 PATH 说明，简短说明固定目录；其它文字不重写。不改 bin/、模板参数形状、TUI、loop、TASK_GATE 或真实队列。固定目录以外的自定义环境不在本任务自动支持范围，不设计通用解决方案。
+5. 只跑定向新测试及整个隔离安装套件、sh -n、模板 plutil -lint、git diff --check。全部使用既有临时 HOME + 写入沙箱；不扩大为全仓库或再次调研环境矩阵。可以用临时旧实现副本确认两项回归确实守住缺陷，无须额外大规模变异检查。
+6. 沿用本 worktree、agent 与分支；本文件已由主控同步进开发 worktree，保留前面的报告和主控审查，在末尾追加实施完成记录并一起提交。主仓库 HANDOFF 不动。不合并、不推送、不清理工作目录，不操作真实安装、launchctl、推进命令或全局 PATH。此前安全边界继续有效。
+
+审查调整：仍由主控定向审查；不另开独立交叉审查。初始路由基于广泛环境调查及新配置/预检方案，现经用户明确收敛成固定常量与两项回归，原安全隐私扩展面已移除，按小修规模执行。原 agent 的模型不变，不另开实例。
+
+完成后报告修改、RED/GREEN 与隔离安装结果和提交号，命令前台跑完，最后一行 DONE。
+
+## 第二阶段实施完成记录（2026-09-22）
+
+已按上方最终授权完成最小修复，交主控定向审查；保留此前完整报告、主控审查和授权文字。第一阶段的覆盖变量、依赖预检/警告等方案未实施。
+
+- 先在 ROADMAP 安装段记录获批取舍，再将 `install.sh` 生成的服务 PATH 改为固定常用目录。安装器的 `exec python3`、HOME 展开、ProgramArguments、软链、全量目标预检及 plist 字节比较均保持原样；只更新过时的冲突报错和已有启用提示中的 PATH 指代。
+- `tests/install.sh` 仅新增两项回归：无关目录增加/换顺序后重装成功，且目标内容、链接、模式和 mtime 不变；合成临时 Python 确实被安装器调用，但其目录不写入服务 PATH。旧的“包含安装 PATH 全部分量”断言按批准的新契约替换为固定值精确断言；其余保护断言保留。
+- README、QUICKSTART、手册只更新直接相关安装/排查说明：服务 PATH 固定、旧 plist 不一致仍人工处理、固定目录外自定义环境不自动支持，安装成功不等于后台可用。未改 bin/、plist 模板、TUI、loop、TASK_GATE 或 HANDOFF。
+
+验证证据：`/private/tmp/drover-m23-implementation-g1v5l6aa/`，每项命令均有 `*-command.json`（原命令及退出码）和同名 `.log`。`task-before.md` 保存收到的完整任务文件，最终核对为新增完成记录前缀完全不变。
+
+1. **RED**：`sh tests/install.sh -v InstallTests.test_reinstall_after_unrelated_path_changes InstallTests.test_temporary_python_path_is_not_saved`，在修改生产前退出 1。前者三个 PATH 子场景均因旧 plist 内容变化拒绝重装，后者断言明确发现临时目录被保存；共 2 项测试、4 处目标失败。安装器调用标记和成功退出检查均先通过，不是探针语法或环境错误。证据 `red.log`。
+2. **GREEN**：最小修改后原命令退出 0，2 项通过，证据 `green.log`。
+3. **隔离安装回归**：`sh tests/install.sh -v`，11 项全部通过，证据 `install-suite.log`。沿用临时 HOME、写入沙箱及拒绝执行 `/bin/launchctl`；未知目标/预检、特殊字符路径、旧工具及 shell 配置不变、不写 LaunchAgents、不实际启动服务等原有断言均通过。
+4. **静态检查**：`sh -n install.sh tests/install.sh`、`plutil -lint launchd/dev.drover.loop.plist`、`git diff --check` 均退出 0。另核对原 9 项测试仍在、只增加指定 2 项，bin/、模板、HANDOFF、AGENTS 与本轮起点一致。
+
+全部命令前台等待结束。没有扩大为全仓库测试、再次环境矩阵或额外变异检查；未运行真实 corral、安装或服务，未改全局 PATH、真实队列和其它项目。不合并、不推送、不清理 worktree/分支、不打收尾记号。实现与隔离验证已完成；后续为主控审查，真实安装与服务启用仍需另行授权。

@@ -23,7 +23,7 @@ sh install.sh
 
 它**不**做的：不动 `launchctl`，不改任何 shell 配置，不覆盖任何它不认识的文件（撞上就非零退出、一个字节都不写）。
 
-> **用干净的 shell 跑。** 它会把当前 PATH 烤进 plist，装的时候若激活着某个 venv，常驻引擎会一直用那个 venv 的 `python3`。
+> 服务 PATH 固定为 `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，HOME 会展开，不复制终端 PATH 或其中的临时 Python 目录。启用前确认依赖在这些目录中可用；其它自定义环境不自动支持。旧 plist 内容不一致时，重装仍拒绝覆盖，请人工核对。
 
 `~/.local/bin` 不在 PATH 就自己加。后面所有命令都假设 `drover` 能直接敲。
 
