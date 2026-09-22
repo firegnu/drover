@@ -176,6 +176,10 @@ for scene in D['SCENES']:
                     state['body_offset'] += 1
                     B.draw(screen, vm, state)
                     continue
+                if state.get('history_rect') and state['history_offset'] < state['history_total'] - state['history_page']:
+                    state['history_offset'] += 1
+                    B.draw(screen, vm, state)
+                    continue
                 before = state.copy()
                 act = B.key_action(curses.KEY_NPAGE, vm['projects'][0], state)
                 assert state == before

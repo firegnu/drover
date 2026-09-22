@@ -21,12 +21,30 @@ sys.dont_write_bytecode = True
 DEMO = Path(__file__).with_name('board-demo.py')
 
 
-def child(screen, channel, multi):
+def child(screen, channel, multi, history=False, active=False):
     demo = runpy.run_path(str(DEMO))
     board = demo['load_board']()
     vm, _ = demo['fixture']('working', multi)
     for pv in vm['projects']:
         pv['queue']['card']['body'] = [f'BODY-{i:02d}' for i in range(1, 39)]
+    history_temp = None
+    if history:
+        data = runpy.run_path(str(Path(__file__).with_name('board-history.py')))
+        board = data['B']
+        history_temp = tempfile.TemporaryDirectory(prefix='drover-history-pty-data-')
+        fixture = data['HistoryFixture'](history_temp.name)
+        fixture.write(active='doing' if active else None)
+        vm = fixture.vm(multi)
+    viewport = {}
+    if history:
+        original_draw = board.draw
+
+        def draw(window, model, state):
+            original_draw(window, model, state)
+            viewport.clear()
+            viewport.update(state)
+
+        board.draw = draw
     original = copy.deepcopy(vm)
     counts = {'collect': 0, 'view_model': 0}
 
@@ -49,7 +67,13 @@ def child(screen, channel, multi):
 
             def getch(self):
                 h, w = screen.getmaxyx()
+                extra = {}
+                if history:
+                    rect = viewport.get('history_rect')
+                    extra = {'viewport': viewport, 'history_rows': [screen.instr(y, rect[0]).decode('utf-8')
+                             for y in range(rect[1], rect[3])] if rect else []}
                 output.write(json.dumps({'size': [w, h], 'counts': counts,
+                                         **extra,
                                          'lines': [screen.instr(y, 0).decode('utf-8') for y in range(h)]},
                                         ensure_ascii=False) + '\n')
                 output.flush()
@@ -57,14 +81,20 @@ def child(screen, channel, multi):
 
         board.tui(Recording(), 'unused')
     assert vm == original, '真实 tui 不得修改 VM/正文'
+    if history_temp:
+        history_temp.cleanup()
 
 
-def session(root, w, h, multi):
+def session(root, w, h, multi, history=False, active=False):
     label = f'{w}x{h}-{"multi" if multi else "single"}'
+    if history:
+        label += '-history-' + ('working' if active else 'idle')
     master, slave = os.openpty()
     receive, send = os.pipe()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', h, w, 0, 0))
     command = [sys.executable, '-B', __file__, '--child', str(send)] + (['--multi'] if multi else [])
+    if history:
+        command += ['--history'] + (['--active'] if active else [])
     frames, ansi, pending = [], bytearray(), bytearray()
     with (root / f'{label}.stderr').open('wb') as errors:
         proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=errors, pass_fds=(send,),
@@ -100,10 +130,18 @@ def session(root, w, h, multi):
         def body_rows(f):
             return [y for y, text in enumerate(f['lines']) if 'BODY-' in text]
 
+        def resize(nw, nh):
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', nh, nw, 0, 0))
+            os.kill(proc.pid, signal.SIGWINCH)
+            return frame()
+
         try:
             first = current = frame()
             capable = not any('滚轮不可用' in text for text in current['lines'])
-            if capable:
+            if history:
+                check = runpy.run_path(str(Path(__file__).with_name('board-history-pty.py')))['check']
+                check(current, frame, wheel, resize, multi)
+            elif capable:
                 if h >= 24:
                     assert len(body_rows(current)) == (6 if h == 24 else 8), label
                     assert any('完成依据和判据' in text for text in current['lines']), label
@@ -211,9 +249,11 @@ if __name__ == '__main__':
     parser.add_argument('--child', type=int)
     parser.add_argument('--multi', action='store_true')
     parser.add_argument('--record', type=Path)
+    parser.add_argument('--history', action='store_true')
+    parser.add_argument('--active', action='store_true')
     args = parser.parse_args()
     if args.child is not None:
-        curses.wrapper(child, args.child, args.multi)
+        curses.wrapper(child, args.child, args.multi, args.history, args.active)
     elif args.record:
         run(args.record)
     else:
