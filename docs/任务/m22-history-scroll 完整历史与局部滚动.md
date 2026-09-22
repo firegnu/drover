@@ -224,3 +224,7 @@ git diff --check
 清理前确认自开 agent idle、attached=0，worktree干净且分支已合入main；随后无force删除 `m22-history-scroll` worktree、用branch -d清开发分支，工作目录已删，一并关闭 `drover/dev-history-scroll-1`。本任务未开审查worktree/agent；当前corral仅剩本主控 drover/main。收尾空提交 `d8dad55`，随后更新HANDOFF。
 
 未操作真实done/go/next/loop、未推送；用户仍需在常用终端确认实际鼠标/触控板体验，再自行按g核对放行。T4继续暂缓，T8实验stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff` 已核对原样保留，不恢复、不删除。
+
+## 用户验收与收工（2026-09-22）
+
+用户明确反馈“已经放行了，我觉得还可以”，记录T13实际使用认可及用户已放行；不扩写为每种设备和尺寸逐项验过。用户同时授权本次提交、推送，并要求今日到此为止。本轮只补文档，不重跑测试、不启动新任务；推前扫描待推送提交，推后核对远端。T4继续暂缓，T8实验stash原样保留；不操作真实推进命令。
