@@ -35,3 +35,22 @@ AGENTS.md、HANDOFF.md、README.md；ROADMAP现行完成判据/命令边界；�
 不合并、不推送、不打收尾记号、不清worktree/分支，不安装、不切换Python、不改PATH、不启动循环。不修改真实queue.md/tasks.state，不操作真实done/go/next/loop。不改corral/corral-dispatch，不读其源码/内部状态，不碰AGENTS列出的受保护项目和服务，不按项目名批量杀进程，不开关其它agent。T4暂缓；T8实验stash原样保留，不恢复/删除。
 
 回复只写完成内容、RED/GREEN结果和提交号。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 生产仅将 `cmd_list` 四处任务文字输出改为现有 `print_text`：进行中、待办、已完成，以及共用一行的已放弃标题/原因。未改 `print_text`、解析规则或其它命令。
+- 新增独立定向入口 `tests/list-output.py`，1 项测试、6 个子场景（正常对照 + 五类异常文字）。子进程 `-I` 并显式固定严格 UTF-8；JSON 转义构造五种高低代理码。逐字核对完整输出，守住反斜杠转义、后续条目、中文/emoji/NBSP/U+0085/U+2028/U+2029 和列表格式；同时核对内存数据、原文件字节/mtime/目录内容不变。
+- RED：`python3 tests/list-output.py`，生产未改时退出 1；正常对照通过，五类异常均由对应裸 `print` 抛 `UnicodeEncodeError: 'utf-8' ... surrogates not allowed`。最初测试曾把 Unicode 行分隔符直接放进待办文件，触及既有解析行为；改为任务允许的内存待办输入后重新取得上述有效 RED，未扩大生产范围。
+- GREEN：同命令退出 0，6 个子场景全部通过。只运行这个定向入口，没有运行全仓库或其它命令的大套件。
+- 聚焦自证：前台 Python 临时目录脚本配对复制 `drover` / `drover-board`，以绝对 `DROVER_BIN` 运行同一定向入口；`git show HEAD:bin/drover` 的旧生产副本退出 1，精确捕获五项 `UnicodeEncodeError`；换回修复副本退出 0，6 场景全绿。临时副本未进入工作区。
+- 必要检查：两文件 `ast.parse` 通过；AST 比较确认除 `cmd_list` 外生产代码完全相同，安全打印调用仅增加四处；`git diff --check` 通过。变更仅生产脚本、新定向测试及本完成记录。
+- 所有命令前台完成；仅提交本分支，不合并、不推送、不安装、不运行真实队列操作、不再委派，无需另行裁定。
+
+
+## 主控审查（2026-09-22）
+
+结论：通过。开发提交 `491d7f6`，回复DONE，agent idle/attached=0、worktree干净；生产仅cmd_list四处print改为print_text，安全打印函数及其它逻辑均未改。
+
+主控阅读完整定向测试并重跑 `python3 -B tests/list-output.py`：1项测试/6子场景通过。严格UTF-8子进程和JSON构造有效，完整输出断言覆盖五类异常文字、转义、后续条目及正常中文/合法Unicode，内存深拷贝和临时文件字节/mtime/目录前后相同。主控另用临时旧生产副本（a766296）配同一数据模块复跑：退出1、恰好5个UnicodeEncodeError断言失败、正常对照通过，证明RED针对目标缺陷。未运行其它套件或真实队列操作。
+
+`git diff --check`通过，修改范围仅生产脚本、新测试与任务文件。接受独立定向入口，无需为小修扩展测试框架；无剩余审查问题。按任务不加独立交叉审查，批准本地合并收尾，未推送。
