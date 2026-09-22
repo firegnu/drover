@@ -175,3 +175,15 @@
 先补经过真实 run_drover/CLI 的 RED，再仅将 go 的外层期限对齐 CHECK_TIMEOUT+60，其它短操作保留原期限。不引入异步 UI，不改判据/队列语义。回归可以缩短时限模拟同样内外层关系，避免每次等待 125 秒；不能仅断言传入某个常数，要让慢验收实际成功落账，精确 start/done/go、验收一次、无额外发送。保留其它断言，针对恢复旧超时做缺陷植入。记录证据和相关回归，提交到本分支后回复 DONE。
 
 完整审查及裁定在主仓库 /Users/firegnu/Developer/personal_projs/drover/docs/任务/m15-go-done 交叉审查.md，只读它，不修改。仍不合并、不推送，不操作真实队列，不再委派。审查者之后只做增量复核。
+
+## 交叉审查返工完成记录
+
+2026-09-22，已读主仓库交叉审查全文及主控裁定；基于返工要求提交 `47266b2` 修复。
+
+- **最小实现**：`run_drover` 的 subprocess 调用只改一行，`go` 使用 `CHECK_TIMEOUT + 60`（当前 1860 秒），其它命令继续 120 秒。未改 CLI、验收内部期限、判据或队列语义，未引入异步 UI。
+- **先 RED**：在 `tests/drover.sh` 增加合成仓库和真实慢验收，经实际 `run_drover → CLI` 执行；只包装父进程的 subprocess 边界，将传入外层 timeout 除以 120，旧预算为 1 秒、新预算为 15.5 秒。验收脚本真实记录 PID/次数并睡 2 秒，不伪造命令结果。`bash tests/drover.sh` 退出 1，命中 `slow go must finish within the check budget`，消息含 `timed out after 1.0 seconds`；此前「验收确实启动且恰好一次」断言通过。失败返回后按记录 PID 等该短验收自然退出，未留下进程。随后才改生产代码。
+- **GREEN**：同命令退出 0，输出 `PASS run_drover slow go: start/done/go, one check, no send; short commands keep 120s`。断言返回明确「已放行」、事件精确 `start/done/go`、验收一次、send 日志不变；另经真实 `run_drover list` 确认短命令仍传 120 秒且不增加事件/验收/发送。
+- **相关回归**：前台 `bash tests/drover.sh` 和 `bash tests/drover-board.sh` 均退出 0，后者含 20 项 check-result 测试；`git diff --check` 退出 0。本轮未改判据实现和安装，沿用交叉审查已验证的四套全绿结果，不重复扩大检查。
+- **恢复旧超时植入**：两个脚本成对复制到临时目录，仅把条件 timeout 恢复为固定 `120`，先通过 Python 语法编译，再用绝对路径 `DROVER_BIN` / `DROVER_BOARD_BIN` 前台运行 `bash tests/drover.sh`。套件退出 1，精确命中同一慢验收断言及 `timed out after 1.0 seconds`；非语法或 fixture 失败。测试仍等验收 PID 退出后才报告失败，没有实际等 125 秒。
+
+本轮仅改 `bin/drover-board`、`tests/drover.sh` 与本文件，保留全部既有断言；主仓库交叉审查文件只读。无需新增设计决定，待原审查者增量复核；未再委派、未操作真实队列、未合并或推送。

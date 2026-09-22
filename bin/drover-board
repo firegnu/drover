@@ -978,7 +978,7 @@ def run_drover(repo, *args):
     → 给人看的一行；go 把放行状态、警告和拒绝原因前置，避免消息区只剩「核对通过」。"""
     try:
         r = subprocess.run([sys.executable, task_bin_path(), *args], cwd=repo,
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=CHECK_TIMEOUT + 60 if args == ("go",) else 120)
     except Exception as e:
         return f"drover {' '.join(args)}：没跑起来（{e}）"
     out = [re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", l).strip(" ")

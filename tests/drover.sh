@@ -281,6 +281,50 @@ for width in (20, 40, 80, 2000):
         assert "failed with" in visible and "second" in visible, visible
 assert checks() == 1 and events() == evs and sends() == before, (checks(), events())
 print("PASS run_drover: real failed check output survives and control characters are safe for draw")
+
+# 慢验收仍走真实 run_drover / CLI；只在 subprocess 边界缩放外层时限，避免等两分钟。
+# 旧 120 秒 → 1 秒，新 CHECK_TIMEOUT+60 → 15.5 秒；真实验收睡 2 秒。
+import time
+fixture("tui-slow-check")
+git("commit", "--allow-empty", "-qm", "收尾: slow check")
+slow = d / "slow-check.py"
+slow.write_text("import os, pathlib, time\n"
+                f"with pathlib.Path({str(d / 'checks')!r}).open('a') as f:\n"
+                "    f.write(str(os.getpid()) + '\\n')\n"
+                "time.sleep(2)\n")
+with (repo / ".drover.conf").open("a") as f:
+    f.write(f"CHECK_CMD=exec '{sys.executable}' '{slow}';\n")
+real_run, budgets = subprocess.run, []
+
+def scaled_run(argv, *args, **kwargs):
+    if argv[:2] == [sys.executable, str(cli)]:
+        budgets.append((tuple(argv[2:]), kwargs["timeout"]))
+        kwargs["timeout"] /= 120
+    return real_run(argv, *args, **kwargs)
+
+before = sends()
+with patch.object(B.subprocess, "run", side_effect=scaled_run):
+    msg = B.run_drover(str(repo), "go")
+assert checks() == 1, ("slow fixture must actually start exactly once", msg, checks())
+# RED 会杀掉 CLI；等已记录 PID 的短验收自然退出，不能让失败测试留下进程。
+pid = int((d / "checks").read_text().strip())
+deadline = time.monotonic() + 10
+while True:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        break
+    assert time.monotonic() < deadline, ("slow check did not exit", pid)
+    time.sleep(0.05)
+assert "已放行" in msg, ("slow go must finish within the check budget", msg)
+assert [e["ev"] for e in events()] == ["start", "done", "go"], events()
+assert checks() == 1 and sends() == before, (checks(), events())
+evs = events()
+with patch.object(B.subprocess, "run", side_effect=scaled_run):
+    B.run_drover(str(repo), "list")
+assert budgets == [(("go",), B.CHECK_TIMEOUT + 60), (("list",), 120)], budgets
+assert events() == evs and checks() == 1 and sends() == before, events()
+print("PASS run_drover slow go: start/done/go, one check, no send; short commands keep 120s")
 PY
 
 # ---- 加任务：编号自增；手写的可以不带编号，写在哪一块前面就排在哪 ----
