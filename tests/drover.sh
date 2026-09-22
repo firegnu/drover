@@ -56,6 +56,169 @@ edit() { mkdir -p "$(dirname "${REPO}/$1")"; printf '%s\n' "$2" >> "${REPO}/$1";
 hsha() { git -C "${REPO}" rev-parse HEAD; }
 short() { git -C "${REPO}" rev-parse --short HEAD; }
 
+# ---- 直接 go：使用独立合成仓库，不影响下面既有队列断言 ----
+python3 - "${RT}" "${TMP}" <<'PY' || fail 'direct go checks'
+import importlib.machinery, importlib.util, json, os, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+cli, tmp = pathlib.Path(sys.argv[1]).resolve(), pathlib.Path(sys.argv[2])
+loader = importlib.machinery.SourceFileLoader("go_board", str(cli.with_name("drover-board")))
+B = importlib.util.module_from_spec(importlib.util.spec_from_loader("go_board", loader))
+loader.exec_module(B)
+env = {**os.environ, "DROVER_CORRAL_BIN": str(tmp / "bin/corral")}
+os.environ["DROVER_CORRAL_BIN"] = env["DROVER_CORRAL_BIN"]
+
+def run(args, code=0):
+    r = subprocess.run(args, cwd=repo, env=env, capture_output=True, text=True)
+    assert r.returncode == code, (args, r.returncode, code, r.stdout, r.stderr)
+    return r.stdout
+
+def git(*args):
+    return run(["git", *args]).strip()
+
+def dv(*args, code=0):
+    return run([sys.executable, str(cli), *args], code)
+
+def events():
+    return B.task_events(B.read(str(d / "tasks.state")))
+
+def checks():
+    return len((d / "checks").read_text().splitlines()) if (d / "checks").exists() else 0
+
+def sends():
+    return (tmp / "sent.txt").read_bytes() if (tmp / "sent.txt").exists() else b""
+
+def fixture(name, gate=1, held=False, looping=False):
+    global repo, d, projects
+    repo, d = tmp / name / "repo", tmp / name / "handoff"
+    repo.mkdir(parents=True); d.mkdir()
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "t"); git("config", "user.email", "t@example.com")
+    (repo / ".gitignore").write_text(".drover.conf\n")
+    (repo / "work").write_text("base\n")
+    git("add", ".gitignore", "work"); git("commit", "-qm", "base")
+    (repo / ".drover.conf").write_text(
+        f"HANDOFF_DIR={d}\nMAIN_AGENT=test/main\nTASK_GATE={gate}\n"
+        f"CHECK_CMD=echo ran >> '{d}/checks'; test ! -f '{d}/fail';\n")
+    (d / "queue.md").write_text("## T1 first\n" + ("做完：等我放行\n" if held else "") + "\n## T2 second\n")
+    projects = tmp / name / "projects"
+    projects.write_text(str(repo) + "\n")
+    dv("go", code=2)
+    assert events() == [], "empty go must not write events"
+    dv("next")
+    if looping:
+        dv("loop", "on")
+
+fixture("direct-go")
+git("commit", "--allow-empty", "-qm", "收尾: first")
+before = sends()
+out = dv("go")
+assert "✓ 依据 收尾记号" in out and "drover next" in out, out
+assert [e["ev"] for e in events()] == ["start", "done", "go"], events()
+assert sends() == before, "go must not send the next task"
+assert checks() == 1, ("go must check exactly once", checks())
+evs = events()
+assert evs[1] == {"ev": "done", "id": "T1", "sha": git("rev-parse", "HEAD"),
+                  "gate": True, "t": evs[1]["t"]}, evs
+assert evs[2] == {"ev": "go", "id": "T1", "t": evs[2]["t"]}, evs
+tasks, current, awaiting = B.task_fold(evs)
+assert current is None and awaiting is None, (current, awaiting)
+assert tasks["T1"]["end"] == evs[1]["sha"] and tasks["T1"]["t2"] == evs[2]["t"], tasks
+pv = B.view_model(B.collect(str(projects)))["projects"][0]
+q = pv["queue"]
+assert q["counts"] == {"todo": 1, "doing": 0, "done": 1, "dropped": 0}, q
+assert q["card"] is None and q["awaiting"] is None, q
+finished = q["finished"][0]
+assert finished["id"] == "T1" and finished["commits"] == 1, finished
+assert finished["span"] == B.dur(evs[1]["t"] - evs[0]["t"]), finished
+assert finished["wait"] == B.dur(evs[2]["t"] - evs[1]["t"]), finished
+lines = [line for _, _, line in B.detail_lines(pv)]
+assert any("T1 first" in line and "1 个提交" in line and "等放行" in line for line in lines), lines
+assert checks() == 1, "board rendering must not run CHECK_CMD"
+dv("go", code=2)
+assert events() == evs and checks() == 1 and sends() == before, "repeat go must do nothing"
+print("PASS direct go: start/done/go, one check, no send")
+
+# 四条拒绝路径和修复重试；伪造通过的显示缓存不能令 go 跳过核对。
+for defect, reason in (("main", "判据 1"), ("branch", "判据 2"),
+                       ("check", "判据 3"), ("dirty", "工作区有没提交的改动")):
+    fixture("blocked-" + defect)
+    if defect != "main":
+        git("commit", "--allow-empty", "-qm", "收尾: first")
+    if defect == "branch":
+        git("checkout", "-qb", "unmerged")
+        git("commit", "--allow-empty", "-qm", "branch work")
+        git("checkout", "-q", "main")
+    elif defect == "check":
+        (d / "fail").touch()
+    elif defect == "dirty":
+        (repo / "work").write_text("dirty\n")
+    (d / ".check-result").write_text(json.dumps({"task": "T1", "main": git("rev-parse", "main"),
+        "cmd": B.parse_conf(str(repo / ".drover.conf"))["CHECK_CMD"], "ok": True,
+        "why": "cached pass", "t": int(B.time.time())}))
+    evs, before = events(), sends()
+    out = dv("go", code=9)
+    assert reason in out and "处理完再运行 drover go" in out, out
+    assert events() == evs and sends() == before, (defect, events())
+    assert checks() == 1, (defect, checks())
+    done_out = dv("done", "T1", code=9)
+    assert [s for s in out.splitlines() if s.startswith("  - ")] == [
+        s for s in done_out.splitlines() if s.startswith("  - ")], (out, done_out)
+    assert events() == evs and checks() == 2, (defect, events(), checks())
+    if defect == "main":
+        git("commit", "--allow-empty", "-qm", "收尾: first")
+    elif defect == "branch":
+        git("merge", "-q", "--ff-only", "unmerged")
+    elif defect == "check":
+        (d / "fail").unlink()
+    else:
+        git("add", "work"); git("commit", "-qm", "clean")
+    dv("go")
+    assert [e["ev"] for e in events()] == ["start", "done", "go"], events()
+    assert checks() == 3 and sends() == before, (defect, checks())
+print("PASS direct go: four refusals match done, repairs pass, cache never decides")
+
+fixture("already-done")
+git("commit", "--allow-empty", "-qm", "work without marker")
+out = dv("done", "T1", code=8)
+assert "这次算你自己判断的" in out, out
+evs, before = events(), sends()
+(d / "fail").touch()
+dv("go")
+assert events()[:-1] == evs and events()[-1]["ev"] == "go", events()
+assert checks() == 1 and sends() == before, "already done go must not check or send"
+
+# 各档、hold、pause 下直接 g 都能核对放行；循环下一跳才派发，暂停仍然挡住。
+for gate, held, looping, paused in ((1, False, False, False), (0, False, False, False),
+                                   (1, False, True, False), (0, False, True, False),
+                                   (0, True, True, True)):
+    fixture(f"mode-{gate}-{held}-{looping}", gate, held, looping)
+    if paused:
+        dv("pause")
+    git("commit", "--allow-empty", "-qm", "work without marker")
+    pv = B.view_model(B.collect(str(projects)))["projects"][0]
+    assert pv["queue"]["card"]["id"] == "T1", pv
+    action = B.key_action(ord("g"), pv, {"sel": 0, "n": 1})
+    assert action == ("run", ["go"]), action
+    before = sends()
+    out = dv(*action[1])
+    assert "✗ 依据 收尾记号" in out and "这次算你自己判断的" in out, out
+    assert [e["ev"] for e in events()] == ["start", "done", "go"], events()
+    assert events()[1]["gate"] is bool(gate or held), events()
+    assert checks() == 1 and sends() == before, "go must only complete and release"
+    B.loop_tick(str(projects))
+    if not looping or paused:
+        assert len(events()) == 3 and sends() == before, "off/paused loop must not send"
+    if paused:
+        dv("resume")
+        B.loop_tick(str(projects))
+    if not looping:
+        dv("next")
+    assert [e["ev"] for e in events()] == ["start", "done", "go", "start"], events()
+    assert events()[-1]["id"] == "T2" and sends() != before, "next/engine must send T2"
+    assert checks() == 1, "release must not repeat the completion check"
+print("PASS direct g/go: warning, existing done, gate/hold/pause, engine continuation")
+PY
+
 # ---- 加任务：编号自增；手写的可以不带编号，写在哪一块前面就排在哪 ----
 rt add "给导出加进度条"; code 0 'add'; has 'T1' 'add numbers from T1'
 rt add "订单列表分页" "约束：不改接口签名"; code 0 'add with a note'; has 'T2' 'add numbers T2'

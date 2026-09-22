@@ -11,7 +11,7 @@ corral 要状态。推进靠按键，不靠敲命令——按下去的每一个�
   drover board --projects F    改用 F 当项目清单（一行一个）；测试用
 
 按键:
-  ↑ ↓ / j k  选项目      g  放行（drover go）        n  发下一件（drover next）
+  ↑ ↓ / j k  选项目      g  核对并放行（drover go）  n  发下一件（drover next）
   p  暂停 / 恢复         a  加任务（$EDITOR 编 queue.md）
   l  循环开 / 关         r  刷新                     q  退出
 
@@ -495,7 +495,7 @@ def criteria(repo, base_sha, check_cmd, do_check=True):
     if not check_cmd:
         rows.append({"n": 3, "name": name3, "ok": None, "why": "没有验收命令：CHECK_CMD 空着，队列条目也没写"})
     elif not do_check:
-        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在刷新时跑（可能是整套测试）；drover done 时才跑"})
+        rows.append({"n": 3, "name": name3, "ok": None, "why": f"`{check_cmd}` 没在刷新时跑（可能是整套测试）；按 g / drover go 核对并放行"})
     else:
         code, tail = run_check(repo, check_cmd)
         rows.append({"n": 3, "name": name3, "ok": code == 0,
@@ -565,7 +565,7 @@ def task_view(repo, conf, p):
         n = len(commits)
         steps = [
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
-            ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "drover done"),
+            ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "按 g 核对并放行"),
         ]
         # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
         # 纯 git，便宜；判据第 1 条看的也是这个 sha，两处说的是同一件事。
@@ -970,7 +970,7 @@ def draw(stdscr, vm, state):
 
 # ============================================================ 按键
 REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重跑，看板不存自己的状态
-HELP = "↑↓/jk 选项目 · PgUp/PgDn 翻详情 · g 放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
+HELP = "↑↓/jk 选项目 · PgUp/PgDn 翻详情 · g 核对并放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
 
 
 def run_drover(repo, *args):

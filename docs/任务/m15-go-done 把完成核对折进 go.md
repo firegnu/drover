@@ -66,3 +66,56 @@
 ## 回复
 
 只写完成内容、测试结果、取舍各一句话，以及是否需要主控决定。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-22，Codex，在 `m15-go-done` 分支完成。
+
+### 实现与取舍
+
+- `go` 对进行中任务复用 `record_done`：一次 `check_done`，失败返回 9、原因与 `done` 一致、不写完成或放行事件；通过则报告依据与三条门，依次写 `done` / `go`，返回 0。已完成等放行时仅写 `go`，不重新验收；空状态及重复放行返回 2。
+- `record_done` 只核对、报告和记完成；`done` 自己保留原有返回 8、按 gate/hold 等放行或调用 `next` 的路径。`go` 不调用 `done` 或 `next`，不发送下一件。
+- 复用原来的 `.loop-wait` 原子写入逻辑：循环开启时直接 `go` 留下推进标记，下一跳由引擎派发；循环关闭时仍由人按 `n`。pause 仍挡住引擎派发，resume 后继续。
+- 缺收尾记号的手动警告与允许人确认的语义不变；自动循环仍先查记号。`CHECK_CMD` 每次核对恰好一次，报告复用结果，缓存只供显示。
+- `key_action` 无需改动，新增用例从进行中的真实 view model 按 `g` 得到 `go` 并执行；看板仅调整帮助与核对提示。README、QUICKSTART、手册和 ROADMAP 同步日常 `n → g → n` 流程；保留 `done` 供兼容、单独记完成和引擎使用。
+
+### RED → GREEN
+
+1. 先只加直接 `go` 用例，运行 `bash tests/drover.sh`，退出 1：CLI `go` 实际退出 2，预期 0，关键输出 `ERROR: 没有在等放行的任务`。随后才提取共用核对逻辑并实现 `go`。
+2. 首次 GREEN 尝试暴露测试配置问题：配置解析器裁掉行尾引号，验收 shell 退出 2；给合成 `CHECK_CMD` 补尾分号后，`bash tests/drover.sh` 退出 0。该 fixture 失败不算 RED；最终还将 `HEAD:bin/drover` 放进临时副本，用修正后的测试重跑，仍在直接 `go` 处以同样的退出 2 / 预期 0 失败，确认目标缺陷。
+3. 再加拒绝/重试、计数器、记账、档位和引擎用例，`bash tests/drover.sh` 退出 1：循环下一跳后仍只有 `start/done/go`，没有 T2 的 `start`。之后才补 `.loop-wait` 复用，重跑退出 0。
+4. 最终新增检查输出：
+   - `PASS direct go: start/done/go, one check, no send`
+   - `PASS direct go: four refusals match done, repairs pass, cache never decides`
+   - `PASS direct g/go: warning, existing done, gate/hold/pause, engine continuation`
+
+四类拒绝分别覆盖 main 未前进、未合入分支、验收失败、已跟踪工作区不干净；逐条比较 `done` 的问题行，断言事件与 send 日志不变，修复后可直接 `go`。同时伪造通过的显示缓存，确认不能绕过核对。实际生成的完成事件验证 sha、gate、时间字段、看板完成计数、耗时、提交数和等放行显示。
+
+### 回归与缺陷植入
+
+前台运行 `for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done`，总退出码 0：
+
+| 套件 | 结果 |
+|---|---|
+| criteria | PASS，含真实中/法文坏 ref 场景、分支判据和收尾记号四道闸 |
+| drover | PASS，新增直接 go 及所有原队列、done、hold、循环与 init 断言 |
+| install | 9 tests，OK；仅隔离临时 HOME / 沙箱，无真实安装 |
+| drover-board | 所有 PASS，含无收尾记号不自动完成、TUI、引擎及 20 项 check-result 测试 |
+
+`git diff --check` 退出 0。
+
+植入只在临时目录；每个变体的 `drover` / `drover-board` 同目录，均以绝对路径设置 `DROVER_BIN` / `DROVER_BOARD_BIN`，前台运行 `bash tests/drover.sh`。五个变体均退出 1，命中行为断言，没有语法或 fixture 错误：
+
+| 植入 | 命中的断言 |
+|---|---|
+| 清空核对问题列表，绕过拒绝 | main 未前进时 `go` 实际退出 0，预期 9 |
+| 重复调用 `check_done` | `go must check exactly once`，实际计数 2 |
+| 漏写 `done` | 事件只有 `start/go`，预期 `start/done/go` |
+| 漏写 `go` | 事件只有 `start/done`，预期 `start/done/go` |
+| 漏留 `.loop-wait` | 引擎下一跳仍只有三条事件，缺 T2 的 `start` |
+
+### 问题和未做事项
+
+- 无需新增设计决定；主控继续按任务要求审查，真实 T6 留给用户本人按 `g` 验收。
+- 未动 HANDOFF，未再委派，未操作真实队列/agent，未安装、动 launchd、合并 main、推送或打收尾记号；T4 与列明的既有欠账未处理。
+- 阅读时发现 QUICKSTART/手册仍有正文 `验收：` 覆盖命令的旧说明，本次仅同步完成/放行操作流程，未扩大为其它文档清理。
