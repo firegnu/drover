@@ -4,23 +4,17 @@
 
 ---
 
-## 2026-09-22 —— T8 已本地合并收尾，等用户实际滚轮验收
+## 2026-09-22 —— T8 用户实测通过并已放行
 
 **这一节最新。** T8 正文限高/鼠标局部滚动已本地合并：被审 `885d49f`（生产 `6b914a7`），合并 `c3aabe9`，收尾空提交 `1ca190d`。采用用户确认的原生 curses 简单方案，使用现有 `/opt/anaconda3/bin/python3`，不再做旧curses鼠标协议兼容。不安装、不改 PATH/启动器；未推送。
 
-### 下一步
+### 当前状态与下一步
 
-用户在常用终端手动验收物理鼠标/触控板。可先运行安全合成演示（不读取真实项目配置、不执行队列命令）：
+用户明确反馈：「我测试了一下，可以了，已经放行了」。据此记录 T8 实际使用验收通过、已由用户放行；不再列作待验收或待放行。用户未细分设备/场景，本记录不扩写成每种鼠标、触控板或尺寸均逐项验过。
 
-```sh
-/opt/anaconda3/bin/python3 tests/board-demo.py --scene body
-/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi
-```
-
-检查鼠标悬停正文无需点击即可上下滚动、能到末行、判据/侧栏不动、区域外不误操作，及缩放后的命中。实际看板入口为 `/opt/anaconda3/bin/python3 ./bin/drover board`。默认 `python3` 若指向同样的支持运行时也可用；旧curses只会提示滚轮不可用并保留整页翻页，不声称它已支持局部滚轮。
-
-- 主控未操作真实done/go/next，也没有启动循环；任务推进仍由用户操作。T4继续暂缓，不自动恢复；开发/交叉审查仍只派Codex。
-- 真实设备及桌面字体/配色未验收。Computer Use已拒绝Terminal访问，不绕过；实际PTY中的合成事件不能写成物理设备已验收。
+- 等用户安排下一件任务，不自行派发或开启循环。T4继续暂缓，不自动恢复；开发/交叉审查仍只派Codex。
+- 实际入口为 `/opt/anaconda3/bin/python3 ./bin/drover board`；安全合成演示为 `/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi`。旧curses退化行为未改变。
+- 主控未操作真实done/go/next。本次仅依据用户确认更新文档，未重新核对真实队列、未推送。自动化证据仍是合成输入/实际PTY，实际使用通过的依据是用户反馈。
 
 ### 已完成与留存
 

@@ -296,3 +296,8 @@ python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-default-mouse.json -
 确认开发/审查agent均idle、attached=0，两worktree干净、开发分支已为main祖先后，按顺序移除两个worktree、立即关闭各自的 `drover/dev-body-scroll-1` 与 `drover/dev-review-body-1`（工作目录已删，一并关闭），删除已合并的 `m17-body-scroll`，再补收尾记号。审查使用detached HEAD，没有审查分支。drover只剩主控，未动其他项目agent。
 
 兼容实验stash `e039c0163f1582e89cb162f9dab45f71ba3b3bff` 原样保留，不纳入main，不恢复、不删除。未推送，未操作真实done/go/next/loop，T4继续暂缓。真实鼠标/触控板与桌面目视尚待用户手动验收，推荐先运行无真实业务操作的合成演示，命令见HANDOFF。
+
+
+## 用户验收与放行（2026-09-22）
+
+用户明确反馈：「我测试了一下，可以了，已经放行了」。T8 实际使用验收通过，放行由用户完成，不再有待用户验收/放行的门槛。未将这句反馈扩写成具体设备和全部场景的逐项记录；主控没有操作或重新查询真实队列。兼容实验仍单独保留，未推送，T4继续暂缓。
