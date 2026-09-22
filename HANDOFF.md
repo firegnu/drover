@@ -4,9 +4,19 @@
 
 ---
 
+## 2026-09-22 —— T15 已入队，明天讨论并行子任务协作
+
+**这一节最新。** 用户要求加入明天的下一件任务：T15「规划并实现主控拆分任务后的多 agent 并行协作」。已通过 drover add 入队并回读核对完整正文，原队列和 tasks.state 未改，项目 loop 仍关闭。T14 已只读核实存在 start/done/go，已由用户放行，不再待放行。
+
+- 用户意图：一件顶层任务交给主控，主控识别可并行部分、拆分并同时派多个开发 agent，子任务按需安排 review/返工，最后主控统一集成、审查与收尾。Claude Code managed agents 是体验类比，不是预定技术方案。
+- 明天先商量计划，确认后再实现；今天不派发、不调研、不实现、不创建 agent/worktree。讨论现有 corral-dispatch 的可复用能力、并行依赖和文件边界、开发/审查组织、主控汇总及看板是否展示子任务。未预先批准顶层队列多任务并行、修改 corral/corral-dispatch 或突破现有依赖边界。
+- 后台引擎已运行、当前仍手动 n → g → n、TASK_GATE=1（默认）；看板用 drover-board 快捷入口。此次未操作真实 next/done/go/loop、未改服务或配置、未推送。T8 stash 保留。
+
+---
+
 ## 2026-09-22 —— 已授权真实安装及后台启动，项目仍手动推进
 
-**这一节最新。** 用户明确要求安装并启动后台服务。已执行本仓库 install.sh，创建 `~/.local/bin/drover`、`drover-board` 到 main 仓库脚本的软链，生成 `~/.drover/dev.drover.loop.plist`；登记 `~/Library/LaunchAgents/dev.drover.loop.plist` 并 bootstrap `gui/501/dev.drover.loop`。本次授权仅操作 dev.drover.loop，未碰旧 herdsman 服务。
+**（历史记录，下一件已排为上方 T15。）** 用户明确要求安装并启动后台服务。已执行本仓库 install.sh，创建 `~/.local/bin/drover`、`drover-board` 到 main 仓库脚本的软链，生成 `~/.drover/dev.drover.loop.plist`；登记 `~/Library/LaunchAgents/dev.drover.loop.plist` 并 bootstrap `gui/501/dev.drover.loop`。本次授权仅操作 dev.drover.loop，未碰旧 herdsman 服务。
 
 - 安装前核对目标均不存在、服务未登记、无已有 drover loop 引擎，项目登记表只有本仓库且 loop 关闭。启动后复核服务 running、runs=1、PID 44037、尚无退出记录；stdout 显示每 5 秒一跳，stderr 为空。以后登录自动启动、退出自动重启，不要另开第二个引擎。
 - 项目仍 `loop off`，TASK_GATE 未显式配置、有效值为 1。启动前后 `.drover.conf`、queue.md、tasks.state 的 SHA-256 完全一致；未发送、完成或放行任务。保持 n → g → n；以后 loop on + TASK_GATE=1 为逐件放行，loop on + TASK_GATE=0 为自动连续推进。
