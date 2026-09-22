@@ -75,3 +75,78 @@
 
 在本文件末尾追加“## 完成记录”：实现范围、RED/GREEN/缺陷植入证据、测试结果、实际curses/PTY画面与重跑命令、取舍、旧断言调整清单、真实鼠标/触控板尚需用户手动验收的项目。ROADMAP记录本次批准设计和理由。
 回复只写完成内容、测试/证据、取舍和需要主控决定的事项。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-22，开发 agent 在 `m17-body-scroll` 完成实现和自动化验证，交主控及独立 Codex 审查。实际鼠标/触控板验收仍由用户完成。
+
+### 实现范围与取舍
+
+- 生产仅改 `bin/drover-board` 的 `detail_sections/draw/key_action/tui`，新增 `init_mouse`。`detail_sections` 增加可选正文展示参数，默认完整逻辑文本保持兼容；VM、原始正文、`cell/width/trunc`、采集、判据、命令调用、超时与引擎函数未改。AST 对比确认上述范围，`bin/drover` 与基线逐字相同。
+- 高度为 `max(1, min(h // 4, room - 7))` 再取正文实际换行行数的较小值：24 行最多 6 行、32 行最多 8 行；短正文不填满空白。位置提示按实际展示行计数。长标题、消息和所有核对信息保持外层可达性，不归入限高正文。
+- 先固定正文占位，再按当帧外层裁切结果填入正文。鼠标矩形仅含可见正文行和所在栏的横向空白，区块标题/位置提示/分隔线/其它区块不命中。正文上部或下部被裁切时，以实际可见行数夹限局部偏移，仍可仅用滚轮读到首尾。
+- 每次最多滚三行，且不超过当帧可见正文行数；小窗口不会跨过未显示内容。鼠标映射不修改输入 state/VM，`tui` 单独更新 `body_offset` 并直接重绘。`detail_offset`、项目选择与正文外画面保持原位置，不触发 collect/view_model、业务命令或文件打开。
+- 正文身份为 `(repo, card.id)`，等长任务/项目切换也归零；同任务刷新保留合法位置；正文缩短仍溢出时夹到非零末页，合法旧偏移不动。缩放重算行数/命中矩形；绘制后、输入前突发缩放的旧坐标事件丢弃。空任务/空正文移除正文偏移与身份，矩形清空。
+- 只订阅上下滚轮，核对两个 curses 常量和 `mousemask` 返回能力；普通点击、移动、拖动、区域外滚轮均不触发业务操作。原 PgUp/PgDn、业务按键、r/KEY_RESIZE 刷新和 30 秒 getch 超时不变。
+- **能力退化是实际存在的限制**：本机默认 `/opt/homebrew/opt/python@3.14/bin/python3.14` 和系统 Python 的 ncurses 6.0 均没有 `BUTTON5_PRESSED`。这种环境明确显示「滚轮不可用」，恢复完整正文的 PgUp/PgDn；因此也恢复长正文占据整页的旧布局。已安装的 `/opt/anaconda3/bin/python3` 使用 ncurses 6.4、有双向常量，本次用它验证支持路径。没有猜测按钮编码、解析自制鼠标协议或改装系统环境。能力依据已链接到 ROADMAP 的 ncurses 官方接口说明。
+- 新增 `tests/board-body-scroll.py`、`tests/board-body-pty.py`，接入 `tests/drover-board.sh`；合成演示新增 `body` 场景并支持局部滚轮，g/n/p/a/l 仍只显示禁用提示。ROADMAP 与 QUICKSTART 同步操作说明。HANDOFF 留给主控。
+
+### 有效 RED → GREEN
+
+所有 RED 均在相应实现之前运行，错误为行为断言；导入、语法和 fixture 调整不计入 RED。
+
+| 阶段 / 命令 | 未实现时的有效 RED | 最小实现后的 GREEN |
+|---|---|---|
+| `python3 -B tests/board-body-scroll.py`（最初仅首屏检查） | 退出 1，80×24 / 120×32 / 160×32 × 单/多项目六项均报「长正文把判据挤出了首屏」 | 退出 0，6/8 行上限、判据标题和收尾记号实际留在首屏，VM 不变 |
+| `python3 -B tests/board-body-scroll.py BodyScroll.test_tui_wheel_only_redraws_body` | 退出 1，第二帧仍是 `BODY-01`，缺 `BODY-04`：「下滚三行必须改变正文视口」 | 下滚到 04、上滚回 01；正文/提示外所有最终字符不变；collect/view_model 各只调用一次，命令与文件哨兵未触发 |
+| `python3 -B tests/board-body-scroll.py`（加入能力退化检查后） | 退出 1，仅报「能力退化必须明确提示」 | 显示滚轮不可用，PgDn 仍能找到 `BODY-38`，q 正常 |
+| `python3 -B tests/board-body-scroll.py BodyScroll.test_tiny_body_scroll_does_not_skip_lines` | 退出 1，20×6 只有一行正文时固定三行步长漏掉 `BODY-02/03/...` | 步长受实际可见行数约束，38 行逐行都能出现 |
+| `python3 -B tests/board-body-scroll.py BodyScroll.test_partially_clipped_body_can_reach_both_ends_by_wheel` | 退出 1：「裁去上部后仍须能从正文开头读起」 | 上裁切和下裁切两种情形均可局部滚至 01/38，外层偏移不动 |
+
+最终 `python3 -B tests/board-body-scroll.py` **10 项通过**。还覆盖四边界、区域外、部分/完全裁切、短/空/超长正文、正文中的区块标题字样、等长项目重排、同任务刷新、仍溢出的 30→6/3→3、缩放恢复、鼠标读取错误及 resize 竞态。每次纯输入调用后立即对比 state/VM，避免上下操作相互抵消而漏掉副作用。
+
+### 回归、实际 curses/PTY 与证据
+
+1. `bash tests/drover-board.sh`：最终代码退出 0，日志 `/tmp/m17-board-regression.log`。既有 VM、宽度、键盘/整页视口、引擎隔离与相关 20 项检查通过，并运行布局、T7 Tab、T8 的 10 项与 8 组退化 PTY。局部裁切补强后只重跑这一相关套件；没有重复全仓库四套。
+2. `bash tests/drover.sh`：退出 0，日志 `/tmp/m17-drover-regression.log`。包含真实命令在合成仓库中的 T6 g/go 警告、拒绝原因、40/80 列最终消息和慢 go 期限。**本任务没有修改 `tests/drover.sh` 或任何业务期望。**
+3. `/opt/anaconda3/bin/python3 -B tests/board-body-pty.py --record /tmp/m17-body-pty`：**8 个真实 PTY 会话、208 帧**，120×32、80×24、40×10、160×32 × 单/多项目。合成 SGR 4/5 滚轮字节经 PTY → curses `getch/getmouse` → 生产 `tui`，验证方向、首屏核对信息、全 38 行、上/下界、区域外无动作、正文外字符/辅栏不动、collect/view_model 次数不变、r 保留正文、等长项目切换及真实 SIGWINCH 缩放。`.json` 保存完整最终屏幕与调用次数，`.ansi` 保存终端输出，另生成同名 `.txt` 便于逐帧复核；所有 stderr 为空。
+4. `python3 -B tests/board-body-pty.py --record /tmp/m17-body-pty-fallback`：默认 Python 的 **8 个真实 PTY 会话、54 帧**，明确走能力不足分支，完整正文通过整页翻页可达，退出正常。
+5. `/opt/anaconda3/bin/python3 -B tests/board-tab-pty.py`：支持滚轮的真实 curses **8 组全过**（120×32/80×24 × 有/无 Tab × 首段/36 行占位后）。默认 Python 的 8 组退化路径也在看板套件通过。完整 `python3 -m pytest tests/checkout/test_coupon_validation.py --verbose`、NBSP/U+2028、组合字符、内部双空格及原 VM 不变断言全部保留。
+6. `/opt/anaconda3/bin/python3 -B tests/board-demo.py --record /tmp/m17-demo-visual`：**32 个会话、270 帧**，八类场景 × 单/多项目 × 120×32/80×24，含局部滚动、整页翻页和缩放。核对 long 场景的标题/正文/判据/路径/历史/消息末尾及最后待办实际出现在最终 curses 屏幕中，body 场景正文末尾可见，全部 stderr 为空。
+7. 六个相关 Python 文件 `compile()`、`bash -n tests/drover-board.sh`、`git diff --check` 均通过。AST 对比与 `bin/drover` 字节比对守住范围。
+
+已逐帧核对的典型画面：120×32 单项目正文 01–08 与核对信息同时可见，滚到底为 31–38、右侧 agent/待办/历史和判据仍在原位；80×24 多项目为 01–06 → 33–38，项目标签与核对信息不动；40×10 退化为一行正文，01 至 38 不漏行，其余内容仍可整页访问。
+
+### 临时副本缺陷植入
+
+使用 Python `TemporaryDirectory` 创建生产脚本副本，通过 `DROVER_BOARD_BIN=<副本>` 跑下列定向检查，副本先 `compile()`。每项均退出 1 且命中目标断言；末尾逐字确认工作树生产文件未变。日志在 `/tmp/m17-body-evidence/`。
+
+| 副本中的单项缺陷 | 定向检查与结果 |
+|---|---|
+| 删除 tui 的 `body_scroll` 分支 `continue`，使其落入采集 | `BodyScroll.test_tui_wheel_only_redraws_body` 报「滚轮不得重跑采集」；`wheel-collect.log` |
+| 坐标范围判定换为永不拒绝 | `BodyScroll.test_hit_bounds_and_paging_use_current_visible_rows` 在区域外事件期望 None 时失败；`ignore-coordinates.log` |
+| 正文身份仅用 repo、忽略 card.id | `BodyScroll.test_identity_refresh_shrink_and_resize` 报「task 等长正文必须归零」；`ignore-task-id.log` |
+| 每次固定滚三行 | `BodyScroll.test_tiny_body_scroll_does_not_skip_lines` 报「极小正文视口不能每次跨过未显示的行」；`fixed-three-lines.log` |
+| 撤去 `wrap_lines` 展示副本的 Tab→四空格 | 用支持滚轮的解释器跑 `tests/board-tab-pty.py`，两组 120×32 Tab 正文报最终屏幕缺完整命令，六组对照通过；`tab-overwrite.log` |
+
+### 旧断言调整清单
+
+- `tests/board-layout.py` 的布局状态显式启用局部正文视口；遍历外层页时也遍历正文偏移。原标题/正文/判据/路径/历史/消息末尾、最后待办、Unicode、VM 和键盘断言保留；增加 body 场景后输出文案从「七类」改为「各类」。
+- `tests/board-tab-pty.py` 按实际 curses 能力启用正文视口，后续内容用局部滚动访问；不支持时仍用 PgDn。原「长正文必须真的经过 PgDn」调整为「局部滚动或退化后的 PgDn」，仍要求多帧。完整命令与 Unicode 精确断言、组合矩阵、VM 不变断言未削弱。
+- `tests/drover-board.sh` 仅追加两个新测试入口，旧断言未改。`tests/drover.sh` 未改。
+
+### 用户手动验收与主控事项
+
+**未完成真实设备验收，也未重试或绕过已被拒绝的 Terminal Computer Use。** 上述证据区分了纯合成事件、真实 PTY/curses 中的合成 SGR 输入和真实物理设备；只有前两类已完成。
+
+用户可在常用终端、当前 worktree 前台运行以下**合成演示**，不读真实项目配置，不操作真实队列：
+
+```sh
+/opt/anaconda3/bin/python3 tests/board-demo.py --scene body
+/opt/anaconda3/bin/python3 tests/board-demo.py --scene body --multi
+/opt/anaconda3/bin/python3 tests/board-demo.py --scene long --multi
+```
+
+待验：鼠标无需点击即送达、触控板上下方向和连续滚动、正文外不切项目或移动其它区域、滚到末尾、PgUp/PgDn 后命中区域正确、缩放后的新坐标，以及实际字形/配色。当前默认 `python3` 只能验证已说明的降级路径；主控需明确知悉这一环境限制，不能把支持解释器下的结果写成默认启动已具备滚轮能力。
+
+主控审查、独立 Codex 交叉审查、是否接受环境降级、合并、清理、收尾记号和 HANDOFF 由主控接手。本分支不合并、不推送、不收尾，不操作真实 done/go/next/loop。全部验证命令前台等待退出；测试自开的进程均已结束。

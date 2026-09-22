@@ -32,7 +32,7 @@ def capture(screen, output):
                 body = ('\t' if tabs else '') + COMMAND
                 vm['projects'][0]['queue']['card']['body'] = ['正文占位'] * padding + [body, UNICODE]
                 original = copy.deepcopy(vm)
-                state = {'sel': 0, 'n': 1, 'msg': ''}
+                state = {'sel': 0, 'n': 1, 'msg': '', 'body_mouse': board.init_mouse()}
                 win = curses.newwin(h, w, 0, 0)
                 frames = []
                 while True:
@@ -40,12 +40,20 @@ def capture(screen, output):
                     win.refresh()
                     # draw 全部画完以后再读取：辅栏/分隔线后写造成的覆盖也在这里。
                     frames.append([win.instr(y, 0).decode('utf-8') for y in range(h)])
+                    if state.get('body_rect'):
+                        x, y = state['body_rect'][:2]
+                        action = board.key_action(curses.KEY_MOUSE, vm['projects'][0], state,
+                                                  (0, x, y, 0, curses.BUTTON5_PRESSED))
+                        if action[1] != state['body_offset']:
+                            state['body_offset'] = action[1]
+                            continue
                     offset = board.key_action(curses.KEY_NPAGE, vm['projects'][0], state)[1]
                     if offset == state['detail_offset']:
                         break
                     state['detail_offset'] = offset
                 assert vm == original, 'draw/翻页不得改写原 VM 或 Tab/Unicode 正文'
-                results.append({'size': [w, h], 'tab': tabs, 'padding': padding, 'frames': frames})
+                results.append({'size': [w, h], 'tab': tabs, 'padding': padding,
+                                'body_mouse': state['body_mouse'], 'frames': frames})
     output.write_text(json.dumps(results, ensure_ascii=False, indent=2))
 
 
@@ -55,12 +63,12 @@ def check(output):
         # 在实际画面的主栏内连接换行；仅去掉 ASCII 边距，不折叠 Unicode/内部空格。
         pages = [''.join(line.split('│', 1)[0].strip(' ') for line in frame)
                  for frame in case['frames']]
-        label = f"{case['size']} Tab={case['tab']} body_offset={case['padding']}"
+        label = f"{case['size']} Tab={case['tab']} body_offset={case['padding']} mouse={case['body_mouse']}"
         for text in (COMMAND, UNICODE):
             if not any(text in page for page in pages):
                 failures.append(f'{label}: 最终屏幕缺少 {text!r}')
         if case['padding']:
-            assert len(pages) > 1, '长正文必须真的经过 PgDn'
+            assert len(pages) > 1, '长正文必须真的经过局部滚动或退化后的 PgDn'
         if not any(label in failure for failure in failures):
             print('PASS', label, '完整命令/Unicode 可见，VM 不变')
     assert not failures, 'R1 最终屏幕回归：\n' + '\n'.join(failures)

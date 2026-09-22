@@ -875,8 +875,8 @@ def task_metrics(pv):
             + (" · 做完停" if c["held"] else ""))
 
 
-def detail_sections(pv):
-    """主栏和辅助栏的完整逻辑行；窄屏顺次拼接，两栏都不限制条数。"""
+def detail_sections(pv, body=None):
+    """主辅栏逻辑行；body 可替换正文显示区，默认仍返回完整文本。"""
     main, side = [], []
     if pv["waits"]:
         main.append(("wait", 0, f'等你 · {len(pv["waits"])}'))
@@ -889,8 +889,8 @@ def detail_sections(pv):
     c = q["card"]
     if c:
         main.append(("h2", 0, "任务正文"))
-        for ln in c.get("body") or []:
-            main.append(("", 2, ln) if ln else ("", 0, ""))
+        main += body if body is not None else [("", 2, ln) if ln else ("", 0, "")
+                                              for ln in c.get("body") or []]
         main.append(("", 0, ""))
         main.append(("h2", 0, f'完成依据和判据 · {c["met"]}'))
         main.append(("dim", 2, c["progress"]))
@@ -987,8 +987,18 @@ def draw(stdscr, vm, state):
     room = max(0, bot - top + 1) if h >= 5 and w >= 20 else 0
     msg = state.get("msg", "")
     msg = "" if msg == HELP else msg
+    q = pv["queue"] if pv else None
+    c = q["card"] if q else None
+    local_body = bool(c and c.get("body") and state.get("body_mouse", False))
+    state["screen_size"] = (h, w)
+    state["body_rect"] = None                         # 命中只认当帧实际可见的正文行
+    if not local_body:
+        for key in ("body_task", "body_offset", "body_total", "body_page"):
+            state.pop(key, None)
     if pv:
-        main, side = detail_sections(pv)
+        main, side = detail_sections(pv, body=[("body", 0, "")] if local_body else None)
+        if c and c.get("body") and state.get("body_mouse") is False:
+            main = [("dim", 0, "滚轮不可用 · PgUp/PgDn 查看完整正文")] + main
         # 固定摘要放不下的标题/指标仍在正文开头完整可达。
         heading, metrics = task_heading(pv), task_metrics(pv)
         prefix = [("h1", 0, heading)] if compact or width(heading) > cols else []
@@ -1001,14 +1011,33 @@ def draw(stdscr, vm, state):
     dual = cols >= 100 and bool(main) and bool(side) and not compact
     left = (cols - 3) * 70 // 115 if dual else cols
     columns = [wrap_lines(main, left), wrap_lines(side, cols - left - 3)] if dual else [wrap_lines(main + side, cols)]
+    if local_body:
+        body = wrap_lines([("", 2, ln) if ln else ("", 0, "") for ln in c["body"]], left)
+        body_page = min(len(body), max(1, min(h // 4, room - 7)))
+        task = (project, c["id"])
+        body_offset = state.get("body_offset", 0) if state.get("body_task") == task else 0
+        body_at = next(i for i, (kind, _, _) in enumerate(columns[0]) if kind == "body")
+        # 先固定正文占位高度，外层排版不受局部偏移影响；当帧裁切后再填内容。
+        columns[0][body_at:body_at + 1] = body[:body_page] + ([("", 0, "")] if len(body) > body_page else [])
     total = max(map(len, columns))
     offset = state.get("detail_offset", 0) if state.get("detail_project") == project else 0
     offset, page = detail_viewport(total, room, offset)
     state.update(detail_project=project, detail_offset=offset, detail_total=total, detail_room=room)
+    if local_body:
+        start = min(offset, max(0, len(columns[0]) - page)) if dual else offset
+        first, end = max(body_at, start), min(body_at + body_page, start + page)
+        visible = end - first if first < end else body_page
+        body_offset = min(max(0, body_offset), len(body) - visible)
+        state.update(body_task=task, body_offset=body_offset, body_total=len(body), body_page=visible)
+        if first < end:
+            columns[0][first:end] = body[body_offset:body_offset + visible]
+            state["body_rect"] = (x, top + first - start, x + left, top + end - start)
+        if len(body) > body_page:
+            columns[0][body_at + body_page] = ("dim", 0, trunc(
+                f"{body_offset + 1}–{body_offset + visible} / {len(body)} 行 · 滚轮", left))
     if h < 5 or w < 20:
         put(stdscr, 0, 0, "窗口太小", h, w)
         return
-    q = pv["queue"] if pv else None
     mode = (("暂停中" if q["paused"] else "手动" if not q["loop"] else q["mode"])
             + (" · 循环开" if q["loop"] else " · 循环关")) if q else ""
     head = " · ".join(t for t in ("drover", pv["name"] if pv else "0 个项目", mode,
@@ -1056,6 +1085,22 @@ REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重�
 HELP = "↑↓/jk 选项目 · PgUp/PgDn 翻详情 · g 核对并放行 · n 发下一件 · p 暂停 · a 加任务 · l 循环 · r 刷新 · q 退出"
 
 
+def init_mouse():
+    """只订阅双向滚轮；缺常量或终端不支持时保留完整正文的整页翻页。"""
+    up, down = getattr(curses, "BUTTON4_PRESSED", 0), getattr(curses, "BUTTON5_PRESSED", 0)
+    if not up or not down:
+        return False
+    try:
+        mask, _ = curses.mousemask(up | down)
+        if mask & (up | down) == (up | down):
+            curses.mouseinterval(0)
+            return True
+        curses.mousemask(0)
+    except curses.error:
+        pass
+    return False
+
+
 def run_drover(repo, *args):
     """所有写操作都转给 bin/drover —— 判据和队列的解析只能有一份实现，TUI 自己不动交接文件。
     → 给人看的一行；go 把放行状态、警告和拒绝原因前置，避免消息区只剩「核对通过」。"""
@@ -1088,7 +1133,7 @@ def edit_queue(stdscr, pv):
     return f"编辑完 {path}"
 
 
-def key_action(k, pv, state):
+def key_action(k, pv, state, mouse=None):
     """按了什么键 → 要做什么。**纯函数**：不碰 curses、不跑命令、不改 state。
 
     「推进靠按键，不靠敲命令」是看板的主操作面（ROADMAP），所以这一层和 view_model 一样
@@ -1096,10 +1141,25 @@ def key_action(k, pv, state):
     tui() 那边只剩 getch 和执行。
 
     state 里读 sel（选中第几个）、n（一共几个项目），以及 draw 当帧写入的详情视口。
-    → ("sel", 新下标) | ("scroll", 新偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
+    mouse 是 getmouse 的事件副本；只认当帧正文坐标内的上下滚轮，最多三行，不更改外层偏移。
+    → ("sel", 新下标) | ("scroll", 新偏移) | ("body_scroll", 正文偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
       None = 这个键不认识，或者压根没有选中的项目：什么都不做，**也不重跑**——重跑要跑一圈
       git 和 corral，不能乱按一下就触发。"""
     sel, n = state.get("sel", 0), state.get("n", 0)
+    if k == curses.KEY_MOUSE:
+        rect = state.get("body_rect")
+        if not mouse or not rect or not pv:
+            return None
+        _, x, y, _, buttons = mouse
+        x0, y0, x1, y1 = rect
+        if not (x0 <= x < x1 and y0 <= y < y1):
+            return None
+        up, down = getattr(curses, "BUTTON4_PRESSED", 0), getattr(curses, "BUTTON5_PRESSED", 0)
+        if not up or not down or buttons not in (up, down):
+            return None
+        step = min(3, y1 - y0)                       # 极小/被裁切的视口也不跨过未显示的行
+        offset = state["body_offset"] + (step if buttons == down else -step)
+        return ("body_scroll", min(max(0, offset), state["body_total"] - state["body_page"]))
     if k in (curses.KEY_UP, ord("k")):
         return ("sel", max(0, sel - 1))
     if k in (curses.KEY_DOWN, ord("j")):
@@ -1129,7 +1189,7 @@ def tui(stdscr, list_path):
     init_colors()
     stdscr.timeout(REFRESH_MS)
     vm = view_model(collect(list_path))
-    state = {"sel": 0, "n": len(vm["projects"]), "msg": HELP}
+    state = {"sel": 0, "n": len(vm["projects"]), "msg": HELP, "body_mouse": init_mouse()}
     while True:
         draw(stdscr, vm, state)
         stdscr.refresh()
@@ -1139,7 +1199,15 @@ def tui(stdscr, list_path):
             return
         ps = vm["projects"]
         pv = ps[min(state["sel"], len(ps) - 1)] if ps else None
-        act = key_action(k, pv, state)
+        mouse = None
+        if k == curses.KEY_MOUSE:
+            try:
+                mouse = curses.getmouse()
+            except curses.error:
+                continue
+            if stdscr.getmaxyx() != state["screen_size"]:
+                continue                             # 缩放夹在绘制和输入之间：丢弃旧坐标，再重绘
+        act = key_action(k, pv, state, mouse)
         if not act:
             continue
         if act[0] == "quit":
@@ -1149,6 +1217,9 @@ def tui(stdscr, list_path):
             continue
         if act[0] == "scroll":
             state["detail_offset"] = act[1]
+            continue
+        if act[0] == "body_scroll":
+            state["body_offset"] = act[1]
             continue
         if act[0] == "edit":
             state["msg"] = edit_queue(stdscr, pv)

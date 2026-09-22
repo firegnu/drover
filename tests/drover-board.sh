@@ -946,3 +946,5 @@ DROVER_BIN="${DROVER}" DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/check-
 # 四套件全绿、退出 0（安装 9 项、看板 13 块）；bash -n 与 git diff --check 通过。
 
 DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-layout.py"
+DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-body-scroll.py"
+DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-body-pty.py"

@@ -23,7 +23,7 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-SCENES = ("working", "failed", "waiting", "idle", "empty", "warning", "long")
+SCENES = ("working", "failed", "waiting", "idle", "empty", "warning", "long", "body")
 
 
 def load_board():
@@ -88,6 +88,8 @@ def fixture(scene="working", multi=False):
         q["finished"][-1]["reason"] += "保留完整失败理由。" * 40 + "【历史末尾】"
         q["counts"]["todo"] = len(q["todo"])
         msg = "未放行 · - 判据未满足：" + "很长的拒绝原因必须完整可读；" * 20 + "【消息末尾】"
+    if scene == "body":
+        card["body"] = [f"正文{i:02d}：鼠标移到这里，上下滚动；判据和其它区域保持位置。" for i in range(1, 38)] + ["【正文末尾】"]
     q["counts"]["doing"] = int(bool(q["card"] and not q["card"]["waiting"]))
     projects = [pv]
     if multi:
@@ -106,7 +108,7 @@ def demo(screen, args):
     curses.curs_set(0)
     B.init_colors()
     vm, msg = fixture(args.scene, args.multi)
-    state = {"sel": 0, "n": len(vm["projects"]), "msg": msg}
+    state = {"sel": 0, "n": len(vm["projects"]), "msg": msg, "body_mouse": B.init_mouse()}
     count = 0
 
     def frame(label):
@@ -123,6 +125,14 @@ def demo(screen, args):
     if args.capture:
         frame("top")
         while True:
+            while state.get("body_rect"):
+                x, y = state["body_rect"][:2]
+                action = B.key_action(curses.KEY_MOUSE, vm["projects"][state["sel"]], state,
+                                      (0, x, y, 0, curses.BUTTON5_PRESSED))
+                if action[1] == state["body_offset"]:
+                    break
+                state["body_offset"] = action[1]
+                frame("body")
             offset = B.key_action(curses.KEY_NPAGE, vm["projects"][state["sel"]], state)[1]
             if offset == state["detail_offset"]:
                 break
@@ -139,13 +149,23 @@ def demo(screen, args):
     screen.timeout(B.REFRESH_MS)
     while True:
         frame("interactive")
-        act = B.key_action(screen.getch(), vm["projects"][state["sel"]], state)
+        key, mouse = screen.getch(), None
+        if key == curses.KEY_MOUSE:
+            try:
+                mouse = curses.getmouse()
+            except curses.error:
+                continue
+            if screen.getmaxyx() != state["screen_size"]:
+                continue
+        act = B.key_action(key, vm["projects"][state["sel"]], state, mouse)
         if not act:
             continue
         if act[0] == "quit":
             return
         if act[0] == "scroll":
             state["detail_offset"] = act[1]
+        elif act[0] == "body_scroll":
+            state["body_offset"] = act[1]
         elif act[0] == "sel":
             state["sel"] = act[1]
         elif act[0] in ("run", "edit"):
