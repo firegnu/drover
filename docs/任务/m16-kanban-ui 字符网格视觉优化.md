@@ -163,3 +163,9 @@ python3 tests/board-demo.py --record /tmp/m16-visual-replay
 - tests/drover.sh 的唯一改动为历史显示断言由同一行改成紧邻两行，检查内容未减少，技术上与批准的两行历史相符。开发记录声称获得用户单独授权，主控已向用户核实，当前尚未收到答复；不能将该声称当作已核实事实。
 - **视觉限制**：Computer Use 当前明确返回“Computer Use is not allowed to use the app 'com.apple.Terminal' for safety reasons.”，未绕过，也未用网页/假屏幕图冒充。真实 PTY 的排版和文字已核对，但桌面字体、配色和终端实际字形目视仍未完成。独立审查可继续，最终合并前须补齐或由用户明确调整该验收要求。
 - 未操作真实 done/go/next/loop，未推送，T4 继续暂缓。独立审查意见返回后逐条裁定；只处理本次显示改动引入的问题。
+
+
+## 主控审查续：独立审查裁定（2026-09-22）
+
+独立审查 R1（Tab 正文在双栏被覆盖）经主控真实 PTY 复现成立，阻挡合并；其余 A1–A6 取舍全部采纳。逐条裁定和最小返工要求见主仓库 docs/任务/m16-kanban-ui 交叉审查.md 末尾。交回原开发 agent 只修 R1，定向 RED/GREEN，不重复全仓库测试。修复后先更新 detached 审查 worktree，再由原审查者仅复核本条。
+桌面目视和单条 tests/drover.sh 断言授权仍待用户确认；本轮不合并、不清理、不打收尾记号，不操作真实队列，不推送。
