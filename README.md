@@ -62,7 +62,9 @@ drover 从 [herdsman / bounded-adversarial-review](https://github.com/firegnu/he
 
 安装前会一次检查所有目标：命令只接受指向当前仓库的原有软链，生成的 plist 只接受内容完全一致的普通文件，其他情况非零退出、拒绝覆盖。相同配置重复安装不会改写文件。`~/.local/bin` 不在 PATH 时只提示自行添加，不修改 shell 配置。
 
-launchd 模板中的 `__HOME__` / `__PATH__` 由安装脚本展开并作 XML 转义；不要直接加载仓库里的模板。生成文件记录安装时的 HOME 和 PATH（优先加入 `~/.local/bin` 并去重），供引擎找到 `python3`、`git`、`corral`。其他 PATH 配置变化或 plist 已被手改时，重装会拒绝覆盖，请先人工核对旧文件。
+launchd 模板中的 `__HOME__` / `__PATH__` 由安装脚本填入并作 XML 转义；不要直接加载仓库里的模板。生成文件记录展开后的 HOME，服务 PATH 固定为 `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，不复制终端 PATH。终端 PATH 的无关变化不会影响重装，也不会把临时 Python 目录加入服务 PATH；安装器自身仍使用终端 PATH 中的 python3。旧 plist 与生成内容不一致时仍拒绝覆盖，请人工核对处理。
+
+启用服务前，确认这些固定目录能提供 `python3`、`git`、`corral` 及其运行时和验收命令所需工具。固定目录以外的自定义环境不自动支持，安装成功不代表后台服务已经可用。
 
 **脚本不运行 launchctl，也不写 `~/Library/LaunchAgents/`。** 它只打印人工启用命令：把生成文件链接到该目录，再以 `dev.drover.loop` 加载引擎。启用后立即启动 `drover loop`，以后用户登录时启动，退出后自动重启；用户 LaunchAgent 不会在尚未登录时启动。标准输出和错误分别写入 `~/.drover/loop.stdout.log`、`~/.drover/loop.stderr.log`。目标已存在或服务已加载时先核对，不要覆盖或重复加载。
 

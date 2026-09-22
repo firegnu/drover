@@ -87,8 +87,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(config["ProgramArguments"],
                          [str(self.home / ".local/bin/drover"), "loop"])
         self.assertEqual(config["EnvironmentVariables"]["HOME"], str(self.home))
-        for part in self.env["PATH"].split(os.pathsep):
-            self.assertIn(part, config["EnvironmentVariables"]["PATH"].split(os.pathsep))
+        self.assertEqual(config["EnvironmentVariables"]["PATH"],
+                         f"{self.home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:"
+                         "/usr/bin:/bin:/usr/sbin:/sbin")
         for key in ("StandardOutPath", "StandardErrorPath"):
             self.assertEqual(Path(config[key]).parent, self.home / ".drover")
         self.assertNotEqual(config["StandardOutPath"], config["StandardErrorPath"])
@@ -107,6 +108,38 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(self.snapshot(), before)
         self.assertNotIn("不在 PATH", second.stdout)
+
+    def test_reinstall_after_unrelated_path_changes(self):
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        before = self.snapshot()
+        original_path = self.env["PATH"]
+        extra_a, extra_b = self.base / "unrelated-a", self.base / "unrelated-b"
+        extra_a.mkdir()
+        extra_b.mkdir()
+        for path in (f"{original_path}:{extra_a}",
+                     f"{extra_a}:{extra_b}:{original_path}",
+                     f"{extra_b}:{extra_a}:{original_path}"):
+            with self.subTest(path=path):
+                self.env["PATH"] = path
+                result = self.install()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_temporary_python_path_is_not_saved(self):
+        venv = self.base / "project/.venv"
+        bindir = venv / "bin"
+        bindir.mkdir(parents=True)
+        python = bindir / "python3"
+        python.write_text("#!/bin/sh\nprintf 'temporary-python\\n' >&2\n"
+                          f'exec {shlex.quote(sys.executable)} "$@"\n')
+        python.chmod(0o755)
+        self.env.update(PATH=f"{bindir}:{self.env['PATH']}", VIRTUAL_ENV=str(venv))
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("temporary-python", result.stderr)
+        config = plistlib.loads((self.home / ".drover/dev.drover.loop.plist").read_bytes())
+        self.assertNotIn(str(bindir), config["EnvironmentVariables"]["PATH"].split(os.pathsep))
 
     def test_unknown_plist_is_preserved_before_any_install(self):
         for kind in ("file", "directory", "broken-link"):

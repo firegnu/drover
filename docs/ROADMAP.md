@@ -403,9 +403,9 @@ corral 主控提过第三条路：drover 别判断完成，把下一件直接送
       **系统通知挪进引擎**（跟着守护进程走、和界面无关），并加了 `NOTIFY_EVERY = 60` 的节流：看一眼要跑一整趟 `collect()`（每个项目十来个 git 子进程加一次 corral status），引擎默认 5 秒一跳，不节流常驻一天就是一万七千多趟。节流的只是「多久看一次」，`board-notified.json` 的去重没动。
 
       **还欠**：详情区不滚动，超出就截断并提示还有几行——队列长了会不够用。
-   4. **安装脚本 + launchd plist**——**2026-09-20 写完，还没跑**。`install.sh` 把两个命令绝对软链到 `~/.local/bin`，plist 生成到 `~/.drover/`，Label 是 `dev.drover.loop`（和正跑着的 `dev.herdsman.*` 不撞），常驻的是**引擎** `drover loop` 不是看板。预检在任何写入之前跑完，撞上不认识的目标就非零退出、一个字节都不写。`launchctl` 的启用命令**只打印不执行**。`tests/install.sh` 9 项，隔离 `HOME` 验装、幂等、拒绝覆盖。
+   4. **安装脚本 + launchd plist**——**2026-09-20 写完，还没跑**。`install.sh` 把两个命令绝对软链到 `~/.local/bin`，plist 生成到 `~/.drover/`，Label 是 `dev.drover.loop`（和正跑着的 `dev.herdsman.*` 不撞），常驻的是**引擎** `drover loop` 不是看板。预检在任何写入之前跑完，撞上不认识的目标就非零退出、一个字节都不写。`launchctl` 的启用命令**只打印不执行**。`tests/install.sh` 11 项，隔离 `HOME` 验装、幂等、拒绝覆盖。
       **跑要人点头**——往 `~/.local/bin` 拷东西、动 launchd 都在 AGENTS.md「先问人」那一节里。
-      已知小账：plist 把安装时那条 shell 的整条 PATH 烤进 `EnvironmentVariables`（好处是一定找得到 `corral` 和 `git`，代价是换条 PATH 再装会拒绝、装时若激活着 venv 会一直用那个 python3）。**装的时候用干净的 shell。**
+      **2026-09-22，T14 获批最小修复**：生成的服务 PATH 固定为 `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，HOME 按原逻辑展开；不再复制安装 shell 的 PATH，避免无关目录变化导致重装拒绝、临时 Python 目录被保存。安装器自身仍由当前 PATH 的 python3 启动，ProgramArguments 和全部目标预检不变。旧 plist 字节不一致仍拒绝覆盖、由人处理；不增加覆盖变量、依赖检查或自动迁移。固定目录以外的 corral、其运行时或 CHECK_CMD 工具不自动支持，启用前由人确认服务环境可用；不保证后台必然能运行。两项定向回归配合原隔离安装套件验证，真实安装和服务启用仍须另行授权。
    5. **QUICKSTART（纯步骤）和手册**——**2026-09-20 做完**。`docs/QUICKSTART.md`（从零到「队列自己往前走」八步，含拆掉的办法）和 `docs/手册.md`（层次、完成判据的门/依据、三档、配置、排查、止损）。
 
       **两份都不重复 `--help`**：命令的参数和退出码在 `drover --help` / `drover board --help` 里已经很全，文档只写那两处放不下的东西——为什么这么设计、出事了怎么查、什么时候该停掉它。老手册 5296 行里绝大部分是评审协议的模板，捞回来的只有第 12 部分那个洞见（「报告连续干净会让你觉得它在正常工作，实际可能是它什么都没抓到而你也不再检查了；这两种状态从内部看一模一样」），换成 drover 的口径写进手册第 7 节，配上它的解药：**前五件活里做两次完整对照**。

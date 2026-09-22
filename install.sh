@@ -19,8 +19,7 @@ config = plistlib.loads((root / "launchd" / plist.name).read_bytes())
 config["ProgramArguments"][0] = str(bindir / "drover")
 config["EnvironmentVariables"] = {
     "HOME": str(home),
-    "PATH": os.pathsep.join(dict.fromkeys(
-        [str(bindir)] + os.environ.get("PATH", os.defpath).split(os.pathsep))),
+    "PATH": f"{bindir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 }
 config["StandardOutPath"] = str(state / "loop.stdout.log")
 config["StandardErrorPath"] = str(state / "loop.stderr.log")
@@ -34,7 +33,7 @@ for target, source in links:
 if os.path.lexists(plist) and (
     plist.is_symlink() or not plist.is_file() or plist.read_bytes() != plist_bytes
 ):
-    sys.exit(f"ERROR: 拒绝覆盖不认识的目标：{plist}（内容或安装时的 PATH 已变，请人工核对）")
+    sys.exit(f"ERROR: 拒绝覆盖不认识的目标：{plist}（已有文件需人工核对，不自动更新）")
 
 bindir.mkdir(parents=True, exist_ok=True)
 state.mkdir(parents=True, exist_ok=True)
@@ -51,7 +50,7 @@ if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
     print(f"提示：{bindir} 不在 PATH 中，请自行加入；安装脚本不修改 shell 配置。")
 agent = home / "Library/LaunchAgents" / plist.name
 print("可选：以下命令需人工执行；会登记登录时启动的引擎，并立即启动 drover loop，退出后自动重启。")
-print("请先确认 PATH 能找到 python3、git、corral；启用后不要再同时手动运行引擎。")
+print("请先确认 plist 中的固定 PATH 能找到 python3、git、corral；启用后不要再同时手动运行引擎。")
 print("若目标 plist 已存在，先人工核对，不要覆盖或重复加载；本脚本不执行下列命令：")
 print(f"mkdir -p {shlex.quote(str(agent.parent))}")
 print(f"ln -s {shlex.quote(str(plist))} {shlex.quote(str(agent))}")
