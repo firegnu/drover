@@ -291,22 +291,23 @@ for why, want in (
     ("错误甲\t错误乙\x1f错误丙\v\f\x1c\x1d\x1e\n\r错误丁", "✗ 门2：错误甲 错误乙 错误丙 错误丁"),
     ("\r\n  错误甲\t \n  错误乙  \r", "✗ 门2：   错误甲     错误乙   "),
 ):
-    detail_pv = {**pv, "waits": [], "queue": {**pv["queue"], "crew": [],
+    detail_pv = {**pv, "waits": [], "queue": {**pv["queue"], "crew": [], "finished": [],
         "card": {**pv["queue"]["card"], "criteria": [{"name": "门2", "ok": False, "why": why}]}}}
     actual = [t for style, _, t in B.detail_lines(detail_pv) if style == "bad"]
     assert not any("\x00" <= ch <= "\x1f" for ch in actual[0]), f"详情残留 ASCII 控制字符：{ascii(actual[0])}"
     assert actual == [want], f"详情理由被改写：{ascii(actual)} != {ascii([want])}"
     assert "\n" not in actual[0] and "\r" not in actual[0], ascii(actual[0])
 rows = [t for _, _, t in B.detail_lines(pv)]
-t5 = next(t for t in rows if t.startswith("T5 "))
+t5_title = next(t for t in rows if t.startswith("✓ T5 "))
+t5 = rows[rows.index(t5_title) + 1]
 assert "20m" in t5 and "0 个提交" in t5 and "等放行 5s" in t5, t5
-assert "重档（推翻）" in t5, f"「做完的」一行要能看出档位和主控推翻了路由：{t5}"
-# 一行一件，挤：路由紧跟标题排在记账前面，80 列窄屏（详情区就剩 52 格）截完之后，
-# 编号、标题、路由、耗时都还在——掉的是三项里最不要紧的「等放行时长」
+assert "重档（推翻）" in t5, f"历史指标要能看出档位和主控推翻了路由：{t5}"
+# 标题与指标分两行；各自在 52 列内可读，不再让长标题挤掉记账。
 narrow = B.trunc(t5, 52)
-assert narrow.startswith("T5 给导出加进度条") and "重档" in narrow and "20m" in narrow, narrow
-assert B.width(t5) <= 60, f"「做完的」那一行别再长了（{B.width(t5)} 格）：{t5}"
-t7 = next(t for t in rows if t.startswith("T7 "))
+assert t5_title.startswith("✓ T5 给导出加进度条") and "重档" in narrow and "20m" in narrow, narrow
+assert B.width(t5) <= 60, f"历史指标不要把标题混回去（{B.width(t5)} 格）：{t5}"
+t7_title = next(t for t in rows if t.startswith("✓ T7 "))
+t7 = rows[rows.index(t7_title) + 1]
 assert "40s" in t7 and "1 个提交" in t7, t7
 assert "等放行" not in t7, f"自动模式不该有等放行时长：{t7}"
 assert "档" not in t7, f"没有任务文件的那件不该冒出路由：{t7}"
@@ -423,7 +424,7 @@ assert B.detail_viewport(4, 7, 14, 1) == (0, 7)
 assert B.detail_viewport(7, 7, 0, 1) == (0, 7)
 assert B.detail_viewport(20, 0, 14, 1) == (0, 0)
 
-# 真正的 detail_lines 内容：25 行详情，10 行屏幕里每页 6 行 + 1 行翻页提示。
+# 真正的 detail_lines 内容：26 行详情，10 行屏幕里每页 6 行 + 1 行翻页提示。
 import copy, curses
 from unittest.mock import patch
 pv = next(p for p in model["projects"] if p["name"] == "eta/repo")
@@ -435,36 +436,36 @@ long_pv = {**pv, "waits": [], "queue": {**pv["queue"], "card": None, "finished":
 # 那块自己的断言在下面。
 short_pv = {**pv, "repo": "另一个仓库", "queue": None, "waits": []}
 equal_pv = {**long_pv, "repo": "等长的另一个仓库"}
-assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 25
+assert len(B.detail_lines(long_pv)) == len(B.detail_lines(equal_pv)) == 26
 overflow_pv = {**long_pv, "queue": {**long_pv["queue"],
     "counts": {"todo": 7, "done": 0, "dropped": 0}, "todo": long_pv["queue"]["todo"][:7]}}
-assert len(B.detail_lines(overflow_pv)) == 12
+assert len(B.detail_lines(overflow_pv)) == 13
 vm = {**model, "projects": [long_pv, short_pv]}
 original = copy.deepcopy(vm)
-for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏和 rail = 0
+for w, x in ((120, 23), (80, 1)):                        # 同时覆盖有侧栏和窄屏标签栏降级
     screen, state = Fake(10, w), {"sel": 0}
     B.draw(screen, vm, state)
     assert state.get("detail_room") == 7, "draw 尚未提供当帧详情视口"
-    assert state["detail_total"] == 25
+    assert state["detail_total"] == 26
     state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 6
     assert any(y == 2 and col == x + 2 and "任务04" in text for y, col, text in screen.rows)
-    assert (8, x, "PgUp↑6 PgDn↓13") in screen.rows
+    assert (8, x, "PgUp↑6 PgDn↓14") in screen.rows
 
     state["detail_offset"] = 999
     B.draw(screen, vm, state)
-    assert state["detail_offset"] == 19
-    assert (8, x, "PgUp↑19 PgDn↓0") in screen.rows
+    assert state["detail_offset"] == 20
+    assert (8, x, "PgUp↑20 PgDn↓0") in screen.rows
     assert any("还没有" in text for _, _, text in screen.rows)
     screen.h = 6                                         # 窗口变矮后继续下翻，夹在新底部
     B.draw(screen, vm, state)
     state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
     B.draw(screen, vm, state)
-    assert state["detail_offset"] == 21
+    assert state["detail_offset"] == 22
     screen.h = 10                                        # 变高，旧偏移重新夹住
     B.draw(screen, vm, state)
-    assert state["detail_offset"] == 19
+    assert state["detail_offset"] == 20
     state["sel"] = 1                                     # 切项目必须回顶
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 0
@@ -472,24 +473,24 @@ for w, x in ((80, 26), (20, 0)):                         # 同时覆盖有侧栏
     state["sel"] = 0
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 0
-    state["detail_offset"] = 19
+    state["detail_offset"] = 20
     shorter = {**long_pv, "queue": None}                  # 同一项目刷新，内容缩短
     B.draw(screen, {**vm, "projects": [shorter]}, state)
     assert state["detail_offset"] == 0
     B.draw(screen, vm, state)
-    state["detail_offset"] = 19
+    state["detail_offset"] = 20
     B.draw(screen, {**vm, "projects": [short_pv, long_pv]}, state)  # 刷新重排项目
     assert state["detail_offset"] == 0
 
     # 同仓库缩短后仍溢出：旧偏移越界夹到非零末页，仍合法则原样保留。
-    for old_offset, expected in ((19, 6), (3, 3)):
+    for old_offset, expected in ((20, 7), (3, 3)):
         state = {"sel": 0}
         B.draw(screen, vm, state)
         state["detail_offset"] = old_offset
         B.draw(screen, vm, state)
         assert state["detail_offset"] == old_offset
         B.draw(screen, {**vm, "projects": [overflow_pv]}, state)
-        assert state["detail_total"] == 12 and state["detail_room"] == 7
+        assert state["detail_total"] == 13 and state["detail_room"] == 7
         assert state["detail_offset"] == expected, f"内容缩短后偏移应为 {expected}（旧偏移 {old_offset}）"
 
     # 等长项目让夹限无法顺带归零，单独守住切换和刷新重排时的项目身份判断。
@@ -523,12 +524,12 @@ with patch.object(B.curses, "curs_set"), patch.object(B.curses, "start_color", s
     B.tui(screen, sys.argv[2])
 assert screen.frames[0] != screen.frames[1], "tui 必须执行翻页动作"
 assert screen.frames[0] == screen.frames[2], "向上翻后回到第一屏"
-# 「干活的 agent」那块：有 crew 就多出标题 + 每个 agent 一行，没有就一行都不占。
+# 「干活的 agent」那块：有 crew 就多出标题 + 每个 agent 一行 + 区间空行，没有就一行都不占。
 crew_pv = {**long_pv, "queue": {**long_pv["queue"], "crew": [
     {"name": "eta/dev-1", "kind": "codex", "state": "working", "since": 0, "where": "wt-m1"},
     {"name": "eta/rev-1", "kind": "codex", "state": "idle", "since": 90, "where": "wt-rev"}]}}
 crew_lines = B.detail_lines(crew_pv)
-assert len(crew_lines) == len(B.detail_lines(long_pv)) + 3, len(crew_lines)
+assert len(crew_lines) == len(B.detail_lines(long_pv)) + 4, len(crew_lines)
 # 正文要真的画出来（card 有 body 时）
 body_pv = {**pv, "waits": []}
 body_text = "\n".join(t for _, _, t in B.detail_lines(body_pv))
@@ -943,3 +944,5 @@ DROVER_BIN="${DROVER}" DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/check-
 # 两个副本均还原并校验字节一致；生产代码全程未改，主仓库审查文件只读。
 # 原实现回归：for t in criteria drover install drover-board; do bash tests/$t.sh || exit 1; done
 # 四套件全绿、退出 0（安装 9 项、看板 13 块）；bash -n 与 git diff --check 通过。
+
+DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-layout.py"

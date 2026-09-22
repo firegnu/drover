@@ -806,7 +806,7 @@ def view_model(projects):
 
 
 # ============================================================ draw：怎么画
-RAIL = 24            # 左边项目列表的宽度上限
+RAIL = 20            # 左边项目列表的宽度上限
 COLORS = {}          # 样式名 → curses 属性。TUI 启动时填；没填（测试里画进假屏幕）就一律 0
 
 
@@ -818,7 +818,7 @@ def init_colors():
     except curses.error:
         return
     for i, (kind, fg) in enumerate([("h1", curses.COLOR_WHITE), ("h2", curses.COLOR_CYAN),
-                                    ("wait", curses.COLOR_RED), ("bad", curses.COLOR_RED),
+                                    ("wait", curses.COLOR_YELLOW), ("bad", curses.COLOR_RED),
                                     ("ok", curses.COLOR_GREEN), ("sel", curses.COLOR_YELLOW),
                                     ("dim", -1), ("line", -1)], start=1):
         try:
@@ -828,8 +828,9 @@ def init_colors():
         COLORS[kind] = curses.color_pair(i)
     for kind in ("h1", "h2", "sel"):
         COLORS[kind] = COLORS.get(kind, 0) | curses.A_BOLD
-    for kind in ("dim", "line"):
-        COLORS[kind] = COLORS.get(kind, 0) | curses.A_DIM
+    COLORS["bar"] = curses.A_REVERSE
+    COLORS["sel"] = COLORS.get("sel", 0) | curses.A_REVERSE
+    COLORS["line"] = COLORS.get("line", 0) | curses.A_DIM
 
 
 def put(stdscr, y, x, text, h, w, kind=""):
@@ -848,74 +849,114 @@ def route_tier(rt):
 
 def route_chip(rt):
     """路由缩成一个词：「重档」「常规档（推翻）」。没有路由就是空字符串，整项不出现。
-    「做完的」是一行一件，写不下全的；全的在「当前这件活」里。"""
+    历史指标另起一行，路由用短标签；全的在「当前这件活」里。"""
     return (route_tier(rt) + ("（推翻）" if rt["overridden"] else "")) if rt else ""
 
 
-def detail_lines(pv):
-    """选中项目的详情，从上到下：等你 → 当前这件活 → 队列 → 做完的。
-    → [(样式, 缩进, 文字)]，draw 照着画就行。"""
-    out = [("h1", 0, f'{pv["name"]}  {pv["state"]}  HEAD {pv["head"]}')]
+def task_heading(pv):
+    """固定标题只用已有任务状态，不从核对消息推导新的运行状态。"""
+    q = pv["queue"]
+    c = q["card"] if q else None
+    if not q:
+        return "○ 空闲  未接任务队列 · 按 a 创建"
+    if c:
+        return ("■ 等你放行" if c["waiting"] else "▶ 进行中") + f'  {c["id"]} {c["title"]}'
+    return "○ 空闲  " + ("无进行中任务 · 按 n 发下一件" if q and q["todo"] else "队列为空 · 按 a 加任务")
+
+
+def task_metrics(pv):
+    q = pv["queue"]
+    c = q["card"] if q else None
+    if not c:
+        return f'{pv["name"]} · {pv["state"]} · HEAD {pv["head"]}'
+    rt = c["route"]
+    return (f'已进行 {c["span"]} · {c["commits"]} 个提交 · main +{c["on_main"]}'
+            + (f' · {route_tier(rt)} · 交叉审查{"要" if rt["cross"] else "不要"}' if rt else "")
+            + (" · 做完停" if c["held"] else ""))
+
+
+def detail_sections(pv):
+    """主栏和辅助栏的完整逻辑行；窄屏顺次拼接，两栏都不限制条数。"""
+    main, side = [], []
     if pv["waits"]:
-        out.append(("wait", 0, f'等你 · {len(pv["waits"])}'))
-        out += [("wait", 2, f"· {t}") for t in pv["waits"]]
+        main.append(("wait", 0, f'等你 · {len(pv["waits"])}'))
+        main += [("wait", 2, f"· {t}") for t in pv["waits"]]
+        main.append(("", 0, ""))
     q = pv["queue"]
     if not q:
-        out.append(("dim", 0, "没接任务队列：交接目录里还没有 queue.md。按 a 写一个"))
-        return out
+        main.append(("", 0, "没接任务队列：交接目录里还没有 queue.md。按 a 写一个"))
+        return main, side
     c = q["card"]
-    out.append(("h2", 0, "当前这件活" + ("" if c else " · 空着")))
     if c:
-        out.append(("", 2, " ".join(x for x in (c["id"], c["title"]) if x)))
-        # 正文原样摊开（只压掉行尾空白）。长了有 PgUp/PgDn 翻，不在这里截——截了就看不全要做什么。
-        body = c.get("body") or []
-        for ln in body:
-            out.append(("dim", 4, ln) if ln else ("dim", 0, ""))
-        if body:
-            out.append(("dim", 0, ""))          # 正文和下面的元信息隔开，不然糊成一团
-        out.append(("dim", 2, f'{c["commits"]} 个提交 · 已进行 {c["span"]}'
-                              + ("  · 核对通过，等你按 g 放行" if c["waiting"] else "")
-                              + ("  · 做完停" if c["held"] else "")))
-        out.append(("dim", 2, c["progress"]))
+        main.append(("h2", 0, "任务正文"))
+        for ln in c.get("body") or []:
+            main.append(("", 2, ln) if ln else ("", 0, ""))
+        main.append(("", 0, ""))
+        main.append(("h2", 0, f'完成依据和判据 · {c["met"]}'))
+        main.append(("dim", 2, c["progress"]))
+        if c["waiting"]:
+            main.append(("wait", 2, "核对通过，等你按 g 放行"))
         if c["route"]:
             rt = c["route"]
-            out.append(("dim", 2, f'路由 {route_tier(rt)} · 交叉审查{"要" if rt["cross"] else "不要"}'
+            main.append(("dim", 2, f'路由 {route_tier(rt)} · 交叉审查{"要" if rt["cross"] else "不要"}'
                                   + ("  · 主控推翻了路由" if rt["overridden"] else "")))
-        out.append(("", 2, f'判据 {c["met"]}'))
         for r in c["criteria"]:
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
-            # 压平旧 split() 识别的 ASCII 空白控制字符，保留普通空格和非 ASCII 字符。
+            # 只压平 ASCII 控制空白，合法 Unicode 名称原样保留。
             why = re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", r["why"])
-            out.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 3,
-                        f'{mark} {r["name"]}：{why}'))
+            main.append(("ok" if r["ok"] else ("dim" if r["ok"] is None else "bad"), 2,
+                         f'{mark} {r["name"]}：{why}'))
+        main.append(("", 0, ""))
     crew = q.get("crew") or []
     if crew:
-        out.append(("h2", 0, f'干活的 agent · {len(crew)}'))
+        side.append(("h2", 0, f'干活的 agent · {len(crew)}'))
         for a in crew:
-            busy = a["state"] == "working"
             tail = " · ".join(x for x in (
                 f'闲了 {dur(a["since"])}' if a["state"] == "idle" and a["since"] else "",
                 a["where"]) if x)
-            out.append(("ok" if busy else ("dim" if a["state"] == "idle" else "bad"), 2,
-                        f'{a["name"]}  {a["state"]}' + (f'  {tail}' if tail else "")))
-    out.append(("h2", 0, f'队列 · {q["counts"]["todo"]}   {q["mode"]}'))
+            side.append(("ok" if a["state"] == "working" else ("dim" if a["state"] == "idle" else "bad"), 2,
+                         f'{a["name"]}  {a["state"]}' + (f'  {tail}' if tail else "")))
+        side.append(("", 0, ""))
+    side.append(("h2", 0, f'待办 · {q["counts"]["todo"]}'))
     for i, t in enumerate(q["todo"]):
-        out.append(("", 2, f'{i + 1}. ' + ("下一个 · " if t["next"] else "") + (f'{t["id"]} ' if t["id"] else "手写 ")
+        side.append(("", 2, f'{i + 1}. ' + ("▸ 下一个 · " if t["next"] else "") + (f'{t["id"]} ' if t["id"] else "手写 ")
                            + t["title"] + ("  · 做完停" if t["held"] else "")))
     if not q["todo"]:
-        out.append(("dim", 2, "空了。按 a 加任务"))
-    out.append(("h2", 0, f'做完的 · {q["counts"]["done"]}'
-                         + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else "")))
+        side.append(("dim", 2, "暂无待办"))
+    side += [("", 0, ""), ("h2", 0, f'历史 · 完成 {q["counts"]["done"]}'
+                          + (f' · 放弃 {q["counts"]["dropped"]}' if q["counts"]["dropped"] else ""))]
     for f in q["finished"]:
-        # 记账：路由 · 耗时 · 提交数 · 等放行时长。一行一件，挤——路由缩到「档位（推翻）」两三个字，
-        # 而且排在记账前面：窄屏截行是从尾巴截的，掉的先是三项里最不要紧的「等放行时长」。
-        # 全须全尾的那份在「当前这件活」里（那里一件活占好几行，写得开）。
         acct = " · ".join(x for x in (route_chip(f["route"]), f["span"], f'{f["commits"]} 个提交',
                                       f'等放行 {f["wait"]}' if f["wait"] else "") if x)
-        out.append(("dim", 2, f'{f["id"]} {f["title"]}  '
-                              + (f'放弃：{f["reason"]}' if f["dropped"] else acct)))
+        side.append(("bad" if f["dropped"] else "", 2,
+                     f'{"✕" if f["dropped"] else "✓"} {f["id"]} {f["title"]}'))
+        side.append(("dim", 4, f'放弃：{f["reason"]}' if f["dropped"] else acct))
     if not q["finished"]:
-        out.append(("dim", 2, "还没有"))
+        side.append(("dim", 2, "还没有"))
+    return main, side
+
+
+def detail_lines(pv):
+    """完整单栏内容，供详情文本检查复用。"""
+    main, side = detail_sections(pv)
+    return [("h1", 0, task_heading(pv)), ("dim", 0, task_metrics(pv))] + main + side
+
+
+def wrap_lines(lines, cols):
+    """按显示列换行；保留空格、组合字符及 Unicode 名称，不用 split/strip。"""
+    out = []
+    for kind, indent, text in lines:
+        indent = min(indent, max(0, cols - 2))
+        room = max(2, cols - indent)
+        part, used = "", 0
+        for char in text:
+            size = cell(char)
+            if used + size > room:
+                out.append((kind, indent, part))
+                part, used = "", 0
+            part += char
+            used += size
+        out.append((kind, indent, part))
     return out
 
 
@@ -928,44 +969,85 @@ def detail_viewport(total, room, offset, pages=0):
 
 
 def draw(stdscr, vm, state):
-    """把 view_model 画出来；详情视口只写进内存 state，夹限交给纯函数。"""
+    """字符网格：固定摘要、主辅栏共用翻页、底部按键和消息。只写内存视口。"""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     ps = vm["projects"]
     sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
-    project = ps[sel]["repo"] if ps else None
-    lines = detail_lines(ps[sel]) if ps else [("dim", 0, "没有登记过的项目。到仓库里运行 drover init <短名>")]
-    room = h - 3 if h >= 5 and w >= 20 else 0
+    pv = ps[sel] if ps else None
+    project = pv["repo"] if pv else None
+    compact = h < 12
+    rail = RAIL if len(ps) > 1 and w >= 100 else 0
+    tabs = len(ps) > 1 and not rail and not compact
+    x = rail + 3 if rail else 1
+    cols = max(2, w - x - 1)
+    top = 2 if compact else (5 if w >= 100 else 4) + int(tabs)
+    bot = h - (2 if compact else 3)
+    room = max(0, bot - top + 1) if h >= 5 and w >= 20 else 0
+    msg = state.get("msg", "")
+    msg = "" if msg == HELP else msg
+    if pv:
+        main, side = detail_sections(pv)
+        # 固定摘要放不下的标题/指标仍在正文开头完整可达。
+        heading, metrics = task_heading(pv), task_metrics(pv)
+        prefix = [("h1", 0, heading)] if compact or width(heading) > cols else []
+        if compact or width(metrics) > cols:
+            prefix.append(("dim", 0, metrics))
+        main = prefix + ([("wait", 0, "操作消息"), ("", 2, msg), ("", 0, "")] if msg else []) + main
+    else:
+        heading, metrics = "○ 空闲  没有登记过的项目", "到仓库里运行 drover init <短名>"
+        main, side = [("", 0, metrics)], []
+    dual = cols >= 100 and bool(main) and bool(side) and not compact
+    left = (cols - 3) * 70 // 115 if dual else cols
+    columns = [wrap_lines(main, left), wrap_lines(side, cols - left - 3)] if dual else [wrap_lines(main + side, cols)]
+    total = max(map(len, columns))
     offset = state.get("detail_offset", 0) if state.get("detail_project") == project else 0
-    offset, page = detail_viewport(len(lines), room, offset)
-    state.update(detail_project=project, detail_offset=offset, detail_total=len(lines), detail_room=room)
+    offset, page = detail_viewport(total, room, offset)
+    state.update(detail_project=project, detail_offset=offset, detail_total=total, detail_room=room)
     if h < 5 or w < 20:
         put(stdscr, 0, 0, "窗口太小", h, w)
         return
-    head = f'drover · {len(ps)} 个项目 · {vm["health"]["text"]}' + (f' · 等你 {len(vm["waits"])}' if vm["waits"] else "")
-    put(stdscr, 0, 0, head, h, w, "h1" if vm["health"]["ok"] else "bad")
-    put(stdscr, 1, 0, "─" * w, h, w, "line")
-    top, bot = 2, h - 2                                  # 正文占的行，含 bot
-    rail = min(RAIL, max(12, w // 3))
-    if w < rail + 16 or not ps:
-        rail = 0                                         # 窄屏（或一个项目都没有）：只画详情
+    q = pv["queue"] if pv else None
+    mode = (("暂停中" if q["paused"] else "手动" if not q["loop"] else q["mode"])
+            + (" · 循环开" if q["loop"] else " · 循环关")) if q else ""
+    head = " · ".join(t for t in ("drover", pv["name"] if pv else "0 个项目", mode,
+                                  vm["health"]["text"], f'! 等你 {len(vm["waits"])}' if vm["waits"] else "") if t)
+    put(stdscr, 0, 0, trunc(head, w) + " " * max(0, w - width(head)), h, w, "bar")
+    if tabs:
+        label = f'↑↓/jk [{sel + 1}/{len(ps)}] ▸ {pv["name"]}'
+        if sel + 1 < len(ps):
+            label += f'   › {ps[sel + 1]["name"]}'
+        put(stdscr, 1, 1, label, h, w - 1, "sel")
     if rail:
-        rows = bot - top + 1
-        first = max(0, min(sel - rows + 1, len(ps) - rows)) if len(ps) > rows else 0
+        put(stdscr, 2, 1, "项目", h, rail, "h2")
+        rows = max(1, bot - 2)
+        first = max(0, min(sel - rows + 1, len(ps) - rows))
         for i in range(first, min(len(ps), first + rows)):
-            pv = ps[i]
-            put(stdscr, top + i - first, 0,
-                ("▸" if i == sel else " ") + ("●" if pv["needs_me"] else " ") + pv["name"],
-                h, rail, "sel" if i == sel else ("bad" if pv["needs_me"] else ""))
+            p = ps[i]
+            label = ("▸" if i == sel else " ") + ("!" if p["needs_me"] else " ") + p["name"]
+            put(stdscr, 3 + i - first, 1, label, h, rail, "sel" if i == sel else ("wait" if p["needs_me"] else ""))
+        for y in range(2, bot + 1):
+            put(stdscr, y, rail + 1, "│", h, w, "line")
+    if not compact:
+        put(stdscr, top - 3, x, heading, h, w - 1, "h1")
+        put(stdscr, top - 2, x, metrics, h, w - 1, "dim")
+    put(stdscr, top - 1, x, "─" * cols, h, w, "line")
+    for ci, lines in enumerate(columns):
+        cx = x if ci == 0 else x + left + 3
+        cw = left if ci == 0 else cols - left - 3
+        # 共用偏移；较短一栏夹在自己的末页，长栏继续翻，所有条目均可达。
+        start = min(offset, max(0, len(lines) - page)) if dual else offset
+        for i, (kind, indent, text) in enumerate(lines[start:start + page]):
+            put(stdscr, top + i, cx + indent, text, h, cx + cw, kind)
+    if dual:
         for y in range(top, bot + 1):
-            put(stdscr, y, rail, "│", h, w, "line")
-    x = rail + 2 if rail else 0
-    shown = lines[offset:offset + page]
-    for i, (kind, indent, text) in enumerate(shown):
-        put(stdscr, top + i, x + indent, text, h, w, kind)
-    if len(lines) > room:
-        put(stdscr, bot, x, f"PgUp↑{offset} PgDn↓{len(lines) - offset - len(shown)}", h, w, "dim")
-    put(stdscr, h - 1, 0, state.get("msg", ""), h, w, "dim")
+            put(stdscr, y, x + left + 1, "│", h, w, "line")
+    if total > room:
+        put(stdscr, bot, x, f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}", h, w - 1, "dim")
+    if not compact:
+        keys = "g 核对放行 n 下一件 p 暂停 a 加任务 l 循环 r 刷新 q 退出 ↑↓/jk PgUp/Dn"
+        put(stdscr, h - 2, 0, keys, h, w, "bar")
+    put(stdscr, h - 1, 0, msg, h, w, "wait" if msg else "")
 
 
 # ============================================================ 按键
