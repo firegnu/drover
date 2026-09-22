@@ -4,9 +4,20 @@
 
 ---
 
+## 2026-09-22 —— 已授权真实安装及后台启动，项目仍手动推进
+
+**这一节最新。** 用户明确要求安装并启动后台服务。已执行本仓库 install.sh，创建 `~/.local/bin/drover`、`drover-board` 到 main 仓库脚本的软链，生成 `~/.drover/dev.drover.loop.plist`；登记 `~/Library/LaunchAgents/dev.drover.loop.plist` 并 bootstrap `gui/501/dev.drover.loop`。本次授权仅操作 dev.drover.loop，未碰旧 herdsman 服务。
+
+- 安装前核对目标均不存在、服务未登记、无已有 drover loop 引擎，项目登记表只有本仓库且 loop 关闭。启动后复核服务 running、runs=1、PID 44037、尚无退出记录；stdout 显示每 5 秒一跳，stderr 为空。以后登录自动启动、退出自动重启，不要另开第二个引擎。
+- 项目仍 `loop off`，TASK_GATE 未显式配置、有效值为 1。启动前后 `.drover.conf`、queue.md、tasks.state 的 SHA-256 完全一致；未发送、完成或放行任务。保持 n → g → n；以后 loop on + TASK_GATE=1 为逐件放行，loop on + TASK_GATE=0 为自动连续推进。
+- 用户此前指定的简短看板入口已写进 `~/.zshrc`：`drover-board` alias 调用 `/opt/anaconda3/bin/python3 /Users/firegnu/Developer/personal_projs/drover/bin/drover board`，新终端中 --help 验证通过，安装后该 alias 保留。看板仍由人打开，q 只关闭看板。
+- 下一步照常使用；本次没有打开项目 loop 或修改 TASK_GATE。T14 代码已完成，未代用户操作 g，不据此推断已放行。未推送；T8 stash 保留。运行前状态快照在 `/var/folders/vs/3tm61ygs569g764_td0zxtym0000gn/T/drover-service-enable-hz7m_lud/before.json`。
+
+---
+
 ## 2026-09-22 —— T14 已合并收尾，等待用户放行
 
-**这一节最新。** T14 按用户批准的最小范围完成：服务 PATH 使用固定常用目录，不再复制终端 PATH；两项新回归及原安装保护保留。被审 `a1b64fc`，合并 `b3b2485`，收尾空提交 `a8326cb`，未推送。
+**（历史记录，后续真实安装及启动已在上方记录。）** T14 按用户批准的最小范围完成：服务 PATH 使用固定常用目录，不再复制终端 PATH；两项新回归及原安装保护保留。被审 `a1b64fc`，合并 `b3b2485`，收尾空提交 `a8326cb`，未推送。
 
 - 主控定向审查通过：核对有效 RED→GREEN，重跑隔离安装套件 11 项及静态检查全过；合并后生产、测试与设计文档和被审提交完全一致。未跑全仓库，无独立交叉审查。详细证据和取舍见 `docs/任务/m23-install-path 安装环境 PATH 调研与修复.md`。
 - 开发 worktree/分支已按干净且已合并条件清理；自开 `drover/dev-install-path-1` 在 idle、无人接入时随工作目录删除关闭。现场只剩 `drover/main`。T8 实验 stash 原样保留。
