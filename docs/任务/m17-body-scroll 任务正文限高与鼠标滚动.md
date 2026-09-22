@@ -150,3 +150,65 @@
 待验：鼠标无需点击即送达、触控板上下方向和连续滚动、正文外不切项目或移动其它区域、滚到末尾、PgUp/PgDn 后命中区域正确、缩放后的新坐标，以及实际字形/配色。当前默认 `python3` 只能验证已说明的降级路径；主控需明确知悉这一环境限制，不能把支持解释器下的结果写成默认启动已具备滚轮能力。
 
 主控审查、独立 Codex 交叉审查、是否接受环境降级、合并、清理、收尾记号和 HANDOFF 由主控接手。本分支不合并、不推送、不收尾，不操作真实 done/go/next/loop。全部验证命令前台等待退出；测试自开的进程均已结束。
+
+## R1 增量调查记录（2026-09-22）
+
+已只读主仓库 `2fd7007` 的主控第 1 轮审查与 R1。本轮只调查默认解释器兼容问题，**R1 尚未修复，不能据本记录认定默认启动达标或可合并**。没有修改生产代码、既有测试、ROADMAP、解释器、依赖、终端配置或交互设计；没有重跑两套全量回归及已通过的显示矩阵。
+
+### 结论与证据
+
+**不是单纯漏暴露 Python 常量。当前默认 Python 使用旧鼠标 ABI，下滚信息在 `getmouse()` 输出中已与其它事件混同；在这个返回值之后无法安全恢复方向。** 仅补常量、放宽掩码或移植 corral 的处理分支不能满足“只有上下滚轮移动正文”。
+
+1. 默认 Python 实测为 `/opt/homebrew/opt/python@3.14/bin/python3.14`，3.14.7；`curses.ncurses_version` 是 6.0 / 20150808。`otool -L _curses.cpython-314-darwin.so` 显示链接 `/usr/lib/libncurses.5.4.dylib`。本机 SDK 的 `usr/include/curses.h` 同版本明确声明 `NCURSES_MOUSE_VERSION 1`，第 5 按钮定义只在 `NCURSES_MOUSE_VERSION > 1` 下存在。这里的运行库版本号 6.0 不等于鼠标 ABI 2。
+2. 在 `TERM=xterm-256color` 的真实隔离 PTY 中，默认 curses 的 `kmous` 为 `ESC [ M`，实际请求普通 1000 鼠标报告；支持环境的 `kmous` 为 `ESC [ <`，请求 SGR 1006+1000。探针分别发送两种格式，使用匹配格式评判能力，不把不匹配格式误当成底层失败。
+3. 默认解释器对原生 legacy 格式的解码如下。每个样本都在新 curses/PTY 进程中运行，上滚、下滚、按钮和移动使用同一个位置 `(x=9,y=7)`；避免前一事件状态或坐标差异掩盖碰撞。
+
+| 掩码 | 上滚（原始按钮码 64） | 下滚（65） | 按钮 7（67，可用于横向滚动） | 无按钮移动（35） |
+|---|---|---|---|---|
+| 与 corral 参考相同：左键 pressed/clicked + 上滚 + 缺失下滚置零 | `0x80000` | `getmouse` 报错 | `getmouse` 报错 | `getmouse` 报错 |
+| `ALL_MOUSE_EVENTS` | `0x80000` | `getmouse` 报错 | `getmouse` 报错 | `getmouse` 报错 |
+| `ALL_MOUSE_EVENTS \| REPORT_MOUSE_POSITION` | `0x80000` | `0x8000000` | `0x8000000` | `0x8000000` |
+
+后三种事件在位置报告掩码下的**整个返回元组**均为 `(0, 9, 7, 0, 134217728)`。所以将 `REPORT_MOUSE_POSITION` 当作下滚，会把其它输入也当作下滚；即使普通 1000 模式不主动报告移动，按钮 7 的碰撞依然存在。普通左键/中键按下则分别为 `0x2/0x80`，没有因测试输入未送达而普遍失败。
+
+4. 默认解释器若直接接收 SGR 字节，`getch` 返回的是 ESC、`[`、`<`、数字等普通字符，未形成 `KEY_MOUSE`。所以参考测试里的 SGR 输入也不能直接作为当前默认环境的修复。匹配原生 legacy 格式后仍有上表的信息丢失，报告格式不匹配不是唯一原因。
+5. 用已存在的 `/opt/anaconda3/bin/python3`（3.12.2、ncurses 6.4 / 20221231）对照，同一探针在原生 SGR 格式下得到上滚 `0x10000`、下滚 `0x200000`、移动 `0x10000000`，可区分。它只作对照，没有替换默认解释器。另核实：这个环境的 `BUTTON5_PRESSED=0x200000` 在默认环境中恰是 `BUTTON4_DOUBLE_CLICKED`，直接抄数值会改变含义。
+
+以上运行结果与 [ncurses 的鼠标 ABI 说明](https://invisible-island.net/ncurses/ncurses-mapsyms.html) 一致：旧接口用每按钮六位、只容纳四个按钮；扩展接口改变编码以支持第 5 按钮。[xterm 的 Wheel mice / Other buttons 说明](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) 给出 64/65 和扩展按钮编码，是探针生成输入的依据。探针只生成测试字节，所有解码均由实际 curses 完成，没有实现或试装自制输入解析器。
+
+### 用户指定的 corral 参考
+
+只读参考了 `corral/tools/board` 的滚轮常量、鼠标输入分支、last reply 可见区与夹限、鼠标掩码，以及 `corral/tests/test_board.py` 对应的点击/回复展示/滚轮用例；没有导入或运行 corral board，没有读 corral 内部状态，也没有改 corral。
+
+- `tools/board:39` 的下滚同样为 `getattr(curses, "BUTTON5_PRESSED", 0)`；`:556` 附近只在匹配上/下滚掩码时修改 `reply_top`。缺常量时，参考实现没有额外下滚解码通道。
+- `:814` 附近的 `reply_y`、按可用高度夹限的 `reply_top` 和回复区域是局部视口参考；T8 已有独立正文偏移与当帧矩形，本轮不改变主控已接受的布局/交互。
+- `tests/test_board.py:197` 的滚轮用例直接发送 SGR 下滚字节；它未在该用例内验证默认 Python 的底层能力。只读测试代码不等于这组代码在默认环境已通过，本轮没有运行会创建 agent/viewer 的参考测试。
+
+### 定向复现与重跑
+
+- **默认启动目标 RED**：用 `runpy.run_path('tests/board-body-pty.py')['session'](Path('/tmp/m17-r1-default'), 80, 24, False)` 只跑一个既有合成 PTY，再对 `80x24-single.json` 首帧断言含「完成依据和判据」。退出 1：`R1: 默认 Python 的长正文仍把完成依据和判据挤出首屏`。完整正文退化可达，但主目标不达标。
+- 新增独立诊断入口 `tests/board-mouse-decode.py`，不接入正常回归套件、不加载任何 board/agent。两种报告格式 × 三种掩码 × 八种事件，**每个解释器 48 个独立合成 PTY 样本**。保存解释器/运行库/常量/报告前缀/请求及接受掩码、原始发送字节、真实 getch/getmouse 返回和终端初始化输出。`--require-dual` 检查匹配格式中的上下滚轮可解码、坐标准确，且下滚区别于点击、移动及其它按钮；不靠 `BUTTON5_PRESSED` 是否存在判断成功。
+
+```sh
+# 当前默认环境预期退出 1：真实解码不能独立识别下滚；R1 仍为 RED。
+python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-default-mouse.json --require-dual
+# 已有支持环境的对照预期退出 0；这不是默认环境修复后的 GREEN。
+/opt/anaconda3/bin/python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-control-mouse.json --require-dual
+```
+
+最终两命令分别退出 1/0，日志 `/tmp/m17-r1-default-mouse.log`、`/tmp/m17-r1-control-mouse.log`；对应完整 JSON 如命令所示。探针在不带 `--require-dual` 时只记录结果，以便在其它环境复核。
+
+- 仅重跑 `tests/board-body-scroll.py` 的 `test_tui_wheel_only_redraws_body`、`test_tui_ignores_nonwheel_errors_and_resize_race`、`test_missing_mouse_capability_preserves_full_paging`：3 项通过，守住滚轮纯重绘、点击/区域外/错误与缩放竞态无动作、既有翻页和退出。这里是合成事件分发检查，前面的解码矩阵是真实 PTY/curses；均不是物理鼠标/触控板验收。
+- 新探针语法检查、`git diff --check` 通过；生产文件与既有回归没有差异。所有命令前台等待退出，探针自开的进程全部已结束；没有重跑主控已通过的全量、8 组支持 PTY、32 组演示或 Tab 矩阵。
+
+### 最小方案与待裁定边界
+
+在已经丢失按钮区分的 `getmouse` 元组之后加一条映射，不能恢复正确性。本轮不取消能力检查，不猜按钮位，也不将位置事件伪装成下滚。主控 R1 原文要求：**“若必须自制终端协议解析、改解释器/依赖或改变交互/设计，先仅报告方案与代价，等主控和用户裁定，不擅自实施。”** 因此只提出下列可裁定路线，未实施生产修复：
+
+| 路线 | 最小范围与代价 | 当前状态 |
+|---|---|---|
+| 保留默认 Python，批准专门的鼠标输入适配 | 在旧 curses 丢失信息之前识别终端鼠标报告，复用现有纯鼠标映射/正文视口；须限定报告格式并验证分段到达、完整消费非滚轮事件、普通按键保真、刷新/退出和终端模式恢复。增加协议边界及相应定向测试，不涉及业务逻辑 | **若默认启动必须达标，应先裁定是否允许这条扩展。** 属于 R1 明令先报告的协议解析，不在本轮自行实现 |
+| 使用具有扩展鼠标 ABI 的运行时 | 可以复用现有支持路径；改变解释器选择或重建 Python/curses 依赖。前者已有对照证据，后者涉及环境维护/部署 | 用户尚未批准；未改启动入口、PATH、依赖或系统文件 |
+| 接受当前明确退化 | 不增加代码，但默认环境长正文仍会挤走判据并需要 PgUp/PgDn | 不能视为 T8 主目标完成；主控已明确暂不接受，未据此关闭 R1 |
+
+本轮调查完成，**实现仍停在 `6b914a7`，R1 与真实设备验收继续开放**。主控/用户裁定输入边界后再安排最小实现及有效 RED→GREEN。主仓库任务文件保持只读，本记录只写原开发 worktree；不合并、不推送、不做主控收尾。
