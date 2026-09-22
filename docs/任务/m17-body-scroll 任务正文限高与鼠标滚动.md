@@ -282,3 +282,8 @@ python3 -B tests/board-mouse-decode.py --record /tmp/m17-r1-default-mouse.json -
 - 原开发 agent idle、attached=0 且回复已暂停、无遗留测试进程后，主控将全部未提交兼容实验（含两个新增输入测试）存入 Git stash：`e039c0163f1582e89cb162f9dab45f71ba3b3bff`，说明 `T8 stopped compatibility experiment; preserve only, do not merge`。保留 stash、不 pop/drop，不纳入审查/合并；worktree 已干净。
 - 被审分支 `m17-body-scroll` HEAD `885d49f`；该提交仅增加诊断脚本与记录。生产代码与既有测试逐字等于已通过主控审查的 `6b914a7`，不重复主控两套回归/PTY矩阵。诊断脚本保留为非默认测试入口，其 require-dual 在旧环境预期失败，不是产品回归失败。
 - 主控结论：按最终范围可以进入独立 Codex 交叉审查；正常运行入口记录为 `/opt/anaconda3/bin/python3 ./bin/drover board`，安全合成验收入口为 `/opt/anaconda3/bin/python3 tests/board-demo.py --scene body [--multi]`。未执行真实看板/队列操作，未合并、推送或打收尾记号。独立审查通过后再本地合并收尾。
+
+
+## 最终主控审查（2026-09-22）
+
+独立 Codex 对 `885d49f`（生产 `6b914a7`）结论可以合并，必须改0、建议改0。主控已在《m17-body-scroll 交叉审查.md》逐条接受7项判断；无待修项，按用户确认的原生 curses + 现有支持 Python 范围本地合并。原有两套与PTY验证不重复；审查新增的5项定向、内存RED/缺陷自证及3个真实PTY生命周期检查通过。物理鼠标/触控板与桌面目视仍由用户验收，未冒称完成。
