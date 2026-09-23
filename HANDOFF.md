@@ -4,9 +4,15 @@
 
 ---
 
+## 2026-09-23 —— Claude 临时派发限制已解除
+
+**这一节最新。** 用户明确通知：此前「暂时只派 Codex、不派 Claude，等用户通知后恢复」的限制已经解除。后续按 corral-dispatch 技能正常选择开发和审查 agent；旧交接中 2026-09-22 的临时限制仅作历史记录。项目 `AGENTS.md` 和 corral 模板都没有 Codex-only 限制，本次不改它们，也未派发新任务。
+
+---
+
 ## 2026-09-23 —— jb-finetune 已切换到新协作流程
 
-**这一节最新。** 用户明确废弃 jb-finetune 的旧 `request-review` / 规划者 / 旧看板，要求采用 corral 主控、corral-dispatch 分派审查和 drover 顶层队列。项目 `AGENTS.md` 已替换旧协议，旧项目配置已移出仓库并归档，专用旧规则文件已从当前树删除，旧评审记录保留为历史。JB 仓库本地合并 `db68db1`，收尾记号 `8aee6fe`，未推送。
+**（历史记录，当前派发约束见上。）** 用户明确废弃 jb-finetune 的旧 `request-review` / 规划者 / 旧看板，要求采用 corral 主控、corral-dispatch 分派审查和 drover 顶层队列。项目 `AGENTS.md` 已替换旧协议，旧项目配置已移出仓库并归档，专用旧规则文件已从当前树删除，旧评审记录保留为历史。JB 仓库本地合并 `db68db1`，收尾记号 `8aee6fe`，未推送。
 
 - `drover init jb-finetune` 已登记项目；`.drover.conf` 指向现有 `jbfinetune/main`，`TASK_FILE_DIR=docs/任务`，`TASK_GATE=1`，项目 loop 关闭。`drover list` 核对为空队列、无进行中任务。旧 T1–T8 均已完成或放弃，不迁移历史任务。
 - 这次是配置和协作规则迁移，尚未用真实 JB 开发任务端到端验证。下一件业务任务由用户决定；保留手动放行，不自行发 `next`、开 loop、推送或操作旧 herdsman 全局服务。
