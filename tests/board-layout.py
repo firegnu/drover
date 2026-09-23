@@ -136,11 +136,13 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     q = vm['projects'][0]['queue']
     q['card'].update(body=[], route=None, criteria=[
         {'name': '名称：内含标点', 'ok': False, 'why': '✓ 理由：feature/a\u00a0b\u2028c Cafe\u0301'},
+        {'name': '执行失败', 'ok': False, 'failed': True, 'why': '外部命令退出非零'},
         {'name': '通过', 'ok': True, 'why': '成功理由'},
         {'name': '不适用', 'ok': None, 'why': '未配置理由'}])
     screen = Screen(32, 160)
     B.draw(screen, vm, {'body_mouse': True})
-    for label, kind in (('✗ 名称：内含标点: ', 'bad'), ('✓ 通过: ', 'ok'), ('– 不适用: ', 'dim')):
+    for label, kind in (('✗ 名称：内含标点: ', 'dim'), ('✗ 执行失败: ', 'bad'),
+                         ('✓ 通过: ', 'ok'), ('– 不适用: ', 'dim')):
         assert any(t == label and a == B.COLORS.get(kind, 0) for _, _, t, a in screen.rows)
     for reason in ('✓ 理由：feature/a\u00a0b\u2028c Cafe\u0301', '成功理由', '未配置理由'):
         assert any(x == 27 and t == reason and a == 0 for _, x, t, a in screen.rows)
@@ -155,20 +157,72 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     assert any(t.startswith('Elapsed') and not a & curses.A_DIM for _, _, t, a in screen.rows)
     assert B.COLORS['h1'] == curses.A_BOLD
     assert B.COLORS['h2'] == B.COLORS['key'] == (B.COLORS.get('accent', 0) | curses.A_BOLD)
-    assert B.COLORS['heading_ok'] == (B.COLORS.get('ok', 0) | curses.A_BOLD)
+    assert B.COLORS['heading_active'] == (B.COLORS.get('active', 0) | curses.A_BOLD)
     assert B.COLORS['heading_wait'] == (B.COLORS.get('wait', 0) | curses.A_BOLD)
-    assert any(t == '▶ In progress' and a == B.COLORS['heading_ok'] for _, _, t, a in screen.rows)
+    assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in screen.rows)
     assert any(t.startswith('  T42') and a == curses.A_BOLD for _, _, t, a in screen.rows)
     assert any(t == 'Task details' and a == B.COLORS['h2'] for _, _, t, a in screen.rows)
     for scene, label, kind in (('waiting', '■ Ready to release', 'heading_wait'),
-                               ('idle', '○ Idle', 'h1')):
+                               ('idle', '○ Idle', 'heading_idle')):
         item, _ = fixture(scene)
         small = Screen(24, 80)
         B.draw(small, item, {'body_mouse': True})
         assert any(t.startswith(label) and a == B.COLORS[kind] for _, _, t, a in small.rows)
     compact = Screen(10, 40)
     B.draw(compact, fixture('working')[0], {'body_mouse': True})
-    assert any(t == '▶ In progress' and a == B.COLORS['heading_ok'] for _, _, t, a in compact.rows)
+    assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in compact.rows)
+
+    # Only status runs carry color, including after Unicode/Tab wrapping.
+    for status, color in (('working', 'active'), ('starting', 'active'), ('blocked', 'wait'),
+                          ('idle', 'dim'), ('exiting', 'dim'), ('unknown', 'dim')):
+        item, _ = fixture('idle')
+        queue = item['projects'][0]['queue']
+        queue['crew'] = [dict(name='demo/中\tCafe\u0301', state=status, since=0, where='/synthetic/working')]
+        _, lines = B.detail_sections(item['projects'][0], presentation=True)
+        agent_line = next(line for line in lines if line[2].startswith('demo/'))
+        for columns in (12, 25, 80):
+            probe = Screen(30, columns + 1)
+            for y, (kind, indent, text) in enumerate(B.wrap_lines([agent_line], columns)):
+                B.put(probe, y, indent, text, 30, columns, kind)
+            painted = [(ch, attr) for _, _, text, attr in probe.rows for ch in text]
+            full = ''.join(ch for ch, _ in painted)
+            assert full == agent_line[2].replace('\t', '    ')
+            start = len(queue['crew'][0]['name'].replace('\t', '    ')) + 2
+            assert all(attr == B.COLORS.get(color, 0) for _, attr in painted[start:start + len(status)])
+            assert all(attr == 0 for _, attr in painted[:start] + painted[start + len(status):])
+
+    item, _ = fixture('idle')
+    probe = Screen(50, 120)
+    B.draw(probe, item, {})
+    for label, kind in (('✓', 'ok'), ('✕', 'dim'), ('1. ', 'dim'), ('▸ Next · ', 'accent'), ('Hold', 'wait')):
+        assert any(t == label and a == B.COLORS.get(kind, 0) for _, _, t, a in probe.rows), label
+    item, _ = fixture('working')
+    item['projects'][0]['queue']['paused'] = True
+    probe = Screen(32, 120)
+    B.draw(probe, item, {})
+    assert any(t == 'Paused' and a == B.COLORS.get('wait', 0) for _, _, t, a in probe.rows)
+    assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in probe.rows)
+
+# Feedback is based on exit status, not success/failure words in user output.
+with patch.object(B.curses, 'start_color'), patch.object(B.curses, 'use_default_colors'), \
+     patch.object(B.curses, 'COLORS', 256, create=True), patch.object(B.curses, 'init_pair'), \
+     patch.object(B.curses, 'color_pair', side_effect=lambda i: i << 8):
+    B.init_colors()
+for code, output, color in ((0, 'ERROR is part of a task title', 'ok'), (2, 'success', 'bad'),
+                             (8, 'waiting', 'wait'), (9, 'unmet', 'wait'), (10, 'conflict', 'wait'),
+                             (0, '  ↑ manual release', 'wait'), (0, 'WARNING: publish failed', 'wait')):
+    feedback = {}
+    result = B.subprocess.CompletedProcess([], code, output, '')
+    with patch.object(B.subprocess, 'run', return_value=result):
+        B.run_drover('/synthetic', 'go', feedback=feedback)
+    assert feedback['msg_kind'] == color
+    probe = Screen(32, 120)
+    B.draw(probe, fixture('working')[0], {**feedback, 'msg': 'Synthetic operation report'})
+    assert any(t == 'Operation message' and a == B.COLORS.get(color, 0) for _, _, t, a in probe.rows)
+    assert any(y == 31 and a == B.COLORS.get(color, 0) for y, _, _, a in probe.rows)
+with patch.object(B.subprocess, 'run', side_effect=OSError('synthetic')):
+    B.run_drover('/synthetic', 'go', feedback=feedback)
+assert feedback['msg_kind'] == 'bad'
 
 # 历史续行与记账同列，不截断长标题，当前任务继续最突出。
 vm, _ = fixture('idle')
@@ -179,8 +233,8 @@ q['finished'][0]['title'] = '历史标题' * 15 + 'END'
 screen = Screen(32, 40)
 B.draw(screen, vm, {})
 history = [(x, t) for _, x, t, _ in screen.rows if '历史标题' in t or t.endswith('END')]
-assert history[0][0] == 3 and all(x == 5 for x, _ in history[1:])
-assert ''.join(t for _, t in history) == '✓ T41 ' + q['finished'][0]['title']
+assert history[0][0] == 4 and all(x == 5 for x, _ in history[1:])
+assert ''.join(t for _, t in history) == ' T41 ' + q['finished'][0]['title']
 assert any(x == 5 and 'Standard · 48m' in t for _, x, t, _ in screen.rows)
 assert 'Release wait' in ''.join(t for _, _, t in B.history_lines(q['finished'][0], True))
 assert any(t.startswith('○ Idle') and a & curses.A_BOLD for _, _, t, a in screen.rows)

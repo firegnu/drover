@@ -293,7 +293,7 @@ for why, want in (
 ):
     detail_pv = {**pv, "waits": [], "queue": {**pv["queue"], "crew": [], "finished": [],
         "card": {**pv["queue"]["card"], "criteria": [{"name": "门2", "ok": False, "why": why}]}}}
-    actual = [t for style, _, t in B.detail_lines(detail_pv) if style == "bad"]
+    actual = [t for _, _, t in B.detail_lines(detail_pv) if t.startswith("✗ 门2: ")]
     assert not any("\x00" <= ch <= "\x1f" for ch in actual[0]), f"详情残留 ASCII 控制字符：{ascii(actual[0])}"
     assert actual == [want], f"详情理由被改写：{ascii(actual)} != {ascii([want])}"
     assert "\n" not in actual[0] and "\r" not in actual[0], ascii(actual[0])
@@ -450,7 +450,8 @@ for w, x in ((120, 23), (80, 1)):                        # 同时覆盖有侧栏
     state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 6
-    assert any(y == 2 and col == x + 2 and "任务04" in text for y, col, text in screen.rows)
+    assert (2, x + 2, "4. ") in screen.rows
+    assert "任务04" in "".join(text for y, col, text in screen.rows if y == 2 and col >= x + 2)
     assert (8, x, "PgUp↑6 PgDn↓14") in screen.rows
 
     state["detail_offset"] = 999

@@ -188,6 +188,23 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                 self.assertLessEqual(before, saved["t"])
                 self.assertLessEqual(saved["t"], time.time())
 
+    def test_failure_color_requires_current_evidence(self):
+        # Words in external output are not evidence; matching saved ok=False is.
+        for ok, why, main, failed in ((False, 'passed', self.sha, True),
+                                      (True, 'ERROR failed', self.sha, False),
+                                      (False, 'failed', self.base, False)):
+            self.result.write_text(json.dumps(self.saved(ok=ok, why=why, main=main)))
+            row, _ = self.display()
+            self.assertIs(row.get('failed', False), failed)
+        self.git('checkout', '-q', '-b', 'unfinished')
+        self.git('commit', '-q', '--allow-empty', '-m', 'work')
+        row = self.B.criteria(str(self.repo), self.sha, '', do_check=False)[1]
+        self.assertIs(row['ok'], False)
+        self.assertFalse(row.get('failed', False), 'Unmerged is pending, not a query failure')
+        with patch.object(self.B, 'task_branches', return_value=([], [], ['query error'])):
+            row = self.B.criteria(str(self.repo), self.sha, '', do_check=False)[1]
+        self.assertTrue(row.get('failed', False))
+
     def test_publish_failure_preserves_done_and_advance(self):
         def events():
             return [{k: v for k, v in e.items() if k != "t"}

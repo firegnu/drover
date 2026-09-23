@@ -62,7 +62,7 @@ def fixture(scene="working", multi=False):
     if scene == "sent":
         msg = f'Sent to demo/main: {card["id"]} {card["title"]}'
     if scene == "failed":
-        card["criteria"][3].update(ok=False, why="pytest tests/checkout: exit 1; coupon expiration message differs")
+        card["criteria"][3].update(ok=False, failed=True, why="pytest tests/checkout: exit 1; coupon expiration message differs")
         card["met"] = "0/4"
         msg = "Not released · - Check 3: exit 1; coupon expiration message differs · Output: expected expired, got invalid coupon"
     if scene == "waiting":
