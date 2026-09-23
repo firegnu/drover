@@ -4,11 +4,11 @@
 
 ---
 
-## 2026-09-23 —— T17 看板 TUI 视觉探索已入队，等待发出
+## 2026-09-23 —— T17 看板 TUI 视觉探索已委派 Claude
 
-**这一节最新。** 用户认为现有 Kanban TUI 仍不够美观，要求开任务由 Claude Code 先探索可改进方向，不实施正式改版。T16 已由用户放行；T17 已通过 `drover add` 加入队首，任务文件为 `docs/任务/m26-kanban-visual-explore 看板 TUI 视觉探索.md`。路由的交叉审查结论为「不要」，档位拿不准，按技能默认选常规 Claude Code。
+**这一节最新。** 用户已发出 T17，要求 Claude Code 探索现有 Kanban TUI 的视觉改进方向，不实施正式改版。任务文件为 `docs/任务/m26-kanban-visual-explore 看板 TUI 视觉探索.md`。主控已创建分支 `m26-kanban-visual-explore` 和 worktree `../drover-worktrees/m26-kanban-visual-explore`，委派 `drover/dev-kanban-visual-1`（Claude Code，常规档 `opus[1m]` / high）；路由结论为交叉审查「不要」。
 
-- 下一步在主控本轮结束、回到 idle 后，由用户按 `n` 发出 T17；主控据任务文件创建独立 worktree 并委派 Claude。当前仍是手动放行模式，主控未启动 agent、未代用户操作 `next/done/go/loop`、未改生产代码或服务，也未推送。
+- Claude 正在工作，已向主控挂完成提醒。下一步读取它的回复与任务文件、核对合成画面证据、主控审查；通过后本地合并并按项目规矩收尾。当前仍是手动放行模式，主控未代用户操作 `next/done/go/loop`、未改生产代码或服务，也未推送。
 - 探索应对照 T11/T12 已完成的视觉工作和当前合成画面；旧截图只能作历史对照。正式改版及涉及已定设计的方案由用户另行决定。
 
 ---
