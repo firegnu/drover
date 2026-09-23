@@ -49,3 +49,8 @@
 - 核对命令及结果：人工对照 `docs/ROADMAP.md` 生命周期状态配色、`bin/drover-board` 的 `init_colors`/`status_color`/`task_heading`/`detail_sections`/`draw` 与本节内容；`git diff --check` 通过；改动范围仅为本任务文件和 `docs/QUICKSTART.md`。
 - 取舍：不扩展状态、不改实现、不运行教程中的实际操作命令或全套测试；将明确失败限定为带结构化失败证据的 `✗`，普通未满足判据保持灰色。
 - 待主控决定的问题：无。
+
+## 返工记录
+
+- 按主控审查修正：将 `Idle`、`Manual`、agent `idle` 分开说明，明确 agent `idle` 只表示本轮结束/空闲，任务可能仍进行中且不代表完成；将 agent `starting` 从 `working` 中拆出，说明其为启动中，可能尚未完成启动或正在等待信任框。
+- 核对：仅修改上述两处表格含义并追加本记录；未运行业务命令或全套测试，待提交前运行 `git diff --check`。

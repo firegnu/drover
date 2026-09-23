@@ -131,8 +131,11 @@ PgUp / PgDn  翻整页详情
 
 | 看板文字 / 符号 | 颜色 | 含义 |
 |---|---|---|
-| `Idle`、`Manual`、agent `idle` | 蓝色 | 没有当前任务，或手动模式；`Idle` 不表示任务已完成 |
-| `In progress`、agent `working` / `starting` | 青色 | 当前任务或 agent 正在进行 |
+| `Idle` | 蓝色 | 任务标题：没有当前任务；不表示任务已完成 |
+| `Manual` | 蓝色 | 手动推进模式 |
+| agent `idle` | 蓝色 | 本轮结束/空闲；任务可能仍进行中，不代表完成 |
+| `In progress`、agent `working` | 青色 | 当前任务或 agent 正在工作 |
+| agent `starting` | 青色 | agent 启动中，可能尚未完成启动或正在等待信任框 |
 | `Looping` | 青色 | loop 模式已选；不表示任务此刻正在运行 |
 | `loop on` | 绿色 | loop 开关已开；与队列暂停、当前任务是否运行是独立状态 |
 | `loop off` | 加粗灰色 | loop 开关已关，按键手动推进 |
