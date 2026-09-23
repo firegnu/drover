@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-09-23 —— jb-finetune 已切换到新协作流程
+
+**这一节最新。** 用户明确废弃 jb-finetune 的旧 `request-review` / 规划者 / 旧看板，要求采用 corral 主控、corral-dispatch 分派审查和 drover 顶层队列。项目 `AGENTS.md` 已替换旧协议，旧项目配置已移出仓库并归档，专用旧规则文件已从当前树删除，旧评审记录保留为历史。JB 仓库本地合并 `db68db1`，收尾记号 `8aee6fe`，未推送。
+
+- `drover init jb-finetune` 已登记项目；`.drover.conf` 指向现有 `jbfinetune/main`，`TASK_FILE_DIR=docs/任务`，`TASK_GATE=1`，项目 loop 关闭。`drover list` 核对为空队列、无进行中任务。旧 T1–T8 均已完成或放弃，不迁移历史任务。
+- 这次是配置和协作规则迁移，尚未用真实 JB 开发任务端到端验证。下一件业务任务由用户决定；保留手动放行，不自行发 `next`、开 loop、推送或操作旧 herdsman 全局服务。
+- drover ROADMAP 第 4 层和本项目 `AGENTS.md` 的旧隔离边界已按用户决定更新。未改 corral、corral-dispatch、drover 业务代码、服务或其他项目。
+
+---
+
 ## 2026-09-23 —— T16 研究已交付，等待用户审阅与放行
 
 **这一节最新。** T16 研究记录在 `docs/任务/m25-dispatch-planning 主控自主拆分与派员数量研究.md`。只读核对现有项目规则、corral-dispatch 技能和 corral 契约；用历史/合成样例演练单路、分阶段并行、立即并行及开发/审查 agent 数量，并用合成工作单位核对依赖和并发算术。研究提交 `f94f460`，本地合并 `62abf79`，收尾记号 `92f9eaf`。研究 worktree 与分支已清理，没有创建 agent。

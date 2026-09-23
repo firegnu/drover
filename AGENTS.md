@@ -86,37 +86,25 @@ drover ──只依赖──> corral-dispatch（很薄：活干完会以合进 m
 - 推送、建 GitHub 远端、安装到 `~/.local/bin`。
 - 删除东西；关掉不是自己开的 agent。
 
-## 绝对不许碰（会弄坏正在用的东西）
+## 旧 herdsman 的隔离边界
 
-本机上还跑着**老的 herdsman**，它在推进一个真实项目。下面这些是它的，动了就坏：
+2026-09-23，用户已授权把真实 `jb-finetune` 迁入 corral / corral-dispatch / drover；该项目不再属于下面的禁止修改范围。旧 herdsman 的全局设施及其他项目仍独立保留，本项目的迁移不构成操作它们的授权：
 
 | 不许碰 | 是什么 |
 |---|---|
-| `~/Developer/personal_projs/jb-finetune` | **真的**那个项目，还跑在老 herdsman / herdr 上。一个字节都不要改 |
 | `~/Developer/personal_projs/herdsman` | drover 的前身，已冻结 |
-| `~/.review/` | 老 herdsman 的交接目录，**看板的默认输出和项目清单都在这里** |
+| `~/.review/` | 老 herdsman 的历史交接目录；不要更改旧队列、状态或其他项目记录 |
 | `~/wt/` | 老 herdsman 的评审 worktree |
 | herdr | 不要关窗格、不要 `herdr server stop`、不要往里面的 agent 送任何话 |
-| launchd 任务 `dev.herdsman.*` | 看板的定时生成和常驻服务，此刻正在运行 |
-| `~/.local/bin/{herdsman-init,review-board,review-map,review-task,request-review,review-archive}` | 老 herdsman **装出去的副本**，真实项目正在用的就是这几个 |
+| launchd 任务 `dev.herdsman.*` | 旧服务；不要启停或重配 |
+| `~/.local/bin/{herdsman-init,review-board,review-map,review-task,request-review,review-archive}` | 老 herdsman 装出去的副本；不要覆盖或删除 |
 | `~/.config/review/` | 老 herdsman 的全局配置 |
 
-### 装的路子已经整个删掉了
-
-本仓库原来从 herdsman 继承了 `install.sh` 和两个 launchd plist。**它们已经删除**，因为跑一次就会覆盖上面那几个装出去的命令、覆盖 `~/.config/review/`，并顶掉两个正在运行的 `dev.herdsman.*` 任务（那两个 plist 的 Label 就是它们的名字）——一条命令拆掉整套。
-
-所以现在**没有任何安装路径**，这是故意的：
-
-- **写**新的安装脚本是 D1 第 5 步的活（装到哪、叫什么、用不用 launchd，连同脚本改名一起定）。但**跑**它是另一回事：往 `~/.local/bin` 拷东西、动 launchd，在「先问人」那一节里，写完也要人点头才能执行。
-- 不要 `launchctl load / unload / bootstrap / bootout` 任何东西。
-- 不要往 `~/.local/bin` 拷任何文件，不要改 PATH。
-- 开发中要跑这些脚本，用仓库里的相对路径：`python3 ./bin/drover …`。
-
-老的那三个文件在 git 历史里（`git log --all -- install.sh`），要参考 launchd 怎么写可以去看，但不要照抄 Label 和路径。
+本仓库现在有独立的 `install.sh`，drover 后台服务已安装。以后重装、改变 launchd 或 PATH 仍按上方「先问人」边界办理；开发中运行脚本继续使用 `python3 ./bin/drover …`。不要运行旧安装脚本或触碰 `dev.herdsman.*`。
 
 ## 测试靶场
 
-要真跑的时候用 **`~/Developer/personal_projs/drover-sandbox`**（从 jb-finetune clone 来的副本，远端已全删，随便折腾）。看它顶上的 `DROVER-SANDBOX.md`。**不要用真的 jb-finetune。**
+破坏性或合成验证用 **`~/Developer/personal_projs/drover-sandbox`**（从 jb-finetune clone 来的副本，远端已全删）。看它顶上的 `DROVER-SANDBOX.md`。真实 jb-finetune 现已接入 drover，只对获授权的项目任务操作，不把它当测试靶场。
 
 ## 回复
 
