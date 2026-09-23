@@ -4,12 +4,12 @@
 
 ---
 
-## 2026-09-23 —— T17 看板 TUI 视觉探索已委派 Claude
+## 2026-09-23 —— T17 看板 TUI 视觉探索已交付，等待用户审阅与放行
 
-**这一节最新。** 用户已发出 T17，要求 Claude Code 探索现有 Kanban TUI 的视觉改进方向，不实施正式改版。任务文件为 `docs/任务/m26-kanban-visual-explore 看板 TUI 视觉探索.md`。主控已创建分支 `m26-kanban-visual-explore` 和 worktree `../drover-worktrees/m26-kanban-visual-explore`，委派 `drover/dev-kanban-visual-1`（Claude Code，常规档 `opus[1m]` / high）；路由结论为交叉审查「不要」。
+**这一节最新。** T17 研究记录和主控审查在 `docs/任务/m26-kanban-visual-explore 看板 TUI 视觉探索.md`。Claude Code `drover/dev-kanban-visual-1`（常规档 `opus[1m]` / high）提交最终修订 `022728b`；本地合并 `8177352`，主控审查 `6f7a377`，清理后收尾空提交 `b434d07`。交叉审查按路由结论未安排。
 
-- Claude 正在工作，已向主控挂完成提醒。下一步读取它的回复与任务文件、核对合成画面证据、主控审查；通过后本地合并并按项目规矩收尾。当前仍是手动放行模式，主控未代用户操作 `next/done/go/loop`、未改生产代码或服务，也未推送。
-- 探索应对照 T11/T12 已完成的视觉工作和当前合成画面；旧截图只能作历史对照。正式改版及涉及已定设计的方案由用户另行决定。
+- 研究建议先讨论「标题状态色 + 节标题去青」这个最小实现草案，再逐项考虑窄屏密度和断行；未批准实施。当前生产合成 PTY 演示由 Claude 和主控各跑 36 组，全过；缺当前真实终端截图，用户主题里的颜色与字体效果仍待目视。D1(b) 的「未达到 / 失败」颜色区分不能靠现有字段可靠判断，若要做须另定数据来源并审议已定设计。
+- 分支和 worktree 已清理，自开的 Claude 随工作目录删除一并关闭；`corral ls` 只剩 `corral/main` 和 `drover/main`。清理前它已回复 DONE、提交落盘、worktree 干净且无人接入，但 `corral status` 后来因 `ScheduleWakeup` 持续显示 `working`；用户明确确认它实际已 idle、状态有问题，主控据此完成清理。下一步由用户审阅报告、决定是否另排 UI 实施任务并按 `g` 放行 T17；主控未操作真实 `next/done/go/loop`，未改生产代码、ROADMAP、服务或配置，未推送。
 
 ---
 
