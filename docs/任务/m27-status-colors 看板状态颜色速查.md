@@ -54,3 +54,10 @@
 
 - 按主控审查修正：将 `Idle`、`Manual`、agent `idle` 分开说明，明确 agent `idle` 只表示本轮结束/空闲，任务可能仍进行中且不代表完成；将 agent `starting` 从 `working` 中拆出，说明其为启动中，可能尚未完成启动或正在等待信任框。
 - 核对：仅修改上述两处表格含义并追加本记录；未运行业务命令或全套测试，待提交前运行 `git diff --check`。
+
+## 主控审查
+
+- 结论：通过。初审 `111293f` 发现 Idle/Manual/agent idle 混述及 starting 含义不准，已交回原 agent；复核 `ade16d8` 两处均修正，符合 corral 契约和现有界面。
+- 对照 bin/drover-board 与 ROADMAP 最新补全条目，状态名、颜色及暂停/loop 的独立含义正确；同意仅补速查表、不扩展状态及明确失败证据边界的取舍，无待用户裁定事项。
+- 主控重跑 `git diff --check main...m27-status-colors` 通过；静态核对 14 个状态行、3 列及必需标签完整。产品改动只有 QUICKSTART 第 6 节，另有任务完成/审查记录；未跑全套测试或实际教程命令。
+- 已本地合并；后续清理开发 worktree、分支和自开 agent 并打收尾记号。未操作真实队列放行，不推送。
