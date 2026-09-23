@@ -4,9 +4,18 @@
 
 ---
 
+## 2026-09-23 —— T18 已合并收尾，等待用户放行
+
+**这一节最新。** QUICKSTART 第 6 节已补状态颜色速查表。Codex 轻档 `drover/dev-status-colors-1` 完成后，主控要求澄清任务 Idle、agent idle 与 starting 的区别；修订 `ade16d8` 审查通过，本地合并 `aa1dd22`，审查记录 `f8d0336`，收尾记号 `c9bc83c`。
+
+- 主控核对实现、ROADMAP 和 corral 契约，重跑差异检查并检查表格 14 行状态、3 列及必需标签；只改 QUICKSTART 的目标章节和任务/交接记录，不跑全套测试。详细记录在 `docs/任务/m27-status-colors 看板状态颜色速查.md`。
+- 开发 worktree/分支已清理，工作目录已删，自开的开发 agent 一并关闭；corral ls 只剩 `corral/main`、`drover/main`。未推送，未改代码、设计、配置、服务或其他项目，未操作真实 done/go/next/loop。用户自行按 g 核对放行；T16 后续讨论仍暂缓。
+
+---
+
 ## 2026-09-23 —— T18 已委派，补充看板颜色速查表
 
-**这一节最新。** 用户已发出 TASK T18，按现有流程交给新开的 `drover/dev-status-colors-1`（Codex 轻档 `gpt-5.6-luna / medium`），路由判轻档、无需交叉审查。任务文件为 `docs/任务/m27-status-colors 看板状态颜色速查.md`，任务提交 `0e69e03`；分支/worktree `m27-status-colors`。
+**（历史记录，现已合并收尾。）** 用户已发出 TASK T18，按现有流程交给新开的 `drover/dev-status-colors-1`（Codex 轻档 `gpt-5.6-luna / medium`），路由判轻档、无需交叉审查。任务文件为 `docs/任务/m27-status-colors 看板状态颜色速查.md`，任务提交 `0e69e03`；分支/worktree `m27-status-colors`。
 
 - 只补 QUICKSTART 第 6 节简短颜色速查表，开发 agent 在任务文件追加完成记录。主控收到 DONE 后核对实现、文案与改动范围，再本地合并、清理并打收尾记号；不跑全套测试。
 - 未代用户推进或放行，不改业务代码、设计、配置、服务或其他项目，不推送。完成后等用户放行。T16 后续讨论仍暂缓。
