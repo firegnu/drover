@@ -124,6 +124,21 @@ for colors in (True, False):
     assert any('等放行' in t and a & curses.A_DIM for _, _, t, a in screen.rows)
     assert any(t.startswith('放弃：') and not a & curses.A_DIM for _, _, t, a in screen.rows)
     assert any(t.startswith('已进行') and not a & curses.A_DIM for _, _, t, a in screen.rows)
+    assert B.COLORS['h1'] == B.COLORS['h2'] == curses.A_BOLD
+    assert B.COLORS['heading_ok'] == (B.COLORS.get('ok', 0) | curses.A_BOLD)
+    assert B.COLORS['heading_wait'] == (B.COLORS.get('wait', 0) | curses.A_BOLD)
+    assert any(t == '▶ 进行中' and a == B.COLORS['heading_ok'] for _, _, t, a in screen.rows)
+    assert any(t.startswith('  T42') and a == curses.A_BOLD for _, _, t, a in screen.rows)
+    assert any(t == '任务正文' and a == curses.A_BOLD for _, _, t, a in screen.rows)
+    for scene, label, kind in (('waiting', '■ 等你放行', 'heading_wait'),
+                               ('idle', '○ 空闲', 'h1')):
+        item, _ = fixture(scene)
+        small = Screen(24, 80)
+        B.draw(small, item, {'body_mouse': True})
+        assert any(t.startswith(label) and a == B.COLORS[kind] for _, _, t, a in small.rows)
+    compact = Screen(10, 40)
+    B.draw(compact, fixture('working')[0], {'body_mouse': True})
+    assert any(t == '▶ 进行中' and a == B.COLORS['heading_ok'] for _, _, t, a in compact.rows)
 
 # 历史续行与记账同列，不截断长标题，当前任务继续最突出。
 vm, _ = fixture('idle')
