@@ -896,7 +896,7 @@ def init_colors():
     COLORS.update(h1=curses.A_BOLD, h2=curses.A_BOLD,
                   heading_wait=curses.A_BOLD, heading_active=curses.A_BOLD, heading_idle=curses.A_BOLD,
                   sel=curses.A_BOLD | curses.A_REVERSE,
-                  key=curses.A_BOLD, bar=0, history=0, history_heading=0,
+                  key=curses.A_BOLD, inactive=curses.A_BOLD, bar=0, history=0, history_heading=0,
                   account=curses.A_DIM, line=curses.A_DIM)
     try:
         curses.start_color()
@@ -920,7 +920,8 @@ def init_colors():
     COLORS["bar"] = COLORS.get("dim", 0)
     COLORS["heading_wait"] = COLORS.get("wait", 0) | curses.A_BOLD
     COLORS["heading_active"] = COLORS.get("active", 0) | curses.A_BOLD
-    COLORS["heading_idle"] = COLORS.get("dim", 0) | curses.A_BOLD
+    COLORS["heading_idle"] = COLORS.get("accent", 0) | curses.A_BOLD
+    COLORS["inactive"] = COLORS.get("dim", 0) | curses.A_BOLD
     COLORS["sel"] = COLORS.get("sel", 0) | curses.A_BOLD
     COLORS["sel"] = COLORS.get("sel", 0) | curses.A_REVERSE
     if not extended:
@@ -954,6 +955,13 @@ def put_heading(stdscr, y, x, text, h, w, status, kind):
         put(stdscr, y, x + width(status), text[len(status):], h, w, "h1")
     else:
         put(stdscr, y, x, text, h, w, "h1")
+
+
+def status_color(state):
+    """同一状态在摘要与 agent 行使用同一种颜色；未知值不猜。"""
+    return {"Idle": "accent", "idle": "accent", "空闲": "accent",
+            "In progress": "active", "working": "active", "starting": "active",
+            "Ready to release": "wait", "等你放行": "wait", "blocked": "wait"}.get(state, "dim")
 
 
 def route_tier(rt):
@@ -1026,7 +1034,8 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         main.append(("h2", 0, f'Completion checks · {c["met"]}'))
         main.append(("dim", 2, c["progress"]))
         if c["waiting"]:
-            main.append(("wait", 2, "Checks passed; press g to release"))
+            main.append((("wait", (0, len("Checks passed"), "ok")) if presentation else "wait",
+                         2, "Checks passed; press g to release"))
         if c["route"]:
             rt = c["route"]
             main.append(("dim", 2, f'Routing {route_tier(rt)} · Cross-review {"yes" if rt["cross"] else "no"}'
@@ -1048,7 +1057,7 @@ def detail_sections(pv, body=None, presentation=False, history=None):
             tail = " · ".join(x for x in (
                 f'idle for {dur(a["since"])}' if a["state"] == "idle" and a["since"] else "",
                 a["where"]) if x)
-            color = "active" if a["state"] in ("working", "starting") else "wait" if a["state"] == "blocked" else "dim"
+            color = status_color(a["state"])
             start = len(a["name"]) + 2
             side.append((("", (start, start + len(a["state"]), color)) if presentation else color, 2,
                          f'{a["name"]}  {a["state"]}' + (f'  {tail}' if tail else "")))
@@ -1184,6 +1193,10 @@ def draw(stdscr, vm, state):
         heading, metrics = task_heading(pv), task_metrics(pv)
         heading_style = ("h1", (0, len(heading_status), heading_kind))
         metrics_style = ("dim", (len(metrics) - len("Hold on completion"), len(metrics), "wait")) if c and c["held"] else "dim"
+        if not c:
+            start = len(pv["name"] + " · ")
+            end = len(metrics) - len(f' · HEAD {pv["head"]}')
+            metrics_style = ("dim", (start, end, status_color(pv["state"])))
         prefix = [(heading_style, 0, heading)] if compact or width(heading) > cols else []
         if compact or width(metrics) > cols:
             prefix.append((metrics_style, 0, metrics))
@@ -1265,16 +1278,21 @@ def draw(stdscr, vm, state):
     if h < 5 or w < 20:
         put(stdscr, 0, 0, "Window too small", h, w)
         return
-    mode = (("Paused" if q["paused"] else "Manual" if not q["loop"] else q["mode"])
-            + (" · loop on" if q["loop"] else " · loop off")) if q else ""
-    head = " · ".join(t for t in ("drover", pv["name"] if pv else "0 projects", mode,
-                                  vm["health"]["text"], f'! Needs you {len(vm["waits"])}' if vm["waits"] else "") if t)
-    spans = []
-    if q and q["paused"]:
-        start = len("drover · " + pv["name"] + " · ")
-        spans.append((start, start + len("Paused"), "wait"))
+    head = "drover · " + (pv["name"] if pv else "0 projects")
+    parts = []
+    if q:
+        mode = "Paused" if q["paused"] else "Manual" if not q["loop"] else q["mode"]
+        parts.append((mode, "wait" if q["paused"] else "active" if mode == "Looping" else "accent"))
+        parts.append(("loop on" if q["loop"] else "loop off", "ok" if q["loop"] else "inactive"))
+    parts.append((vm["health"]["text"], "ok" if vm["health"]["ok"] else "bad"))
     if vm["waits"]:
-        spans.append((len(head) - len(f'! Needs you {len(vm["waits"])}'), len(head), "wait"))
+        parts.append((f'! Needs you {len(vm["waits"])}', "wait"))
+    spans = []
+    for text, color in parts:
+        if text:
+            start = len(head) + len(" · ")
+            head += " · " + text
+            spans.append((start, len(head), color))
     put(stdscr, 0, 1, head, h, w - 1, ("bar", *spans))
     if tabs:
         label = f'↑↓/jk [{sel + 1}/{len(ps)}] ▸ {pv["name"]}'

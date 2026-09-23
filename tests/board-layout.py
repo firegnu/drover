@@ -174,7 +174,7 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
 
     # Only status runs carry color, including after Unicode/Tab wrapping.
     for status, color in (('working', 'active'), ('starting', 'active'), ('blocked', 'wait'),
-                          ('idle', 'dim'), ('exiting', 'dim'), ('unknown', 'dim')):
+                          ('idle', 'accent'), ('exiting', 'dim'), ('unknown', 'dim')):
         item, _ = fixture('idle')
         queue = item['projects'][0]['queue']
         queue['crew'] = [dict(name='demo/中\tCafe\u0301', state=status, since=0, where='/synthetic/working')]
@@ -202,6 +202,40 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     B.draw(probe, item, {})
     assert any(t == 'Paused' and a == B.COLORS.get('wait', 0) for _, _, t, a in probe.rows)
     assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in probe.rows)
+
+    # 顶栏的模式、循环开关、连接健康各有独立状态；不从名字里的关键词取色。
+    for loop, paused, mode, mode_color in ((False, False, 'Manual', 'accent'),
+                                          (True, False, 'Looping', 'active'),
+                                          (True, False, 'Release mode', 'accent'),
+                                          (True, False, 'Auto mode', 'accent'),
+                                          (False, True, 'Paused', 'wait'),
+                                          (True, True, 'Paused', 'wait')):
+        for connected in (True, False):
+            item, _ = fixture('idle')
+            project = item['projects'][0]
+            project['name'] = 'loop off Manual 中'
+            project['queue'].update(loop=loop, paused=paused, mode=mode)
+            health = 'corral connected' if connected else 'corral unavailable'
+            item['health'] = {'ok': connected, 'text': health}
+            before = copy.deepcopy(item)
+            probe = Screen(32, 160)
+            B.draw(probe, item, {})
+            expected = ((mode, mode_color), ('loop on' if loop else 'loop off', 'ok' if loop else 'inactive'),
+                        (health, 'ok' if connected else 'bad'))
+            for text, kind in expected:
+                assert any(y == 0 and t == text and a == B.COLORS.get(kind, 0)
+                           for y, _, t, a in probe.rows), (text, kind)
+            assert any(y == 0 and t == 'drover · loop off Manual 中 · ' and a == B.COLORS['bar']
+                       for y, _, t, a in probe.rows)
+            assert any(t == 'Idle' and a == B.COLORS.get('accent', 0) for _, _, t, a in probe.rows)
+            assert any(t == '○ Idle' and a == B.COLORS['heading_idle'] for _, _, t, a in probe.rows)
+            assert item == before
+    assert B.COLORS['inactive'] & curses.A_BOLD
+    waiting, _ = fixture('waiting')
+    probe = Screen(32, 160)
+    B.draw(probe, waiting, {})
+    assert any(t == 'Checks passed' and a == B.COLORS.get('ok', 0) for _, _, t, a in probe.rows)
+    assert any(t == '; press g to release' and a == B.COLORS.get('wait', 0) for _, _, t, a in probe.rows)
 
 # Feedback is based on exit status, not success/failure words in user output.
 with patch.object(B.curses, 'start_color'), patch.object(B.curses, 'use_default_colors'), \
