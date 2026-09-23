@@ -71,7 +71,7 @@ def capture(screen, output):
             win.refresh()
             frame = [win.instr(y, 0).decode('utf-8') for y in range(h)]
             fits = w >= boundary
-            assert ('操作消息' in ''.join(frame)) != fits, (w, multi, frame)
+            assert ('Operation message' in ''.join(frame)) != fits, (w, multi, frame)
             if fits:
                 assert frame[-1].strip(' ') == expected, (w, multi, frame[-1])
                 assert sum(expected in line for line in frame) == 1

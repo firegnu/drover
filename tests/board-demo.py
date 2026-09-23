@@ -39,69 +39,69 @@ def fixture(scene="working", multi=False):
         "结算页目前不校验优惠券是否过期或已用尽。请在提交订单前调用 coupon.validate，失败时在优惠券输入框下方显示原因，并保留用户已填写的其他字段。",
         "", "仅修改结算页和对应测试，保留原有接口。"],
         "waiting": False, "held": False, "span": "1h12m", "commits": 3,
-        "on_main": 0, "route": route, "progress": "main 上 0 个提交，还没有提交落地", "met": "0/3",
+        "on_main": 0, "route": route, "progress": "0 commits on main; no changes landed yet", "met": "0/3",
         "criteria": [
-            {"name": "收尾记号", "ok": False, "why": "a1f3c2..main 里没有「收尾: 」开头的空提交"},
-            {"name": "main 前进了", "ok": False, "why": "送任务之后没有前进（基线 a1f3c2）"},
-            {"name": "这次建的分支都合进去了", "ok": False, "why": "还没合进 main: feat/coupon-check"},
-            {"name": "验收命令过了", "ok": None, "why": "没跑过（无有效核对记录）；按 g / drover go 核对并放行"}]}
+            {"name": "Completion marker", "ok": False, "why": "No empty commit starting with '收尾: ' in a1f3c2..main"},
+            {"name": "main advanced", "ok": False, "why": "Still at a1f3c2; no new commit since dispatch"},
+            {"name": "Task branches merged", "ok": False, "why": "Not merged into main: feat/coupon-check"},
+            {"name": "Check command passed", "ok": None, "why": "Not run (no valid check record); press g / run drover go"}]}
     todo = [{"id": f"T{i}", "title": title, "next": i == 43, "held": i == 45} for i, title in enumerate(
         ("订单列表支持按状态筛选", "导出 CSV 时包含退款记录", "清理旧的支付回调"), 43)]
     history = [{"id": f"T{i}", "title": title, "dropped": i == 39,
                 "reason": "供应商 API 需要企业账号，暂无法申请，改为手动录入。" if i == 39 else "",
                 "span": "48m", "range": "a1f3c2..b3c4d5", "commits": 2, "wait": "5m", "route": route}
                for i, title in ((41, "修复购物车数量为 0 时的崩溃"), (40, "统一金额格式化"), (39, "接入第三方地址补全"))]
-    q = {"mode": "放行模式", "loop": False, "paused": False, "gate": True, "awaiting": False,
+    q = {"mode": "Release mode", "loop": False, "paused": False, "gate": True, "awaiting": False,
          "counts": {"todo": 3, "doing": 1, "done": 2, "dropped": 1}, "card": card,
          "crew": [{"name": "demo/dev-1", "state": "working", "since": 0, "where": "wt/coupon"}],
          "todo": todo, "finished": history}
     pv = {"name": "demo-shop", "repo": "/synthetic/demo-shop", "dir": "/synthetic/handoff",
-          "head": "a1f3c2", "state": "进行中", "waiting": False, "needs_me": False,
+          "head": "a1f3c2", "state": "In progress", "waiting": False, "needs_me": False,
           "badge": "none", "age": "", "waits": [], "queue": q}
     msg = ""
     if scene == "sent":
-        msg = f'已送给 demo/main：{card["id"]} {card["title"]}'
+        msg = f'Sent to demo/main: {card["id"]} {card["title"]}'
     if scene == "failed":
-        card["criteria"][3].update(ok=False, why="pytest tests/checkout：退出码 1；优惠券已过期的提示与预期不符")
+        card["criteria"][3].update(ok=False, why="pytest tests/checkout: exit 1; coupon expiration message differs")
         card["met"] = "0/4"
-        msg = "未放行 · - 判据 3：退出码 1，优惠券已过期的提示与预期不符 · 完整输出：expected 已过期, got 无效优惠券"
+        msg = "Not released · - Check 3: exit 1; coupon expiration message differs · Output: expected expired, got invalid coupon"
     if scene == "waiting":
-        card.update(waiting=True, on_main=4, progress="main 上 4 个提交，最后一次 6m 前", met="4/4")
-        for row, why in zip(card["criteria"], ("b3c4d5 收尾: 优惠券完成", "a1f3c2 → b3c4d5", "没有未合并的分支", "pytest tests/checkout 过了")):
+        card.update(waiting=True, on_main=4, progress="4 commits on main; latest 6m ago", met="4/4")
+        for row, why in zip(card["criteria"], ("b3c4d5 收尾: 优惠券完成", "a1f3c2 → b3c4d5", "No unmerged branches", "pytest tests/checkout passed")):
             row.update(ok=True, why=why)
-        pv.update(state="等你放行", waiting=True, needs_me=True, badge="me", waits=["T42 做完了，核对已通过，等你按 g 放行"])
+        pv.update(state="Ready to release", waiting=True, needs_me=True, badge="me", waits=["T42 is complete; checks passed. Press g / run drover go to release it."])
         q.update(awaiting=True)
     if scene in ("idle", "empty", "warning"):
         q["card"] = None
-        pv["state"] = "空闲"
+        pv["state"] = "Idle"
     if scene == "empty":
         q["todo"] = []
         q["counts"]["todo"] = 0
     if scene in ("failed", "waiting", "idle", "empty", "warning"):
         q["crew"][0].update(state="idle", since=360)
     if scene == "warning":
-        msg = "已放行 · ↑ 没看到收尾记号，这次算你自己判断的 · 核对通过，已记完成并放行；请自行确认工作已收尾"
+        msg = "Released · ↑ No completion marker was found; this release is a manual judgment. Confirm that work is complete."
     if scene == "long":
         card["title"] += "，兼容中文、组合字符 e\u0301 与超长路径" * 5 + "【标题末尾】"
         card["body"] += [f"正文{i:02d}：" + "保持两个空格  与 Unicode 分支 feature/a\u00a0b\u2028c；" * 3 for i in range(16)] + ["【正文末尾】"]
-        card["criteria"][2]["why"] = "未合入：" + "feature/a\u00a0b\u2028c/" * 20 + "【判据末尾】"
+        card["criteria"][2]["why"] = "Not merged: " + "feature/a\u00a0b\u2028c/" * 20 + "【判据末尾】"
         q["crew"][0]["where"] = "/synthetic/" + "中文目录/" * 15 + "【路径末尾】"
         q["todo"] += [{"id": f"T{i}", "title": f"待办{i}完整条目", "next": False, "held": False} for i in range(46, 60)]
         q["finished"][-1]["reason"] += "保留完整失败理由。" * 40 + "【历史末尾】"
         q["counts"]["todo"] = len(q["todo"])
-        msg = "未放行 · - 判据未满足：" + "很长的拒绝原因必须完整可读；" * 20 + "【消息末尾】"
+        msg = "Not released · - Unmet check: " + "long rejection details must remain readable; " * 20 + "【消息末尾】"
     if scene == "body":
         card["body"] = [f"正文{i:02d}：鼠标移到这里，上下滚动；判据和其它区域保持位置。" for i in range(1, 38)] + ["【正文末尾】"]
     q["counts"]["doing"] = int(bool(q["card"] and not q["card"]["waiting"]))
     projects = [pv]
     if multi:
         other = copy.deepcopy(pv)
-        other.update(name="billing-api", repo="/synthetic/billing-api", needs_me=True, badge="me", waits=["主控空闲着，但判据还没满足"])
+        other.update(name="billing-api", repo="/synthetic/billing-api", needs_me=True, badge="me", waits=["Main agent idle; checks are unmet"])
         third = copy.deepcopy(pv)
         third.update(name="docs-site", repo="/synthetic/docs-site")
         third["queue"]["paused"] = True
         projects += [other, third]
-    return {"health": {"ok": True, "text": "corral 正常（合成）"}, "waits": [
+    return {"health": {"ok": True, "text": "corral connected (synthetic)"}, "waits": [
         {"project": p["name"], "text": t, "age": "6m"} for p in projects for t in p["waits"]], "projects": projects}, msg
 
 
@@ -172,7 +172,7 @@ def demo(screen, args):
         elif act[0] == "sel":
             state["sel"] = act[1]
         elif act[0] in ("run", "edit"):
-            state["msg"] = "合成演示：不执行命令、不打开编辑器"
+            state["msg"] = "Synthetic demo: commands and editors are disabled"
 
 
 def record(destination):

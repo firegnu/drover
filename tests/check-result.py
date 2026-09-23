@@ -113,7 +113,7 @@ class CheckResult(unittest.TestCase):
 
         screen = Screen()
         self.B.draw(screen, vm, {"sel": 0, "msg": ""})
-        self.assertTrue(any("验收命令过了" in line for line in screen.lines),
+        self.assertTrue(any("Check command passed" in line for line in screen.lines),
                         "必须实际绘制第 3 条，不能被视口或截断绕过")
 
     def test_nul_output_reaches_real_draw(self):
@@ -154,7 +154,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
             os.close(master)
         row, _ = self.display()
         self.assertIsNone(row["ok"])
-        self.assertIn("没跑过", row["why"])
+        self.assertIn("Not run", row["why"])
 
     def test_deep_json_and_parser_recursion(self):
         self.result.write_text("[" * 1200 + "0" + "]" * 1200)
@@ -165,7 +165,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
         with patch.object(self.B.json, "loads", side_effect=RecursionError("deep JSON")):
             card = self.B.card_vm(p, p["tasks"])
         self.assertIsNone(card["criteria"][3]["ok"])
-        self.assertIn("没跑过", card["criteria"][3]["why"])
+        self.assertIn("Not run", card["criteria"][3]["why"])
 
     def test_done_writes_result(self):
         # 正文里的「验收：…」只是散文：CHECK_CMD 是唯一来源（覆盖语法 2026-09-21 删了）。
@@ -326,8 +326,8 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                 row, text = self.display()
                 self.assertIs(row["ok"], ok)
                 self.assertIn("核对结果", row["why"])
-                self.assertIn("3m 前跑的", text)
-                self.assertIn(("✓" if ok else "✗") + " 验收命令过了", text)
+                self.assertIn("run 3m ago", text)
+                self.assertIn(("✓" if ok else "✗") + " Check command passed", text)
                 self.assertFalse(check_marker.exists(), "看板不得跑验收命令")
 
     def test_board_stale_results(self):
@@ -338,14 +338,14 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                 self.result.write_text(json.dumps(self.saved(**{key: value})))
                 row, text = self.display()
                 self.assertIsNone(row["ok"])
-                self.assertIn(reason, row["why"])
-                self.assertIn("– 验收命令过了", text)
-                self.assertNotIn("前跑的", text)
+                self.assertIn({"任务 id 不一致": "task ID changed", "main sha 不一致": "main SHA changed", "验收命令不一致": "check command changed"}[reason], row["why"])
+                self.assertIn("– Check command passed", text)
+                self.assertNotIn(" (run ", text)
 
     def test_board_missing_and_invalid_results(self):
         row, text = self.display()
         self.assertIsNone(row["ok"])
-        self.assertIn("没跑过", row["why"])
+        self.assertIn("Not run", row["why"])
         invalid = [b"not json", b"", b'{"ok":true}', b'[]', b'null', b'\xff']
         invalid += [json.dumps(self.saved(**{key: value})).encode() for key, value in
                     [("t", "yesterday"), ("t", float("nan")), ("t", float("inf")),
@@ -355,8 +355,8 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
                 self.result.write_bytes(raw)
                 row, text = self.display()
                 self.assertIsNone(row["ok"])
-                self.assertIn("没跑过", row["why"])
-                self.assertIn("– 验收命令过了", text)
+                self.assertIn("Not run", row["why"])
+                self.assertIn("– Check command passed", text)
 
     def test_record_and_reason_limits(self):
         for length, expected in ((4096, True), (4097, None), (2 * 1024 * 1024, None)):
@@ -402,8 +402,8 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
             self.result.write_text(json.dumps(self.saved(t=now + 86400)))
             row, text = self.display()
             self.assertIsNone(row["ok"])
-            self.assertIn("没跑过", row["why"])
-            self.assertNotIn("0s 前跑的", text)
+            self.assertIn("Not run", row["why"])
+            self.assertNotIn("run 0s ago", text)
             self.result.write_text(json.dumps(self.saved(t=now + 3)))
             self.assertIs(self.display()[0]["ok"], True)
             p = self.B.collect(str(self.projects))[0]
@@ -413,7 +413,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
             self.draw(vm)
         row = vm["projects"][0]["queue"]["card"]["criteria"][3]
         self.assertIs(row["ok"], True, "采集耗时不能把正常并发发布的记录误判为未来")
-        self.assertIn("1s 前跑的", row["name"])
+        self.assertIn("run 1s ago", row["name"])
 
     def test_check_row_is_selected_by_number(self):
         self.result.write_text(json.dumps(self.saved(ok=False, why="上次核对失败")))
@@ -433,13 +433,15 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
     def test_board_not_applicable_is_not_missing(self):
         self.configure("")
         missing, _ = self.display()
-        self.assertIn("没跑过", missing["why"])
+        self.assertIn("Not run", missing["why"])
         self.assertEqual(self.done().returncode, 8)
         row, text = self.display()
         self.assertIsNone(row["ok"])
-        self.assertIn("不适用", row["why"])
-        self.assertNotIn("没跑过", row["why"])
-        self.assertIn("前跑的", text)
+        self.assertIn("Not applicable", row["why"])
+        self.assertIn("No check command", row["why"])
+        self.assertNotIn("没有验收命令", row["why"])
+        self.assertNotIn("Not run", row["why"])
+        self.assertIn("run ", text)
 
     def test_done_report_and_failure_output(self):
         for cmd, code, check_line in [
@@ -537,7 +539,7 @@ curses.wrapper(lambda screen: B.draw(screen, vm, {'sel': 0, 'msg': ''}))
         self.assertEqual(saved["main"], self.sha)
         self.assertNotEqual(saved["main"], self.git("rev-parse", "main"))
         row, _ = self.display()
-        self.assertIn("main sha 不一致", row["why"])
+        self.assertIn("main SHA changed", row["why"])
 
     @contextmanager
     def observe_result_reads(self):

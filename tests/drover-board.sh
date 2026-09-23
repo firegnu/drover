@@ -156,9 +156,9 @@ is '"corral" in vm["health"]["text"]' True 'the health line names corral'
 # 「等人」的识别：eta 的主控空闲着，但 T8 的判据没满足（main 还停在发任务那一刻）
 # —— 它停在某处等人拍板。判据第 1、2 条是纯 git，刷新时照算；第 3 条可能是整套测试，不在这里跑。
 is 'len(p("eta/repo")["waits"])' 1 'an idle 主控 with unmet criteria is flagged as waiting on you'
-has '主控空闲着，但这件活的判据还没满足' 'the 等人 item says why'
+has 'the main agent is idle, but checks are unmet' 'the waiting item says why'
 is '"T8" in p("eta/repo")["waits"][0]' True 'the 等人 item names the task'
-is '"送任务之后没有前进" in p("eta/repo")["waits"][0]' True 'it says which criterion is unmet'
+is '"no new commit since dispatch" in p("eta/repo")["waits"][0]' True 'it says which criterion is unmet'
 # 每条「等你」都带接入命令。drover 自己不跑 attach——只用 send / status / ls，这只是给人抄的一句话。
 is '"corral attach eta/main" in p("eta/repo")["waits"][0]' True 'the 等人 item also says how to attach'
 
@@ -191,17 +191,17 @@ is 'p("eta/repo")["queue"]["card"]["title"]' '把 CSV 导入改成流式' 'and c
 # 正文只进显示——判据、收尾记号、loop_tick 都不碰它，和「路由：」行同一条边界。
 is 'p("eta/repo")["queue"]["card"]["body"]' "['约束：内存不超过 200MB']" 'and its body, so you can see what the task actually asks'
 is 'p("eta/repo")["queue"]["card"]["on_main"]' 0 'branch progress counts commits on main since the task went out'
-is '"还没有提交落地" in p("eta/repo")["queue"]["card"]["progress"]' True 'a stuck task shows nothing landed yet'
+is '"no changes landed yet" in p("eta/repo")["queue"]["card"]["progress"]' True 'a stuck task shows nothing landed yet'
 is 'p("eta/repo")["queue"]["card"]["commits"]' 1 'the card counts commits since the task started'
 # 完成判据：收尾记号排最前（它是依据，三条是门），前两条实时算（纯 git），第 3 条只写出命令、不跑
-is 'p("eta/repo")["queue"]["card"]["criteria"][0]["name"]' 收尾记号 'the wrap-up mark comes first: it is the 依据'
+is 'p("eta/repo")["queue"]["card"]["criteria"][0]["name"]' 'Completion marker' 'the wrap-up mark comes first: it is the evidence'
 is 'p("eta/repo")["queue"]["card"]["criteria"][0]["ok"]' False 'eta has no wrap-up mark yet'
 is 'p("eta/repo")["queue"]["card"]["met"]' 0/3 'eta: nothing met yet (wrap-up mark + the two cheap gates)'
 is 'p("eta/repo")["queue"]["card"]["criteria"][3]["ok"]' None 'the check command is never run while refreshing'
 is '"pytest -q" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'but the board still says what it is'
 # 说法是「没在刷新时跑」，不是「没在页面上跑」——页面没有了，看板每刷新一次就要算一遍判据
-is '"没在刷新时跑" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'and why it was skipped'
-is '"按 g / drover go 核对并放行" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'the check hint leads directly to g/go'
+is '"not run on refresh" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'and why it was skipped'
+is '"press g / drover go" in p("eta/repo")["queue"]["card"]["criteria"][3]["why"]' True 'the check hint leads directly to g/go'
 
 # 派出去的 agent：2026-09-22 用户要求显示状态（m5 删掉的是重量级的那版，见 crew_of 的注释）。
 # eta/m1-backend 在假 corral 的 ls 里、cwd 落在 eta 的 worktree 上——正该被认出来。
@@ -281,15 +281,15 @@ assert B.task_span(None, 5) == "" and B.task_span(5, None) == "", "缺一头就�
 pv = next(x for x in B.view_model(B.collect(sys.argv[2]))["projects"] if x["name"] == "eta/repo")
 # 判据理由压平旧 split() 识别的 ASCII 空白控制字符；Unicode 必须整串相等。
 for why, want in (
-    ("还没合进 main：feature/name\xa0", "✗ 门2：还没合进 main：feature/name\xa0"),
-    ("还没合进 main：feature/name\u2028tail", "✗ 门2：还没合进 main：feature/name\u2028tail"),
-    ("还没合进 main：feature/name\u2029tail", "✗ 门2：还没合进 main：feature/name\u2029tail"),
-    ("还没合进 main：feature/name\x85tail", "✗ 门2：还没合进 main：feature/name\x85tail"),
+    ("还没合进 main：feature/name\xa0", "✗ 门2: 还没合进 main：feature/name\xa0"),
+    ("还没合进 main：feature/name\u2028tail", "✗ 门2: 还没合进 main：feature/name\u2028tail"),
+    ("还没合进 main：feature/name\u2029tail", "✗ 门2: 还没合进 main：feature/name\u2029tail"),
+    ("还没合进 main：feature/name\x85tail", "✗ 门2: 还没合进 main：feature/name\x85tail"),
     ("\n".join(["git 查询失败：分支甲", "git 查询失败：分支乙"]),
-     "✗ 门2：git 查询失败：分支甲 git 查询失败：分支乙"),
-    ("错误甲\r\n\n\r错误乙\r错误丙\n\n错误丁", "✗ 门2：错误甲 错误乙 错误丙 错误丁"),
-    ("错误甲\t错误乙\x1f错误丙\v\f\x1c\x1d\x1e\n\r错误丁", "✗ 门2：错误甲 错误乙 错误丙 错误丁"),
-    ("\r\n  错误甲\t \n  错误乙  \r", "✗ 门2：   错误甲     错误乙   "),
+     "✗ 门2: git 查询失败：分支甲 git 查询失败：分支乙"),
+    ("错误甲\r\n\n\r错误乙\r错误丙\n\n错误丁", "✗ 门2: 错误甲 错误乙 错误丙 错误丁"),
+    ("错误甲\t错误乙\x1f错误丙\v\f\x1c\x1d\x1e\n\r错误丁", "✗ 门2: 错误甲 错误乙 错误丙 错误丁"),
+    ("\r\n  错误甲\t \n  错误乙  \r", "✗ 门2:    错误甲     错误乙   "),
 ):
     detail_pv = {**pv, "waits": [], "queue": {**pv["queue"], "crew": [], "finished": [],
         "card": {**pv["queue"]["card"], "criteria": [{"name": "门2", "ok": False, "why": why}]}}}
@@ -300,33 +300,33 @@ for why, want in (
 rows = [t for _, _, t in B.detail_lines(pv)]
 t5_title = next(t for t in rows if t.startswith("✓ T5 "))
 t5 = rows[rows.index(t5_title) + 1]
-assert "20m" in t5 and "0 个提交" in t5 and "等放行 5s" in t5, t5
-assert "重档（推翻）" in t5, f"历史指标要能看出档位和主控推翻了路由：{t5}"
+assert "20m" in t5 and "0 commits" in t5 and "Release wait 5s" in t5, t5
+assert "Heavy (overridden)" in t5, f"历史指标要能看出档位和主控推翻了路由：{t5}"
 # 标题与指标分两行；各自在 52 列内可读，不再让长标题挤掉记账。
 narrow = B.trunc(t5, 52)
-assert t5_title.startswith("✓ T5 给导出加进度条") and "重档" in narrow and "20m" in narrow, narrow
+assert t5_title.startswith("✓ T5 给导出加进度条") and "Heavy" in narrow and "20m" in narrow, narrow
 assert B.width(t5) <= 60, f"历史指标不要把标题混回去（{B.width(t5)} 格）：{t5}"
 t7_title = next(t for t in rows if t.startswith("✓ T7 "))
 t7 = rows[rows.index(t7_title) + 1]
-assert "40s" in t7 and "1 个提交" in t7, t7
-assert "等放行" not in t7, f"自动模式不该有等放行时长：{t7}"
-assert "档" not in t7, f"没有任务文件的那件不该冒出路由：{t7}"
+assert "40s" in t7 and "1 commit" in t7, t7
+assert "Release wait" not in t7, f"自动模式不该有等放行时长：{t7}"
+assert "Heavy" not in t7, f"没有任务文件的那件不该冒出路由：{t7}"
 assert not any("返工" in t for t in rows), rows
 PY2
 echo 'PASS 「做完的」栏记账：耗时 / 提交数 / 等放行时长，口径沿用 ago()'
 
-is 'p("eta/repo")["queue"]["mode"]' 放行模式 'release-mode chip'
-is 'p("theta/repo")["queue"]["mode"]' 暂停中 'paused chip replaces the mode chip'
+is 'p("eta/repo")["queue"]["mode"]' 'Release mode' 'release-mode chip'
+is 'p("theta/repo")["queue"]["mode"]' Paused 'paused chip replaces the mode chip'
 
 # theta：做完了、放行模式下还等着人放行
 is 'p("theta/repo")["queue"]["card"]["waiting"]' True 'the finished task waits for release'
-is 'p("theta/repo")["state"]' 等你放行 'and the project says so'
+is 'p("theta/repo")["state"]' 'Ready to release' 'and the project says so'
 is 'p("theta/repo")["badge"]' me 'awaiting release is on you'
 is '"补登录接口的回归测试（带" in p("theta/repo")["waits"][0] and "引号" in p("theta/repo")["waits"][0]' True \
    'awaiting release listed as waiting on you, title carried verbatim'
-is '"做完了，核对已通过" in p("theta/repo")["waits"][0]' True 'and it says the check already passed'
+is '"is complete; checks passed" in p("theta/repo")["waits"][0]' True 'and it says the check already passed'
 is '"drover go" in p("theta/repo")["waits"][0]' True 'the waiting item says how to release'
-is '"下一件会自动送进主控" in p("theta/repo")["waits"][0]' True 'and what happens after release'
+is '"Press g / run drover go to release it" in p("theta/repo")["waits"][0]' True 'and how to release'
 
 # 不接触真实项目
 lacks 'jb-finetune' 'real project leaked into the fixture board'
@@ -457,7 +457,7 @@ for w, x in ((120, 23), (80, 1)):                        # 同时覆盖有侧栏
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 20
     assert (8, x, "PgUp↑20 PgDn↓0") in screen.rows
-    assert any("还没有" in text for _, _, text in screen.rows)
+    assert any("None yet" in text for _, _, text in screen.rows)
     screen.h = 6                                         # 窗口变矮后继续下翻，夹在新底部
     B.draw(screen, vm, state)
     state["detail_offset"] = B.key_action(curses.KEY_NPAGE, long_pv, state)[1]
@@ -536,9 +536,9 @@ body_text = "\n".join(t for _, _, t in B.detail_lines(body_pv))
 assert "约束：内存不超过 200MB" in body_text, "任务正文没上屏"
 
 crew_text = "\n".join(t for _, _, t in crew_lines)
-assert "干活的 agent · 2" in crew_text, crew_text
+assert "Agents · 2" in crew_text, crew_text
 assert "eta/dev-1  working" in crew_text and "eta/rev-1  idle" in crew_text, crew_text
-assert "闲了" in crew_text, "idle 的要显示闲了多久"
+assert "idle for" in crew_text, "idle 的要显示闲了多久"
 assert "wt-m1" in crew_text, "要说清楚住在哪个 worktree"
 PY2
 echo 'PASS draw(): 翻页、夹限、切项目、缩窗和内容缩短；窄屏不越界，tui 执行翻页'

@@ -137,15 +137,15 @@ def session(root, w, h, multi, history=False, active=False):
 
         try:
             first = current = frame()
-            capable = not any('滚轮不可用' in text for text in current['lines'])
+            capable = not any('Mouse wheel unavailable' in text for text in current['lines'])
             if history:
                 check = runpy.run_path(str(Path(__file__).with_name('board-history-pty.py')))['check']
                 check(current, frame, wheel, resize, multi)
             elif capable:
                 if h >= 24:
                     assert len(body_rows(current)) == (6 if h == 24 else 8), label
-                    assert any('完成依据和判据' in text for text in current['lines']), label
-                    assert any('收尾记号' in text for text in current['lines']), label
+                    assert any('Completion checks' in text for text in current['lines']), label
+                    assert any('Completion marker' in text for text in current['lines']), label
                 for _ in range(30):
                     if body_rows(current):
                         break

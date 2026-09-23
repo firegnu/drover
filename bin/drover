@@ -48,6 +48,12 @@ import sys
 import time
 
 sys.dont_write_bytecode = True   # 下面按文件路径加载看板；别在 bin/ 里留下 __pycache__
+UI_ENGLISH = os.environ.get("DROVER_BOARD_ENGLISH") == "1"
+
+
+def ui(zh, en):
+    """Keep CLI output unchanged; the board requests English operation feedback."""
+    return en if UI_ENGLISH else zh
 
 
 def print_text(text):
@@ -84,11 +90,13 @@ def setup():
     global REPO, D, Q, S, PAUSED, LOOP, GATE, CHECK_CMD, MAIN_AGENT, DONE_MARK
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
-        die(2, "ERROR: 不在 git 仓库里。到项目目录里运行 drover。")
+        die(2, ui("ERROR: 不在 git 仓库里。到项目目录里运行 drover。",
+                  "ERROR: Not in a git repository. Run drover from a project directory."))
     REPO = r.stdout.strip()
     conf = B.parse_conf(f"{REPO}/.drover.conf")
     if not conf.get("HANDOFF_DIR"):
-        die(2, f"ERROR: {REPO}/.drover.conf 缺失或没有 HANDOFF_DIR，这个仓库还没接入 drover。")
+        die(2, ui(f"ERROR: {REPO}/.drover.conf 缺失或没有 HANDOFF_DIR，这个仓库还没接入 drover。",
+                  f"ERROR: {REPO}/.drover.conf is missing or has no HANDOFF_DIR; this repository is not configured."))
     D = conf["HANDOFF_DIR"]
     os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
@@ -172,25 +180,34 @@ def issue(t, again=False):
     text = task_text(t, again)
     if not MAIN_AGENT:
         print_text(text)
-        print("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）")
+        print(ui("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）",
+                 "\n(MAIN_AGENT is unset: the task was not sent. Paste the text above to the main agent.)"))
         return start_task(t, again)
     code, j = B.corral("send", MAIN_AGENT, text, timeout=60)
     if code == 0:
         rc = start_task(t, again)
-        extra = "（和人留的草稿拼在一起提交了，去看一眼）" if j.get("merged_with_draft") else ""
-        print(f"已送给 {MAIN_AGENT}：{t['id']} {t['title']}{extra}")
+        extra = (ui("（和人留的草稿拼在一起提交了，去看一眼）", " (merged with a human draft; inspect it)")
+                 if j.get("merged_with_draft") else "")
+        print(ui(f"已送给 {MAIN_AGENT}：{t['id']} {t['title']}{extra}",
+                 f"Sent to {MAIN_AGENT}: {t['id']} {t['title']}{extra}"))
         return rc
     if code == B.CORRAL_NOT_DELIVERED:
         # 契约：corral 不补发任何按键，**不要重送**。可能已经到了，所以照样记开始，
         # 但要显眼地报出来让人去看一眼——这是唯一一种「状态真的不确定」的情况。
         start_task(t, again)
-        print(f"送了但没确认送达：{t['id']} 已按发出记账，不会重送。去 {MAIN_AGENT} 那边看一眼收到没有。")
+        print(ui(f"送了但没确认送达：{t['id']} 已按发出记账，不会重送。去 {MAIN_AGENT} 那边看一眼收到没有。",
+                 f"Delivery unconfirmed: {t['id']} was recorded as sent and will not be retried. Check {MAIN_AGENT}."))
         return 8
     why = {B.CORRAL_NOT_FOUND: f"corral 里没有 {MAIN_AGENT}（主控没开，或者名字配错了）。drover 不会替你开它。",
            B.CORRAL_NOT_IDLE: f"{MAIN_AGENT} 不是 idle（{j.get('state', '?')}），它正忙：等它这一轮结束再送。",
            B.CORRAL_HUMAN_ACTIVE: f"最近 30 秒有人在 {MAIN_AGENT} 的接入窗口里操作：让着人，等会儿再送。",
            }.get(code, f"corral send 退出码 {code}：{j.get('message', '')}")
-    return loop_stop("blocked", f"STOP: {t['id']} 没送出去。{why}")
+    if UI_ENGLISH:
+        why = {B.CORRAL_NOT_FOUND: f"{MAIN_AGENT} was not found in corral. Drover will not start it.",
+               B.CORRAL_NOT_IDLE: f"{MAIN_AGENT} is {j.get('state', '?')}; wait until it is idle.",
+               B.CORRAL_HUMAN_ACTIVE: f"A person used {MAIN_AGENT} in the last 30 seconds; try later."}.get(
+                   code, f"corral send exit {code}: {j.get('message', '')}")
+    return loop_stop("blocked", ui(f"STOP: {t['id']} 没送出去。{why}", f"STOP: {t['id']} was not sent. {why}"))
 
 
 # ============================================================ 「做完了」的核对（只读）
@@ -210,9 +227,12 @@ def check_done(task):
     probs = []
     dirty = tree_dirty()
     if dirty:
-        probs.append("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else ""))
+        probs.append(("Uncommitted changes: " + ", ".join(dirty[:5]) + (" and more" if len(dirty) > 5 else ""))
+                     if UI_ENGLISH else
+                     ("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else "")))
     cmd, sha = CHECK_CMD, main_sha()
-    rows = B.criteria(REPO, task.get("main", ""), cmd)
+    rows = (B.criteria(REPO, task.get("main", ""), cmd, english=True) if UI_ENGLISH else
+            B.criteria(REPO, task.get("main", ""), cmd))
     # 发布和报告都复用决定能否 done 的这次核对。
     check = next(r for r in rows if r["n"] == 3)
     mark = f"{D}/.check-result"
@@ -224,16 +244,18 @@ def check_done(task):
         os.replace(tmp, mark)
     except (OSError, UnicodeError) as e:
         # 显示记录是可失败的旁路，不能成为完成判断或队列推进的新前提。
-        print(f"WARNING: 未能发布 {mark}：{e}", file=sys.stderr)
+        print(ui(f"WARNING: 未能发布 {mark}：{e}", f"WARNING: Could not publish {mark}: {e}"), file=sys.stderr)
     for r in rows:
         if r["ok"] is False:
-            probs.append(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}')
+            probs.append(ui(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}',
+                            f'Check {r["n"]} ({r["name"]}) is unmet: {r["why"]}'))
     return probs, rows
 
 
 def done_mark_row(task):
     """收尾记号：判「这件活完了」的唯一依据。求值在 drover-board.find_done_mark 里。"""
-    return B.find_done_mark(REPO, task.get("main", ""), DONE_MARK)
+    return (B.find_done_mark(REPO, task.get("main", ""), DONE_MARK, english=True) if UI_ENGLISH else
+            B.find_done_mark(REPO, task.get("main", ""), DONE_MARK))
 
 
 def criteria_report(task, rows):
@@ -245,7 +267,7 @@ def criteria_report(task, rows):
     out = []
     for r in [done_mark_row(task)] + rows:
         mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
-        out.append(f'  {mark} {r["n"] or "依据"} {r["name"]}：{r["why"]}')
+        out.append(f'  {mark} {r["n"] or ("Evidence" if UI_ENGLISH else "依据")} {r["name"]}{":" if UI_ENGLISH else "："}{r["why"]}')
     return out
 
 
@@ -369,7 +391,8 @@ def loop_stop(reason, msg):
     不需要记 pane，也不需要核对 pane 的身份（那是老 herdsman 往写手窗格里注入时才要的）。"""
     if loop_on():
         mark_loop_wait(reason)
-        return stop(msg + "（循环开着：条件满足后会自动接着往下发。）")
+        return stop(msg + ui("（循环开着：条件满足后会自动接着往下发。）",
+                             " (Loop is on: progression will resume automatically when conditions are met.)"))
     return stop(msg)
 
 
@@ -378,12 +401,15 @@ def cmd_next():
     if current:
         return issue(current, again=True)
     if os.path.exists(PAUSED):
-        return loop_stop("paused", "PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 drover resume 之后，再运行 drover next。")
+        return loop_stop("paused", ui("PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 drover resume 之后，再运行 drover next。",
+                                      "PAUSED: No new task will be sent. Run drover resume, then drover next."))
     if awaiting:
-        return loop_stop("release", f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 drover go 之后，再运行 drover next。")
+        return loop_stop("release", ui(f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 drover go 之后，再运行 drover next。",
+                                       f"WAIT: {awaiting} is complete and awaits release. Run drover go, then drover next."))
     todo = pending(tasks)
     if not todo:
-        return loop_stop("empty", f"EMPTY: 队列空了，没有新任务。往 {Q} 里加了任务之后会自动接着发。")
+        return loop_stop("empty", ui(f"EMPTY: 队列空了，没有新任务。往 {Q} 里加了任务之后会自动接着发。",
+                                     f"EMPTY: No pending tasks. Add a task to {Q} to continue."))
     b = todo[0]
     return issue({"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]})
 
@@ -393,16 +419,17 @@ def record_done(current, retry):
     tid = current["id"]
     probs, rows = check_done(current)
     if probs:
-        print(f"NOT DONE: {tid} 还没收尾：")
+        print(ui(f"NOT DONE: {tid} 还没收尾：", f"NOT DONE: {tid} is not complete:"))
         for p in probs:
             print_text(f"  - {p}")
-        print(f"处理完再运行 {retry}。")
+        print(ui(f"处理完再运行 {retry}。", f"Resolve these issues, then run {retry}."))
         return None
-    print(f"核对通过 {tid}：")
+    print(ui(f"核对通过 {tid}：", f"Checks passed for {tid}:"))
     for line in criteria_report(current, rows):
         print_text(line)
     if done_mark_row(current)["ok"] is not True:
-        print("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。")
+        print(ui("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。",
+                 "  ↑ No completion marker was found; this release is a manual judgment and cannot happen automatically."))
     held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
     gate = GATE or held                          # 循环开不开都听 TASK_GATE；打了「做完停」的不管什么模式都停
     append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
@@ -435,10 +462,12 @@ def cmd_go():
         if loop_on():
             mark_loop_wait("release")
     if not awaiting:
-        die(2, "ERROR: 没有在等放行的任务")
+        die(2, ui("ERROR: 没有在等放行的任务", "ERROR: No task is awaiting release"))
     append({"ev": "go", "id": awaiting})
-    print(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
-                                          else "运行 drover next 发下一件。"))
+    print(ui(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
+                                                  else "运行 drover next 发下一件。"),
+             f"Released after {awaiting}. " + ("Loop is on: the next task will be sent automatically." if loop_on()
+                                                else "Run drover next for the next task.")))
     return 0
 
 
@@ -570,27 +599,32 @@ def cmd_loop(on):
     if on:
         with open(LOOP, "w", encoding="utf-8") as f:     # 重写一遍：修改时间就是这次开循环的时刻（「连续做了几个」从这里数）
             f.write(f"{int(time.time())}\n")
-        print("循环已开：主控空闲下来自动核对判据、自动记 done。下一件发不发看 TASK_GATE——"
-              "放行模式（默认）等人 drover go，自动模式直接发。停在队列那一步（队列空 / 暂停 / 等放行）时，"
-              "条件满足后引擎会叫醒它。\n"
-              "  注意：真正推动它的是引擎进程 `drover loop`，这个开关只是告诉引擎「这个项目要转」。"
-              "引擎没跑，开关开着也不会动。\ndrover loop off 关掉。")
+        print(ui("循环已开：主控空闲下来自动核对判据、自动记 done。下一件发不发看 TASK_GATE——"
+                 "放行模式（默认）等人 drover go，自动模式直接发。停在队列那一步（队列空 / 暂停 / 等放行）时，"
+                 "条件满足后引擎会叫醒它。\n"
+                 "  注意：真正推动它的是引擎进程 `drover loop`，这个开关只是告诉引擎「这个项目要转」。"
+                 "引擎没跑，开关开着也不会动。\ndrover loop off 关掉。",
+                 "Loop enabled: the engine checks completed work when the main agent is idle. TASK_GATE controls release. "
+                 "The engine must be running separately; this switch only enables this project. Use drover loop off to disable it."))
     else:
         for f in (LOOP, f"{D}/.loop-wait"):
             if os.path.exists(f):
                 os.remove(f)
-        print("循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。")
+        print(ui("循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。",
+                 "Loop disabled; manual task progression is in effect."))
     return 0
 
 
 def cmd_pause(on):
     if on:
         open(PAUSED, "a").close()
-        print("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。")
+        print(ui("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。",
+                 "Paused: no new tasks will be sent."))
     else:
         if os.path.exists(PAUSED):
             os.remove(PAUSED)
-        print("已恢复：写手下次运行 drover next 会拿到新任务。")
+        print(ui("已恢复：写手下次运行 drover next 会拿到新任务。",
+                 "Resumed: the next drover next call can send a task."))
     return 0
 
 

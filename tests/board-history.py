@@ -398,7 +398,7 @@ class HistoryScroll(unittest.TestCase):
             if not count:
                 self.assertIsNone(self.state['history_rect'])
                 self.assertNotIn('history_anchor', self.state)
-                self.assertTrue(any('还没有' in line for line in self.screen.lines()))
+                self.assertTrue(any('None yet' in line for line in self.screen.lines()))
             else:
                 self.assertEqual(self.state['history_total'], 2 * count)
                 self.assertEqual(self.state['history_page'], 2 * count)

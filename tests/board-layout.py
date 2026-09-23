@@ -10,6 +10,8 @@ D = runpy.run_path(str(Path(__file__).with_name('board-demo.py')))
 B = D['load_board']()
 fixture = D['fixture']
 
+assert B.task_heading(fixture('working')[0]['projects'][0]).startswith('▶ In progress')
+
 
 class Screen:
     def __init__(self, h, w):
@@ -23,6 +25,23 @@ class Screen:
         self.rows.append((y, x, text, attr))
 
 
+# If all project-owned content is English, the board must not add Chinese UI text.
+english_vm, _ = fixture('working')
+english_pv = english_vm['projects'][0]
+english_q = english_pv['queue']
+english_q['card'].update(title='Coupon validation', body=['Validate the coupon before checkout.'])
+for row in english_q['card']['criteria']:
+    row['why'] = 'Example result'
+for i, task in enumerate(english_q['todo']):
+    task['title'] = f'Pending task {i + 1}'
+for i, task in enumerate(english_q['finished']):
+    task.update(title=f'Completed task {i + 1}', reason='External reason')
+for w, h in ((120, 32), (80, 24)):
+    english_screen = Screen(h, w)
+    B.draw(english_screen, english_vm, {'sel': 0, 'body_mouse': True})
+    assert not any('\u4e00' <= ch <= '\u9fff' for _, _, text, _ in english_screen.rows for ch in text)
+
+
 # 普通派发回执只有底部完整放得下时才去重；draw 不得清空原消息。
 vm, _ = fixture('working')
 card = vm['projects'][0]['queue']['card']
@@ -30,7 +49,7 @@ card['title'] = '中A\t完成'
 message = '已送给 demo/main：T42 中A\t完成'
 screen, state = Screen(32, 120), {'msg': message, 'body_mouse': True}
 B.draw(screen, vm, state)
-assert not any(t == '操作消息' for _, _, t, _ in screen.rows), '短普通回执在正文重复'
+assert not any(t == 'Operation message' for _, _, t, _ in screen.rows), '短普通回执在正文重复'
 assert [t for y, _, t, _ in screen.rows if y == 31] == [message.replace('\t', '    ')]
 assert state['msg'] == message
 
@@ -41,7 +60,7 @@ for w in (120, B.width(message.replace('\t', '    ')) + 2,
     screen.w = w
     B.draw(screen, vm, state)
     fits = w >= B.width(message.replace('\t', '    ')) + 2
-    assert any(t == '操作消息' for _, _, t, _ in screen.rows) != fits
+    assert any(t == 'Operation message' for _, _, t, _ in screen.rows) != fits
     footer = ''.join(t for y, _, t, _ in screen.rows if y == 31)
     if fits:
         assert footer == message.replace('\t', '    '), '末行丢尾字'
@@ -63,7 +82,7 @@ for message in ('已送给 demo/main：T42 中A\t完成（额外说明）',
         if offset == state['detail_offset']:
             break
         state['detail_offset'] = offset
-    assert '操作消息' in seen
+    assert 'Operation message' in seen
     assert message.replace('\t', '    ').replace('\n', '') in ''.join(seen)
     assert state['msg'] == message
 
@@ -71,7 +90,7 @@ for message in ('已送给 demo/main：T42 中A\t完成（额外说明）',
 card['title'] = '警告示例'
 state = {'msg': '已送给 demo/main：T42 警告示例'}
 B.draw(screen, vm, state)
-assert any(t == '操作消息' for _, _, t, _ in screen.rows)
+assert any(t == 'Operation message' for _, _, t, _ in screen.rows)
 
 # 换行不折叠空格或合法 Unicode；每行不超列宽、组合字符不被拆到下一行。
 for text in ('中文标题' * 15, 'a  b\u00a0c\u2028d' * 12, 'Cafe\u0301' * 20, '/very-long/path/' * 12):
@@ -112,33 +131,33 @@ for colors in (True, False):
         {'name': '不适用', 'ok': None, 'why': '未配置理由'}])
     screen = Screen(32, 160)
     B.draw(screen, vm, {'body_mouse': True})
-    for label, kind in (('✗ 名称：内含标点：', 'bad'), ('✓ 通过：', 'ok'), ('– 不适用：', 'dim')):
+    for label, kind in (('✗ 名称：内含标点: ', 'bad'), ('✓ 通过: ', 'ok'), ('– 不适用: ', 'dim')):
         assert any(t == label and a == B.COLORS.get(kind, 0) for _, _, t, a in screen.rows)
     for reason in ('✓ 理由：feature/a\u00a0b\u2028c Cafe\u0301', '成功理由', '未配置理由'):
         assert any(x == 27 and t == reason and a == 0 for _, x, t, a in screen.rows)
     assert all(not a & curses.A_REVERSE for y, _, _, a in screen.rows if y in (0, 30))
     assert any(t == 'g' and a & curses.A_BOLD for y, _, t, a in screen.rows if y == 30)
-    assert any(t == ' 核对放行 ' and a == 0 for y, _, t, a in screen.rows if y == 30)
+    assert any(t == ' Verify/Release ' and a == 0 for y, _, t, a in screen.rows if y == 30)
     assert any(t.startswith('▸') and a & curses.A_REVERSE for _, _, t, a in screen.rows)
-    assert any(t.startswith('历史 ·') and not a & curses.A_BOLD for _, _, t, a in screen.rows)
-    assert any('等放行' in t and a & curses.A_DIM for _, _, t, a in screen.rows)
-    assert any(t.startswith('放弃：') and not a & curses.A_DIM for _, _, t, a in screen.rows)
-    assert any(t.startswith('已进行') and not a & curses.A_DIM for _, _, t, a in screen.rows)
+    assert any(t.startswith('History ·') and not a & curses.A_BOLD for _, _, t, a in screen.rows)
+    assert any('Release wait' in t and a & curses.A_DIM for _, _, t, a in screen.rows)
+    assert any(t.startswith('Dropped:') and not a & curses.A_DIM for _, _, t, a in screen.rows)
+    assert any(t.startswith('Elapsed') and not a & curses.A_DIM for _, _, t, a in screen.rows)
     assert B.COLORS['h1'] == B.COLORS['h2'] == curses.A_BOLD
     assert B.COLORS['heading_ok'] == (B.COLORS.get('ok', 0) | curses.A_BOLD)
     assert B.COLORS['heading_wait'] == (B.COLORS.get('wait', 0) | curses.A_BOLD)
-    assert any(t == '▶ 进行中' and a == B.COLORS['heading_ok'] for _, _, t, a in screen.rows)
+    assert any(t == '▶ In progress' and a == B.COLORS['heading_ok'] for _, _, t, a in screen.rows)
     assert any(t.startswith('  T42') and a == curses.A_BOLD for _, _, t, a in screen.rows)
-    assert any(t == '任务正文' and a == curses.A_BOLD for _, _, t, a in screen.rows)
-    for scene, label, kind in (('waiting', '■ 等你放行', 'heading_wait'),
-                               ('idle', '○ 空闲', 'h1')):
+    assert any(t == 'Task details' and a == curses.A_BOLD for _, _, t, a in screen.rows)
+    for scene, label, kind in (('waiting', '■ Ready to release', 'heading_wait'),
+                               ('idle', '○ Idle', 'h1')):
         item, _ = fixture(scene)
         small = Screen(24, 80)
         B.draw(small, item, {'body_mouse': True})
         assert any(t.startswith(label) and a == B.COLORS[kind] for _, _, t, a in small.rows)
     compact = Screen(10, 40)
     B.draw(compact, fixture('working')[0], {'body_mouse': True})
-    assert any(t == '▶ 进行中' and a == B.COLORS['heading_ok'] for _, _, t, a in compact.rows)
+    assert any(t == '▶ In progress' and a == B.COLORS['heading_ok'] for _, _, t, a in compact.rows)
 
 # 历史续行与记账同列，不截断长标题，当前任务继续最突出。
 vm, _ = fixture('idle')
@@ -151,8 +170,9 @@ B.draw(screen, vm, {})
 history = [(x, t) for _, x, t, _ in screen.rows if '历史标题' in t or t.endswith('END')]
 assert history[0][0] == 3 and all(x == 5 for x, _ in history[1:])
 assert ''.join(t for _, t in history) == '✓ T41 ' + q['finished'][0]['title']
-assert any(x == 5 and '等放行' in t for _, x, t, _ in screen.rows)
-assert any(t.startswith('○ 空闲') and a & curses.A_BOLD for _, _, t, a in screen.rows)
+assert any(x == 5 and 'Standard · 48m' in t for _, x, t, _ in screen.rows)
+assert 'Release wait' in ''.join(t for _, _, t in B.history_lines(q['finished'][0], True))
+assert any(t.startswith('○ Idle') and a & curses.A_BOLD for _, _, t, a in screen.rows)
 
 for scene in D['SCENES']:
     for multi in (False, True):
@@ -163,18 +183,18 @@ for scene in D['SCENES']:
             B.draw(screen, vm, state)
             assert screen.rows or (h, w) == (1, 1)
             if (h, w) == (32, 120) and not multi and scene == 'working':
-                assert any(y == 5 and x == 1 and t == '任务正文' for y, x, t, _ in screen.rows)
-                assert any(y == 5 and x == 74 and t.startswith('干活的 agent') for y, x, t, _ in screen.rows)
-                assert not any(t == '项目' for _, _, t, _ in screen.rows)
+                assert any(y == 5 and x == 1 and t == 'Task details' for y, x, t, _ in screen.rows)
+                assert any(y == 5 and x == 74 and t.startswith('Agents') for y, x, t, _ in screen.rows)
+                assert not any(t == 'Projects' for _, _, t, _ in screen.rows)
             if (h, w) == (32, 120) and multi:
-                assert any(t == '项目' for _, _, t, _ in screen.rows)
+                assert any(t == 'Projects' for _, _, t, _ in screen.rows)
                 assert not any(x > 23 and t == '│' for _, x, t, _ in screen.rows)
             if (h, w) == (24, 80):
                 assert not any(t == '│' for _, _, t, _ in screen.rows)
                 if multi:
                     assert any(y == 1 and '[1/3]' in t for y, _, t, _ in screen.rows)
                 keys = ''.join(t for y, _, t, _ in screen.rows if y == h - 2)
-                assert keys == 'g 核对放行 n 下一件 p 暂停 a 加任务 l 循环 r 刷新 q 退出 ↑↓/jk PgUp/Dn'
+                assert keys == 'g Verify/Release n Next p Pause a Add l Loop r Refresh q Quit ↑↓/jk PgUp/Dn'
             # 真正翻所有页，包含辅助栏溢出。标记不能只存在于未绘制的逻辑行。
             seen = [[], [], []]
             while True:

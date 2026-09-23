@@ -132,7 +132,7 @@ assert finished["id"] == "T1" and finished["commits"] == 1, finished
 assert finished["span"] == B.dur(evs[1]["t"] - evs[0]["t"]), finished
 assert finished["wait"] == B.dur(evs[2]["t"] - evs[1]["t"]), finished
 lines = [line for _, _, line in B.detail_lines(pv)]
-assert any("T1 first" in title and "1 个提交" in metrics and "等放行" in metrics
+assert any("T1 first" in title and "1 commit" in metrics and "Release wait" in metrics
            for title, metrics in zip(lines, lines[1:])), lines
 assert checks() == 1, "board rendering must not run CHECK_CMD"
 dv("go", code=2)
@@ -250,11 +250,11 @@ for case, width in (("no-mark", 80), ("dirty", 80), ("marked", 80), ("no-mark", 
     with patch.object(B.curses, "curs_set"), patch.object(B.curses, "start_color", side_effect=B.curses.error):
         B.tui(screen, str(projects))
     msg = next(text for y, x, text in screen.frames[-1] if y == 23)
-    expected = {"no-mark": ("已放行", "没看到收尾记号", "这次算你自己判断的"),
-                "dirty": ("未放行", "工作区有没提交的改动", "work"),
-                "marked": ("已放行",)}[case]
+    expected = {"no-mark": ("Released", "No completion marker", "manual"),
+                "dirty": ("Not released", "Uncommitted changes"),
+                "marked": ("Released",)}[case]
     if case == "no-mark" and width == 40:
-        expected = ("已放行", "没看到收尾记号")
+        expected = ("Released", "No completion marker")
     missing.extend(f"{case}/{width}: missing {word!r} in TUI message {msg!r}" for word in expected if word not in msg)
     assert checks() == 1 and sends() == before, (case, checks(), sends())
     assert [e["ev"] for e in events()] == (["start"] if case == "dirty" else ["start", "done", "go"]), events()
@@ -267,7 +267,7 @@ with (repo / ".drover.conf").open("a") as f:
     f.write(f"CHECK_CMD=echo ran >> '{d}/checks'; printf 'failed\\twith\\nsecond'; exit 1\n")
 before, evs = sends(), events()
 msg = B.run_drover(str(repo), "go")
-assert "未放行" in msg and "判据 3" in msg and "退出码 1" in msg, msg
+assert "Not released" in msg and "Check 3" in msg and "exit 1" in msg, msg
 assert "failed with" in msg and "second" in msg, repr(msg)
 assert not any(c in msg for c in "\t\n\v\f\r\x1c\x1d\x1e\x1f"), repr(msg)
 vm = B.view_model(B.collect(str(projects)))
@@ -275,9 +275,9 @@ for width in (20, 40, 80, 2000):
     screen = Terminal(width)
     B.draw(screen, vm, {"sel": 0, "msg": msg})
     visible = next(text for y, x, text in screen.rows if y == 23)
-    assert "未放行" in visible, visible
+    assert "Not released" in visible, visible
     if width >= 40:
-        assert "判据 3" in visible, visible
+        assert "Check 3" in visible, visible
     if width == 2000:
         assert "failed with" in visible and "second" in visible, visible
 assert checks() == 1 and events() == evs and sends() == before, (checks(), events())
@@ -317,7 +317,7 @@ while True:
         break
     assert time.monotonic() < deadline, ("slow check did not exit", pid)
     time.sleep(0.05)
-assert "已放行" in msg, ("slow go must finish within the check budget", msg)
+assert "Released" in msg, ("slow go must finish within the check budget", msg)
 assert [e["ev"] for e in events()] == ["start", "done", "go"], events()
 assert checks() == 1 and sends() == before, (checks(), events())
 evs = events()
