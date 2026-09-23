@@ -1,6 +1,6 @@
 # T17：探索 Kanban TUI 的视觉改进方向
 
-2026-09-23，drover/main 拟交给 `drover/dev-kanban-visual`（Claude Code，常规档：`--model 'opus[1m]' --effort high`）。
+2026-09-23，drover/main 交给 `drover/dev-kanban-visual-1`（Claude Code，常规档：`--model 'opus[1m]' --effort high`）。
 路由：常规 / 交叉审查不要（路由：tier 拿不准；cross_review=不要；tier 按 corral-dispatch 默认选常规）。
 你是被委派的探索 agent：照本文件做，不再委派别的 agent。
 
@@ -13,7 +13,7 @@
 
 ## 工作区与边界
 
-- 计划 worktree：`../drover-worktrees/m26-kanban-visual-explore`，分支 `m26-kanban-visual-explore`，由主控从 main 创建；无需安装依赖。
+- worktree：`../drover-worktrees/m26-kanban-visual-explore`，分支 `m26-kanban-visual-explore`，由主控从 main 创建；无需安装依赖。
 - 只在本任务文件末尾追加研究记录和完成记录，并在该分支提交。生产代码、测试、ROADMAP、配置及其他任务文件均只读；不合并、不推送、不打收尾记号。
 - 本任务是视觉探索，**不实施正式改版**。不调整按键、任务判据、队列、刷新、滚动、消息语义或现有服务。若推荐方案需要改已定设计、引入第三方 TUI 库或改变 curses 架构，单列影响和成本交用户决定。
 - 不操作真实 `drover next/done/go/loop`、queue.md 或 tasks.state；不读写真实项目数据，不改 corral/corral-dispatch、后台服务、PATH 或安装；不关闭其他 agent，不按项目名批量杀进程。
@@ -40,7 +40,7 @@
 
 ## Claude 视觉探索
 
-2026-09-23，drover/dev-kanban-visual（Claude Code）。只读研究，未改生产、测试、ROADMAP。
+2026-09-23，drover/dev-kanban-visual-1（Claude Code）。只读研究，未改生产、测试、ROADMAP。
 
 **证据口径**：「合成画面」= 当前生产 `draw()` 在 `tests/board-demo.py` 合成场景下的最终屏幕文本/ANSI（真实 PTY + curses）以及同一 `draw()` 画进假屏幕后逐段标注的样式名；「旧截图」= 2026-09-22 用户三张截图，**早于 T12**，只作历史对照；「代码推断」= 读代码得出、未在真实终端目视。本轮**没有当前版本的真实终端截图**，颜色、字重、字体的最终观感都待用户确认。
 
@@ -234,3 +234,9 @@ drover 顶层队列串行，进行中永远只有一张卡。三等分之后正�
 - 产物：录制和 `stylemap.py` 在本会话草稿区 `/private/tmp/claude-501/…/scratchpad/`（`rec/`、`stylemap.py`），不进 git。
 - 限制：没有当前版本的真实终端截图。O1 里主题色的观感、O5 字体，都来自旧截图加代码推断。草图是示意。没做原型实现，也没量化「美观」。
 - 未做：没改生产、测试、ROADMAP、配置；没操作真实 `drover next/done/go/loop`、queue.md 或 tasks.state；没合并、推送、打收尾记号。`git diff --check` 通过。
+
+## 主控审查（2026-09-23）
+
+结论：研究记录通过，已本地合并；这只批准研究记录收尾，不批准任何 UI 或已定设计改动。审阅 `540fe50`、返工 `c0244b7` 和 `022728b`；确认分支仅追加本任务文件，工作区干净，`git diff --check` 通过。主控用当前生产 `draw()` 复跑 `board-demo.py --record`，36 组合成 PTY 录制全过；抽查 80×24、120×32 的 working/waiting 文本，核对代码中分栏阈值、判据颜色和换行规则。没有当前版本的真实终端截图，因此用户主题中的颜色和字体观感仍未验收。
+
+接受「先验证标题状态色与节标题去青、再逐项考虑密度」作为后续**讨论顺序**，不自动实施。D1(b) 需要新增可验证的「未达到 / 失败」来源，不能靠现有 `waiting`、`ok` 或判据序号猜；B 的排版项与 C 的三列重排均触及 ROADMAP 已定设计，须用户另行决定。未安排独立交叉审查（路由结论「不要」）。
