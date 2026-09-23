@@ -100,7 +100,7 @@ for text in ('中文标题' * 15, 'a  b\u00a0c\u2028d' * 12, 'Cafe\u0301' * 20, 
         assert all(i + B.width(t) <= cols for _, i, t in lines), (cols, lines)
         assert all(not t.startswith('\u0301') for _, _, t in lines)
 
-# 历史记账独立降低亮度；共用 dim 不变，只有选中项保留反色。
+# 少色退化保留历史记账 DIM；只有选中项保留反色。
 with patch.object(B.curses, 'start_color'), patch.object(B.curses, 'use_default_colors'), \
      patch.object(B.curses, 'init_pair'), patch.object(B.curses, 'color_pair', return_value=0):
     B.init_colors()
@@ -110,19 +110,28 @@ assert B.COLORS['account'] & curses.A_DIM
 assert B.COLORS['key'] & curses.A_BOLD
 assert B.COLORS['sel'] & curses.A_REVERSE
 
-# 最终绘制属性：普通/少色/无色均保留层级，理由不被标签里的标点或符号误识别。
+# 最终绘制属性：256 色/基础色/色对不足/无色均保留层级，理由不被标签里的标点或符号误识别。
 def limited_pair(number, *args):
     if number > 4:
         raise curses.error()
 
 
-for colors in (True, False):
+for colors, available, limited in ((True, 256, False), (True, 8, False),
+                                   (True, 8, True), (False, 0, False)):
     B.COLORS.clear()
     with patch.object(B.curses, 'start_color', side_effect=None if colors else curses.error), \
          patch.object(B.curses, 'use_default_colors'), \
-         patch.object(B.curses, 'init_pair', side_effect=limited_pair), \
+         patch.object(B.curses, 'COLORS', available, create=True), \
+         patch.object(B.curses, 'init_pair', side_effect=limited_pair if limited else None) as pairs, \
          patch.object(B.curses, 'color_pair', side_effect=lambda i: i << 8):
         B.init_colors()
+    if colors and not limited:
+        assert B.COLORS['h2'] & curses.A_COLOR, '栏目必须实际着色'
+        pairs.assert_any_call(7, 110 if available == 256 else curses.COLOR_CYAN, -1)
+        if available == 256:
+            pairs.assert_any_call(5, 248, -1)
+            pairs.assert_any_call(8, 245, -1)
+            assert not B.COLORS['account'] & curses.A_DIM, '固定灰不能再叠 DIM 变得过暗'
     vm, _ = fixture('working', True)
     q = vm['projects'][0]['queue']
     q['card'].update(body=[], route=None, criteria=[
@@ -137,18 +146,20 @@ for colors in (True, False):
         assert any(x == 27 and t == reason and a == 0 for _, x, t, a in screen.rows)
     assert all(not a & curses.A_REVERSE for y, _, _, a in screen.rows if y in (0, 30))
     assert any(t == 'g' and a & curses.A_BOLD for y, _, t, a in screen.rows if y == 30)
-    assert any(t == ' Verify/Release ' and a == 0 for y, _, t, a in screen.rows if y == 30)
+    assert any(t == ' Verify/Release ' and a == B.COLORS['bar'] for y, _, t, a in screen.rows if y == 30)
     assert any(t.startswith('▸') and a & curses.A_REVERSE for _, _, t, a in screen.rows)
-    assert any(t.startswith('History ·') and not a & curses.A_BOLD for _, _, t, a in screen.rows)
-    assert any('Release wait' in t and a & curses.A_DIM for _, _, t, a in screen.rows)
+    assert any(t.startswith('History ·') and a == B.COLORS['history_heading'] and not a & curses.A_BOLD
+               for _, _, t, a in screen.rows)
+    assert any('Release wait' in t and a == B.COLORS['account'] for _, _, t, a in screen.rows)
     assert any(t.startswith('Dropped:') and not a & curses.A_DIM for _, _, t, a in screen.rows)
     assert any(t.startswith('Elapsed') and not a & curses.A_DIM for _, _, t, a in screen.rows)
-    assert B.COLORS['h1'] == B.COLORS['h2'] == curses.A_BOLD
+    assert B.COLORS['h1'] == curses.A_BOLD
+    assert B.COLORS['h2'] == B.COLORS['key'] == (B.COLORS.get('accent', 0) | curses.A_BOLD)
     assert B.COLORS['heading_ok'] == (B.COLORS.get('ok', 0) | curses.A_BOLD)
     assert B.COLORS['heading_wait'] == (B.COLORS.get('wait', 0) | curses.A_BOLD)
     assert any(t == '▶ In progress' and a == B.COLORS['heading_ok'] for _, _, t, a in screen.rows)
     assert any(t.startswith('  T42') and a == curses.A_BOLD for _, _, t, a in screen.rows)
-    assert any(t == 'Task details' and a == curses.A_BOLD for _, _, t, a in screen.rows)
+    assert any(t == 'Task details' and a == B.COLORS['h2'] for _, _, t, a in screen.rows)
     for scene, label, kind in (('waiting', '■ Ready to release', 'heading_wait'),
                                ('idle', '○ Idle', 'h1')):
         item, _ = fixture(scene)

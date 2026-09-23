@@ -892,25 +892,34 @@ def init_colors():
     COLORS.update(h1=curses.A_BOLD, h2=curses.A_BOLD,
                   heading_wait=curses.A_BOLD, heading_ok=curses.A_BOLD,
                   sel=curses.A_BOLD | curses.A_REVERSE,
-                  key=curses.A_BOLD, bar=0, history=0, account=curses.A_DIM, line=curses.A_DIM)
+                  key=curses.A_BOLD, bar=0, history=0, history_heading=0,
+                  account=curses.A_DIM, line=curses.A_DIM)
     try:
         curses.start_color()
         curses.use_default_colors()
     except curses.error:
         return
+    extended = getattr(curses, "COLORS", 0) >= 256
     for i, (kind, fg) in enumerate([("wait", curses.COLOR_YELLOW), ("bad", curses.COLOR_RED),
                                     ("ok", curses.COLOR_GREEN), ("sel", curses.COLOR_YELLOW),
-                                    ("dim", -1), ("line", -1)], start=1):
+                                    ("dim", 248 if extended else -1), ("line", 240 if extended else -1),
+                                    ("accent", 110 if extended else curses.COLOR_CYAN),
+                                    ("account", 245 if extended else -1)], start=1):
         try:
             curses.init_pair(i, fg, -1)
         except curses.error:
             continue
         COLORS[kind] = curses.color_pair(i)
+    COLORS["h2"] = COLORS["key"] = COLORS.get("accent", 0) | curses.A_BOLD
+    COLORS["history_heading"] = COLORS.get("accent", 0)
+    COLORS["bar"] = COLORS.get("dim", 0)
     COLORS["heading_wait"] = COLORS.get("wait", 0) | curses.A_BOLD
     COLORS["heading_ok"] = COLORS.get("ok", 0) | curses.A_BOLD
     COLORS["sel"] = COLORS.get("sel", 0) | curses.A_BOLD
     COLORS["sel"] = COLORS.get("sel", 0) | curses.A_REVERSE
-    COLORS["line"] = COLORS.get("line", 0) | curses.A_DIM
+    if not extended:
+        COLORS["account"] = COLORS.get("account", 0) | curses.A_DIM
+        COLORS["line"] = COLORS.get("line", 0) | curses.A_DIM
 
 
 def put(stdscr, y, x, text, h, w, kind=""):
@@ -1032,7 +1041,7 @@ def detail_sections(pv, body=None, presentation=False, history=None):
                            + t["title"] + (" · Hold" if t["held"] else "")))
     if not q["todo"]:
         side.append(("dim", 2, "No pending tasks"))
-    side += [("", 0, ""), ("history" if presentation else "h2", 0, f'History · Done {q["counts"]["done"]}'
+    side += [("", 0, ""), ("history_heading" if presentation else "h2", 0, f'History · Done {q["counts"]["done"]}'
                           + (f' · Dropped {q["counts"]["dropped"]}' if q["counts"]["dropped"] else ""))]
     side += history if history is not None else [line for f in q["finished"] for line in history_lines(f, presentation)]
     if not q["finished"]:
