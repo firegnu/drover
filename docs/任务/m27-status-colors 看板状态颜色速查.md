@@ -42,3 +42,15 @@
 完成后在本文件追加「## 完成记录」：做了什么、核对命令及结果、取舍、待主控决定的问题。只在自己的分支提交 QUICKSTART 和完成记录。
 
 命令都在前台跑完，回复给出提交 SHA、改动与核对结果，最后一行写 DONE。主控负责审查、本地合并和收尾；之后由用户放行。
+
+## 完成记录
+
+- 做了什么：在 `docs/QUICKSTART.md` 第 6 节增加简短的英文看板状态颜色速查表，覆盖 Idle、Manual、Looping、loop on/off、agent 进行中/空闲、corral 正常/异常、Needs you、Ready to release、完成与明确失败；补充 loop 开关与队列暂停的独立性、`Idle`/`loop on`/未满足判据的语义边界，以及少色/无色终端的文字和符号回退。
+- 核对命令及结果：人工对照 `docs/ROADMAP.md` 生命周期状态配色、`bin/drover-board` 的 `init_colors`/`status_color`/`task_heading`/`detail_sections`/`draw` 与本节内容；`git diff --check` 通过；改动范围仅为本任务文件和 `docs/QUICKSTART.md`。
+- 取舍：不扩展状态、不改实现、不运行教程中的实际操作命令或全套测试；将明确失败限定为带结构化失败证据的 `✗`，普通未满足判据保持灰色。
+- 待主控决定的问题：无。
+
+## 返工记录
+
+- 按主控审查修正：将 `Idle`、`Manual`、agent `idle` 分开说明，明确 agent `idle` 只表示本轮结束/空闲，任务可能仍进行中且不代表完成；将 agent `starting` 从 `working` 中拆出，说明其为启动中，可能尚未完成启动或正在等待信任框。
+- 核对：仅修改上述两处表格含义并追加本记录；未运行业务命令或全套测试，待提交前运行 `git diff --check`。
