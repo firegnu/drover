@@ -4,9 +4,20 @@
 
 ---
 
+## 2026-09-24 —— 看板和 corral board 对齐的显示细化已合并
+
+**这一节最新。** 用户把 corral board 和本看板上下叠着用，要求在不改逻辑和显示信息的前提下做精致些。由 corral 那边的会话按用户批准的设计稿直接实施（没走队列、没开 agent），分支 `board-polish` 提交 `b1ee049`，本地合并 `bb68092`。设计和理由在 ROADMAP「和 corral board 对齐的显示细化」。
+
+- 项目栏选中改深灰底 + 蓝 `▸`，`!` 单独黄；顶栏 `drover` 粗体、点号线条灰；节标题数字退成记账灰；按键栏放得下时空两格；翻页提示靠右。文字、阈值、按键、判据不变。
+- 四个 shell 套件和七个看板 Python 套件通过；`board-layout.py`、`drover-board.sh` 里写死旧样式的断言改成精确核对新样式。90 帧合成画面前后逐帧比对，只有按键栏间距和翻页提示位置变了；36 组 PTY 演示通过。用户已看过演示并同意合并。
+- **改动前就红、这次没碰的两个测试**：`tests/board-history-pty.py` 还在找英文界面前的「放弃：」；`tests/board-mouse-decode.py` 不带 `--record` 直接断言失败。
+- 合并时 T18 还在等放行，这两个提交会算进 T18 的记账；用户知情后同意先合。worktree、分支已清，未推送。重开看板即可生效。
+
+---
+
 ## 2026-09-23 —— T18 已合并收尾，等待用户放行
 
-**这一节最新。** QUICKSTART 第 6 节已补状态颜色速查表。Codex 轻档 `drover/dev-status-colors-1` 完成后，主控要求澄清任务 Idle、agent idle 与 starting 的区别；修订 `ade16d8` 审查通过，本地合并 `aa1dd22`，审查记录 `f8d0336`，收尾记号 `c9bc83c`。
+**（T18 仍等用户放行。）** QUICKSTART 第 6 节已补状态颜色速查表。Codex 轻档 `drover/dev-status-colors-1` 完成后，主控要求澄清任务 Idle、agent idle 与 starting 的区别；修订 `ade16d8` 审查通过，本地合并 `aa1dd22`，审查记录 `f8d0336`，收尾记号 `c9bc83c`。
 
 - 主控核对实现、ROADMAP 和 corral 契约，重跑差异检查并检查表格 14 行状态、3 列及必需标签；只改 QUICKSTART 的目标章节和任务/交接记录，不跑全套测试。详细记录在 `docs/任务/m27-status-colors 看板状态颜色速查.md`。
 - 开发 worktree/分支已清理，工作目录已删，自开的开发 agent 一并关闭；corral ls 只剩 `corral/main`、`drover/main`。未推送，未改代码、设计、配置、服务或其他项目，未操作真实 done/go/next/loop。用户自行按 g 核对放行；T16 后续讨论仍暂缓。
