@@ -1324,8 +1324,10 @@ def draw(stdscr, vm, state):
             start = len(pv["name"] + " · ")
             end = len(metrics) - len(f' · HEAD {pv["head"]}')
             metrics_style = ("dim", (start, end, status_color(pv["state"])))
-        prefix = [(heading_style, 0, heading)] if compact or width(heading) > cols and (c or not narrow) else []
-        if compact or width(metrics) > cols and (c or not narrow):
+        # 窄屏 header 画的是 Tab 展开后的副本，放不放得下也按展开后的宽度判断
+        fits = (lambda text: width(text.replace("\t", "    ")) <= cols) if narrow else (lambda text: width(text) <= cols)
+        prefix = [(heading_style, 0, heading)] if compact or not fits(heading) and (c or not narrow) else []
+        if compact or not fits(metrics) and (c or not narrow):
             prefix.append((metrics_style, 0, metrics))
         message = ([(msg_kind, 0, "Operation message")]
                    + [("", 2, line) for line in msg.split("\n")] + [("", 0, "")]

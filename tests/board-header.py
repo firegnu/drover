@@ -136,6 +136,21 @@ for scene, multi, vm, msg in variants():
         B.draw(screen, vm, {'sel': 0, 'msg': msg, 'body_mouse': True})
         assert row(screen, 0).startswith(' drover · '), (scene, h, w)
 
+# Tab 展开后才超宽的临界标题/指标：判断要不要补完整副本，必须按展开后的显示宽度（主控首轮审查）
+# 标题：52 列（内容宽 50）下原宽 48–50、展开后 51–53；指标：路由档位带 Tab，73–75 列同样落在临界区
+for w, n, tier in [(52, n, '常规') for n in (25, 26, 27)] + [(w, 25, 'Y' * 10 + '\tEND') for w in (73, 74, 75)]:
+    for multi in (False, True):
+        vm, _ = fixture('working', multi)
+        pv = vm['projects'][0]
+        pv['queue']['card']['title'] = 'X' * n + '\tEND'
+        pv['queue']['card']['route']['tier'] = tier
+        original = copy.deepcopy(vm)
+        heads, details = pages(Screen(24, w), vm, {'sel': 0, 'body_mouse': True})
+        for text in (B.task_heading(pv), B.task_metrics(pv)):
+            text = text.replace('\t', '    ')
+            assert text in ' '.join(heads) or text in details, (w, n, multi, text, heads)
+        assert vm == original
+
 # 52 列空闲：示意的三行
 screen = Screen(24, 52)
 B.draw(screen, fixture('empty', True)[0], {'sel': 0})

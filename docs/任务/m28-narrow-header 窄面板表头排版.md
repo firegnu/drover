@@ -88,3 +88,11 @@ HEAD a1f3c2 · corral connected
 - 52 列下告警全亮时（待处理+连接异常+Paused+loop），项目名截到 `demo-s…`，全名在 Status 块。
 - 宽屏顶栏的项目名 Tab 原本就没展开（旧行为，不在本任务范围），新测试只断言窄屏 header 无 Tab。
 - 用户常用终端的实际观感待用户目视。
+
+### 返工（主控首轮审查：Tab 展开后的标题完整性）
+
+- 问题确认：窄屏第二、三行画的是 Tab 展开成四空格后的副本并按展开宽度截断，但 `draw` 判断「要不要在详情开头补完整标题/指标」仍用未展开的 `width(heading)`。原宽刚好放得下、展开后放不下时，header 截断了，详情里又没有副本。
+- RED：`tests/board-header.py` 新增临界用例。标题用 `'X' * n + '\tEND'`，n 取 25/26/27，52 列（内容宽 50，原宽 48–50，展开后 51–53）；指标在路由档位里放 `'Y' * 10 + '\tEND'`，73/74/75 列（原宽 71，展开后 74）。单/多项目各一遍，翻完所有详情页，要求展开后的完整标题/指标能读到、VM 不变。修前标题用例在 52 列 n=25 失败，只跑指标用例在 73 列失败，原因都是完整原文不可达。
+- 修复（`bin/drover-board`，只动 draw 里补副本的判断）：窄屏时按 Tab 展开后的显示宽度判断标题和指标放不放得下；宽屏和矮屏仍用原来的 `width()`，VM 与共享文本不变。
+- 定向核对同类「展开 / 预算不一致」：`narrow_header` 里项目名、第二行标题、第三行指标都是先展开再算宽度、再截断、再比较是否需要副本，前后一致；右侧状态标签、空闲句、HEAD、连接文字都是代码里的固定文字，不含 Tab。其他控制字符（如 ESC）的显示宽度是全看板既有的问题，不在本次范围。
+- 重跑：board-header、board-layout、board-body-scroll、board-history、board-body-pty、board-tab-pty、check-result、list-output、board-mouse-decode --record 通过；criteria / drover / install / drover-board 四个 shell 套件通过；board-history-pty 仍是已知的「放弃：」旧问题。合成逐帧：窄屏 144、宽屏 72、矮屏 48 组与 `3c502ca` 完全一致（普通场景不含临界 Tab），宽屏、矮屏与改动前一致。PTY 重录：默认 48 组 + 窄屏 168 组全部 PASS，证据路径不变（`/private/tmp/drover-m28-narrow/` 等，日志 `/private/tmp/drover-m28-evidence/r2-*.log`）。
