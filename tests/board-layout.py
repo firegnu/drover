@@ -138,8 +138,9 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
         B.init_colors()
     if colors and not limited:
         assert B.COLORS['h2'] & curses.A_COLOR, '栏目必须实际着色'
-        pairs.assert_any_call(7, 110 if available == 256 else curses.COLOR_CYAN, -1)
+        pairs.assert_any_call(7, 180 if available == 256 else -1, -1)
         if available == 256:
+            pairs.assert_any_call(21, 180, 237)
             pairs.assert_any_call(5, 248, -1)
             pairs.assert_any_call(8, 245, -1)
             assert not B.COLORS['account'] & curses.A_DIM, '固定灰不能再叠 DIM 变得过暗'

@@ -907,7 +907,7 @@ def init_colors():
     for i, (kind, fg) in enumerate([("wait", curses.COLOR_YELLOW), ("bad", curses.COLOR_RED),
                                     ("ok", curses.COLOR_GREEN), ("sel", curses.COLOR_YELLOW),
                                     ("dim", 248 if extended else -1), ("line", 240 if extended else -1),
-                                    ("accent", 110 if extended else curses.COLOR_CYAN),
+                                    ("accent", 180 if extended else -1),  # 沙色 #D7AF87
                                     ("account", 245 if extended else -1),
                                     ("active", 81 if extended else curses.COLOR_CYAN)], start=1):
         try:
@@ -915,8 +915,8 @@ def init_colors():
         except curses.error:
             continue
         COLORS[kind] = curses.color_pair(i)
-    if extended:  # 项目栏选中行：深灰底（同 corral board 选中行），▸ 蓝、! 黄；少色终端沿用整块反色
-        for i, (kind, fg) in enumerate([("rail_sel", -1), ("rail_mark", 110), ("rail_need", curses.COLOR_YELLOW)], start=20):
+    if extended:  # 项目栏选中行：深灰底（同 corral board 选中行），▸ 沙色、! 黄；少色终端沿用整块反色
+        for i, (kind, fg) in enumerate([("rail_sel", -1), ("rail_mark", 180), ("rail_need", curses.COLOR_YELLOW)], start=20):
             try:
                 curses.init_pair(i, fg, 237)
             except curses.error:
