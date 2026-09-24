@@ -915,6 +915,13 @@ def init_colors():
         except curses.error:
             continue
         COLORS[kind] = curses.color_pair(i)
+    if extended:  # 项目栏选中行：深灰底（同 corral board 选中行），▸ 蓝、! 黄；少色终端沿用整块反色
+        for i, (kind, fg) in enumerate([("rail_sel", -1), ("rail_mark", 110), ("rail_need", curses.COLOR_YELLOW)], start=20):
+            try:
+                curses.init_pair(i, fg, 237)
+            except curses.error:
+                break
+            COLORS[kind] = curses.color_pair(i) | curses.A_BOLD
     COLORS["h2"] = COLORS["key"] = COLORS.get("accent", 0) | curses.A_BOLD
     COLORS["history_heading"] = COLORS.get("accent", 0)
     COLORS["bar"] = COLORS.get("dim", 0)
@@ -1014,6 +1021,12 @@ def history_lines(f, presentation=False):
              f'Dropped: {f["reason"]}' if f["dropped"] else acct)]
 
 
+def section(kind, text, presentation):
+    """节标题一行。绘制时只有名字用栏目色，「· 数字」退成记账灰；默认格式不变。"""
+    at = text.find(" · ")
+    return ((kind, (at, len(text), "account")) if presentation and at > 0 else kind), 0, text
+
+
 def detail_sections(pv, body=None, presentation=False, history=None):
     """主辅栏逻辑行；默认保留共享详情格式，绘制时才分开判据标签和理由。"""
     main, side = [], []
@@ -1031,7 +1044,7 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         main += body if body is not None else [("", 2, ln) if ln else ("", 0, "")
                                               for ln in c.get("body") or []]
         main.append(("", 0, ""))
-        main.append(("h2", 0, f'Completion checks · {c["met"]}'))
+        main.append(section("h2", f'Completion checks · {c["met"]}', presentation))
         main.append(("dim", 2, c["progress"]))
         if c["waiting"]:
             main.append((("wait", (0, len("Checks passed"), "ok")) if presentation else "wait",
@@ -1052,7 +1065,7 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         main.append(("", 0, ""))
     crew = q.get("crew") or []
     if crew:
-        side.append(("h2", 0, f'Agents · {len(crew)}'))
+        side.append(section("h2", f'Agents · {len(crew)}', presentation))
         for a in crew:
             tail = " · ".join(x for x in (
                 f'idle for {dur(a["since"])}' if a["state"] == "idle" and a["since"] else "",
@@ -1062,7 +1075,7 @@ def detail_sections(pv, body=None, presentation=False, history=None):
             side.append((("", (start, start + len(a["state"]), color)) if presentation else color, 2,
                          f'{a["name"]}  {a["state"]}' + (f'  {tail}' if tail else "")))
         side.append(("", 0, ""))
-    side.append(("h2", 0, f'Up next · {q["counts"]["todo"]}'))
+    side.append(section("h2", f'Up next · {q["counts"]["todo"]}', presentation))
     for i, t in enumerate(q["todo"]):
         prefix = f'{i + 1}. ' + ("▸ Next · " if t["next"] else "")
         text = prefix + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"] + (" · Hold" if t["held"] else "")
@@ -1074,8 +1087,8 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         side.append((("", *spans) if presentation else "", 2, text))
     if not q["todo"]:
         side.append(("dim", 2, "No pending tasks"))
-    side += [("", 0, ""), ("history_heading" if presentation else "h2", 0, f'History · Done {q["counts"]["done"]}'
-                          + (f' · Dropped {q["counts"]["dropped"]}' if q["counts"]["dropped"] else ""))]
+    side += [("", 0, ""), section("history_heading" if presentation else "h2", f'History · Done {q["counts"]["done"]}'
+                                  + (f' · Dropped {q["counts"]["dropped"]}' if q["counts"]["dropped"] else ""), presentation)]
     side += history if history is not None else [line for f in q["finished"] for line in history_lines(f, presentation)]
     if not q["finished"]:
         side.append(("dim", 2, "None yet"))
@@ -1287,12 +1300,12 @@ def draw(stdscr, vm, state):
     parts.append((vm["health"]["text"], "ok" if vm["health"]["ok"] else "bad"))
     if vm["waits"]:
         parts.append((f'! Needs you {len(vm["waits"])}', "wait"))
-    spans = []
+    spans = [(0, len("drover"), "h1"), (len("drover"), len("drover · "), "line"), (len("drover · "), len(head), "")]
     for text, color in parts:
         if text:
             start = len(head) + len(" · ")
             head += " · " + text
-            spans.append((start, len(head), color))
+            spans += [(start - len(" · "), start, "line"), (start, len(head), color)]
     put(stdscr, 0, 1, head, h, w - 1, ("bar", *spans))
     if tabs:
         label = f'↑↓/jk [{sel + 1}/{len(ps)}] ▸ {pv["name"]}'
@@ -1306,7 +1319,14 @@ def draw(stdscr, vm, state):
         for i in range(first, min(len(ps), first + rows)):
             p = ps[i]
             label = ("▸" if i == sel else " ") + ("!" if p["needs_me"] else " ") + p["name"]
-            put(stdscr, 3 + i - first, 1, label, h, rail, "sel" if i == sel else ("wait" if p["needs_me"] else ""))
+            if "rail_sel" not in COLORS:
+                put(stdscr, 3 + i - first, 1, label, h, rail, "sel" if i == sel else ("wait" if p["needs_me"] else ""))
+                continue
+            # 只有 ! 是黄的，名字默认色；选中行底色铺满这一栏
+            on = i == sel
+            label += " " * max(0, rail - 1 - width(label)) if on else ""
+            put(stdscr, 3 + i - first, 1, label, h, rail, ("rail_sel" if on else "", (0, 1, "rail_mark" if on else ""),
+                                                          (1, 2, "rail_need" if on else "wait")))
         for y in range(2, bot + 1):
             put(stdscr, y, rail + 1, "│", h, w, "line")
     if not compact:
@@ -1327,16 +1347,24 @@ def draw(stdscr, vm, state):
         for y in range(top, bot + 1):
             put(stdscr, y, x + left + 1, "│", h, w, "line")
     if total > room:
-        put(stdscr, bot, x, f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}", h, w - 1, "dim")
+        hint = f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}"
+        put(stdscr, bot, max(x, x + cols - width(hint)), hint, h, w - 1, "dim")  # 靠右，像滚动指示
     if not compact:
+        keys = (("g", "Verify/Release"), ("n", "Next"), ("p", "Pause"), ("a", "Add"), ("l", "Loop"),
+                ("r", "Refresh"), ("q", "Quit"), ("↑↓/jk", ""), ("PgUp/Dn", ""))
+        # 放得下时项与项之间空两格（同 corral board 底栏）；放不下退回一格，不会更早截掉按键
+        full = 1 + sum(width(k) + (1 + width(v) if v else 0) for k, v in keys) + 2 * (len(keys) - 1)
+        sep = "  " if full <= w else " "
         key_x = 1
-        for key, hint in (("g", " Verify/Release "), ("n", " Next "), ("p", " Pause "),
-                          ("a", " Add "), ("l", " Loop "), ("r", " Refresh "),
-                          ("q", " Quit "), ("↑↓/jk", " "), ("PgUp/Dn", "")):
+        for i, (key, hint) in enumerate(keys):
+            if i:
+                put(stdscr, h - 2, key_x, sep, h, w, "bar")
+                key_x += len(sep)
             put(stdscr, h - 2, key_x, key, h, w, "key")
             key_x += width(key)
-            put(stdscr, h - 2, key_x, hint, h, w, "bar")
-            key_x += width(hint)
+            if hint:
+                put(stdscr, h - 2, key_x, " " + hint, h, w, "bar")
+                key_x += 1 + width(hint)
     put(stdscr, h - 1, 1, msg.split("\n")[0].replace("\t", "    "), h, w, msg_kind if msg else "")
 
 
