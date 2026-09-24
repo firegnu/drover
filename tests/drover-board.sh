@@ -452,12 +452,12 @@ for w, x in ((120, 23), (80, 1)):                        # 同时覆盖有侧栏
     assert state["detail_offset"] == 6
     assert (2, x + 2, "4. ") in screen.rows
     assert "任务04" in "".join(text for y, col, text in screen.rows if y == 2 and col >= x + 2)
-    assert (8, x, "PgUp↑6 PgDn↓14") in screen.rows
+    assert (8, w - 1 - len("PgUp↑6 PgDn↓14"), "PgUp↑6 PgDn↓14") in screen.rows  # 翻页提示靠右
 
     state["detail_offset"] = 999
     B.draw(screen, vm, state)
     assert state["detail_offset"] == 20
-    assert (8, x, "PgUp↑20 PgDn↓0") in screen.rows
+    assert (8, w - 1 - len("PgUp↑20 PgDn↓0"), "PgUp↑20 PgDn↓0") in screen.rows  # 翻页提示靠右
     assert any("None yet" in text for _, _, text in screen.rows)
     screen.h = 6                                         # 窗口变矮后继续下翻，夹在新底部
     B.draw(screen, vm, state)

@@ -148,10 +148,14 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
         assert any(x == 27 and t == reason and a == 0 for _, x, t, a in screen.rows)
     assert all(not a & curses.A_REVERSE for y, _, _, a in screen.rows if y in (0, 30))
     assert any(t == 'g' and a & curses.A_BOLD for y, _, t, a in screen.rows if y == 30)
-    assert any(t == ' Verify/Release ' and a == B.COLORS['bar'] for y, _, t, a in screen.rows if y == 30)
-    assert any(t.startswith('▸') and a & curses.A_REVERSE for _, _, t, a in screen.rows)
-    assert any(t.startswith('History ·') and a == B.COLORS['history_heading'] and not a & curses.A_BOLD
+    assert any(t == ' Verify/Release' and a == B.COLORS['bar'] for y, _, t, a in screen.rows if y == 30)
+    if available == 256 and not limited:  # 项目栏选中：深灰底 + 蓝色 ▸，不再整块反色
+        assert any(t == '▸' and a == B.COLORS['rail_mark'] and not a & curses.A_REVERSE for _, _, t, a in screen.rows)
+    else:
+        assert any(t.startswith('▸') and a & curses.A_REVERSE for _, _, t, a in screen.rows)
+    assert any(t == 'History' and a == B.COLORS['history_heading'] and not a & curses.A_BOLD
                for _, _, t, a in screen.rows)
+    assert any(t.startswith(' · Done') and a == B.COLORS['account'] for _, _, t, a in screen.rows)  # 节标题的数字退成记账灰
     assert any('Release wait' in t and a == B.COLORS['account'] for _, _, t, a in screen.rows)
     assert any(t.startswith('Dropped:') and not a & curses.A_DIM for _, _, t, a in screen.rows)
     assert any(t.startswith('Elapsed') and not a & curses.A_DIM for _, _, t, a in screen.rows)
@@ -225,8 +229,10 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
             for text, kind in expected:
                 assert any(y == 0 and t == text and a == B.COLORS.get(kind, 0)
                            for y, _, t, a in probe.rows), (text, kind)
-            assert any(y == 0 and t == 'drover · loop off Manual 中 · ' and a == B.COLORS['bar']
-                       for y, _, t, a in probe.rows)
+            # 顶栏：drover 粗体、项目名默认色（名字像状态词也不上色）、点号是线条灰
+            assert [(t, a) for y, _, t, a in probe.rows if y == 0][:4] == [
+                ('drover', B.COLORS['h1']), (' · ', B.COLORS.get('line', 0)),
+                ('loop off Manual 中', 0), (' · ', B.COLORS.get('line', 0))]
             assert any(t == 'Idle' and a == B.COLORS.get('accent', 0) for _, _, t, a in probe.rows)
             assert any(t == '○ Idle' and a == B.COLORS['heading_idle'] for _, _, t, a in probe.rows)
             assert item == before
