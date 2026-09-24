@@ -4,9 +4,33 @@
 
 ---
 
+## 2026-09-24 —— 窄面板三行 header 已合并收尾
+
+**这一节最新。** 用户批准只优化窄面板 header 的排版和配色，其他区域暂不调整。Claude Code 常规档 `drover/dev-narrow-header-1` 完成 `3c502ca`，主控查出 Tab 临界标题完整性缺陷，返工 `009be56` 复核通过；本地合并 `7e146e7`，收尾空提交 `3dcda24`。**未推送。**
+
+- 20–99 列且至少 12 行时，header 为三行：产品/项目/优先状态、任务状态与标题、次级指标。取消窄屏黄条、相邻项目预览和重复 Idle/添加提示，采用深灰项目底、蓝箭头、灰色层次及异常状态色；未完整显示的信息可在详情翻页读到。宽屏、矮屏、底栏、正文/历史样式及业务逻辑保持。
+- 主控首轮重跑四个 shell 套件、24 组 52 列真实 PTY 通过；返工后独立确认旧版 RED / 新版 GREEN，布局回归通过，另跑 12 组真实 PTY 临界 Tab 标题/指标用例全部通过。开发返工后四套件和 216 组 PTY 也通过。已知旧测试问题未扩展处理。
+- 审查及取舍在 `docs/任务/m28-narrow-header 窄面板表头排版.md`，设计在 ROADMAP「窄面板三行 header」。视觉拼图 `/private/tmp/drover-m28-evidence/sheet-52-multi.png`；主控临界证据 `/private/tmp/drover-m28-r2-review-tab-pty/`。这些临时证据不随仓库发布，实际终端主题/字体观感待用户目视。
+- worktree 与开发分支已清，开发 agent 在 idle、attached=0 时一并关闭。其余 `corral/main`、`drover/main`、`globalmesh/main` 保留。未操作真实队列、服务、安装或其他项目。
+- 下一步：用户重开 drover board 查看 header，需要微调时按截图反馈继续；没有已批准的其他 UI 扩展。下方“已推送”指先前的 `ee4db36`，此次 m28 提交仍只在本地。上轮 handoff 的未提交更新随本次交接一起归档。
+
+---
+
+## 2026-09-24 —— main 已按用户授权推送到 origin
+
+**（历史记录，后续 m28 已本地合并，见上。）** 本次只核对并推送已有提交，没有改业务代码。51 个提交已推送至 `https://github.com/firegnu/drover.git`，范围 `c9e8129..ee4db36`；推后读回远端，本地 `main`、`origin/main` 和远端 `main` 均为 `ee4db36715d043a9a483fa8a0845db2b6de8899a`，领先/落后均为 0。
+
+- 推前复扫同一提交范围：Gitleaks 未发现泄露；TruffleHog 的 verified/unverified secrets 均为 0。`git diff --check` 通过。
+- 使用现有 Anaconda Python，`tests/criteria.sh`、`tests/drover.sh`、`tests/install.sh`、`tests/drover-board.sh` 和 `tests/board-layout.py` 全部通过。安装测试初次被外层沙箱阻止嵌套 `sandbox-exec`；在外层沙箱之外重跑后 11 项通过，仍只使用临时 HOME，未实际安装或启用服务。
+- 当时仅本次交接更新 `HANDOFF.md` 未提交，更新前工作区干净，无用户已有未提交变更；该更新现随上方 m28 交接归档。本次推送授权已执行完，后续推送仍需另获授权。
+- 推送任务已完成，暂无本轮遗留工作。此前记录的 T18 等待放行、T16 后续讨论暂缓，以及下节两个既有测试问题，本轮未处理，也未重新核对真实队列；接手时如需推进，先只读确认当前状态，再按用户指示操作。
+- 接手先读 `AGENTS.md`；显示细化设计见 `docs/ROADMAP.md`，T18 记录见 `docs/任务/m27-status-colors 看板状态颜色速查.md`。本轮未创建或关闭 agent，未操作真实 `done/go/next/loop`、服务或其他项目。
+
+---
+
 ## 2026-09-24 —— 看板和 corral board 对齐的显示细化已合并
 
-**这一节最新。** 用户把 corral board 和本看板上下叠着用，要求在不改逻辑和显示信息的前提下做精致些。由 corral 那边的会话按用户批准的设计稿直接实施（没走队列、没开 agent），分支 `board-polish` 提交 `b1ee049`，本地合并 `bb68092`。设计和理由在 ROADMAP「和 corral board 对齐的显示细化」。
+**（历史记录，现已推送，见上。）** 用户把 corral board 和本看板上下叠着用，要求在不改逻辑和显示信息的前提下做精致些。由 corral 那边的会话按用户批准的设计稿直接实施（没走队列、没开 agent），分支 `board-polish` 提交 `b1ee049`，本地合并 `bb68092`。设计和理由在 ROADMAP「和 corral board 对齐的显示细化」。
 
 - 项目栏选中改深灰底 + 蓝 `▸`，`!` 单独黄；顶栏 `drover` 粗体、点号线条灰；节标题数字退成记账灰；按键栏放得下时空两格；翻页提示靠右。文字、阈值、按键、判据不变。
 - 四个 shell 套件和七个看板 Python 套件通过；`board-layout.py`、`drover-board.sh` 里写死旧样式的断言改成精确核对新样式。90 帧合成画面前后逐帧比对，只有按键栏间距和翻页提示位置变了；36 组 PTY 演示通过。用户已看过演示并同意合并。
