@@ -166,12 +166,13 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in screen.rows)
     assert any(t.startswith('  T42') and a == curses.A_BOLD for _, _, t, a in screen.rows)
     assert any(t == 'Task details' and a == B.COLORS['h2'] for _, _, t, a in screen.rows)
+    # 窄面板三行 header（m28）：空闲不再重复 Idle，只说队列处境
     for scene, label, kind in (('waiting', '■ Ready to release', 'heading_wait'),
-                               ('idle', '○ Idle', 'heading_idle')):
+                               ('idle', '○ No active task', 'accent')):
         item, _ = fixture(scene)
         small = Screen(24, 80)
         B.draw(small, item, {'body_mouse': True})
-        assert any(t.startswith(label) and a == B.COLORS[kind] for _, _, t, a in small.rows)
+        assert any(t.startswith(label) and a == B.COLORS.get(kind, 0) for _, _, t, a in small.rows)
     compact = Screen(10, 40)
     B.draw(compact, fixture('working')[0], {'body_mouse': True})
     assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in compact.rows)
@@ -277,7 +278,7 @@ assert history[0][0] == 4 and all(x == 5 for x, _ in history[1:])
 assert ''.join(t for _, t in history) == ' T41 ' + q['finished'][0]['title']
 assert any(x == 5 and 'Standard · 48m' in t for _, x, t, _ in screen.rows)
 assert 'Release wait' in ''.join(t for _, _, t in B.history_lines(q['finished'][0], True))
-assert any(t.startswith('○ Idle') and a & curses.A_BOLD for _, _, t, a in screen.rows)
+assert any(y == 1 and t == '○ Queue empty' and a == B.COLORS.get('accent', 0) for y, _, t, a in screen.rows)  # m28 窄面板 header
 
 for scene in D['SCENES']:
     for multi in (False, True):
@@ -297,7 +298,7 @@ for scene in D['SCENES']:
             if (h, w) == (24, 80):
                 assert not any(t == '│' for _, _, t, _ in screen.rows)
                 if multi:
-                    assert any(y == 1 and '[1/3]' in t for y, _, t, _ in screen.rows)
+                    assert any(y == 0 and '1/3' in t for y, _, t, _ in screen.rows)  # m28：序号并进 header 第一行
                 keys = ''.join(t for y, _, t, _ in screen.rows if y == h - 2)
                 assert keys == 'g Verify/Release n Next p Pause a Add l Loop r Refresh q Quit ↑↓/jk PgUp/Dn'
             # 真正翻所有页，包含辅助栏溢出。标记不能只存在于未绘制的逻辑行。
@@ -351,4 +352,5 @@ assert state['detail_offset'] == 0
 for key in ('h', '\t', '?', 'e'):
     assert B.key_action(ord(key), vm['projects'][0], state) is None
 runpy.run_path(str(Path(__file__).with_name('board-tab-pty.py')), run_name='__main__')
+runpy.run_path(str(Path(__file__).with_name('board-header.py')), run_name='__main__')  # m28 窄面板 header
 print('PASS 字符网格：单/多项目、各类状态、列宽、双栏及正文全部末尾、缩放和输入不变')
