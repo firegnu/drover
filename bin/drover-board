@@ -970,6 +970,17 @@ def put_heading(stdscr, y, x, text, h, w, status, kind):
         put(stdscr, y, x, text, h, w, "h1")
 
 
+def put_scrollbar(stdscr, x, y, height, total, visible, offset, h, w):
+    """一列位置条；不足一页隐藏，首尾贴边，只画当前可见区域。"""
+    if height <= 0 or visible <= 0 or total <= visible:
+        return
+    thumb = max(1, min(height - 1, height * visible // total))
+    start = (height - thumb) * min(max(0, offset), total - visible) // (total - visible)
+    for row in range(height):
+        on = start <= row < start + thumb
+        put(stdscr, y + row, x, "┃" if on else "│", h, w, "dim" if on else "line")
+
+
 def status_color(state):
     """同一状态在摘要与 agent 行使用同一种颜色；未知值不猜。"""
     return {"Idle": "accent", "idle": "accent", "空闲": "accent",
@@ -1344,7 +1355,7 @@ def draw(stdscr, vm, state):
     left = (cols - 3) * 70 // 115 if dual else cols
     columns = [wrap_lines(main, left), wrap_lines(side, cols - left - 3)] if dual else [wrap_lines(main + side, cols)]
     if local_body:
-        body = wrap_lines([("", 2, ln) if ln else ("", 0, "") for ln in c["body"]], left)
+        body = wrap_lines([("", 2, ln) if ln else ("", 0, "") for ln in c["body"]], left - 2)
         body_page = min(len(body), max(1, min(h // 4, room - 7)))
         task = (project, c["id"])
         body_offset = state.get("body_offset", 0) if state.get("body_task") == task else 0
@@ -1356,7 +1367,7 @@ def draw(stdscr, vm, state):
         history_width = cols - left - 3 if dual else cols
         history, spans = [], {}
         for f in q["finished"]:
-            rows = wrap_lines(history_lines(f, True), history_width)
+            rows = wrap_lines(history_lines(f, True), history_width - 2)
             spans[f["id"]] = (len(history), len(rows))
             history += rows
         history_at = next(i for i, (kind, _, _) in enumerate(columns[history_col]) if kind == "history_body")
@@ -1447,6 +1458,7 @@ def draw(stdscr, vm, state):
                                                           (1, 2, "rail_need" if on else "wait")))
         for y in range(2, bot + 1):
             put(stdscr, y, rail + 1, "│", h, w, "line")
+        put_scrollbar(stdscr, rail + 1, 3, rows, len(ps), rows, first, h, w)
     if not compact and not narrow:
         put_heading(stdscr, top - 3, x, heading, h, w - 1, heading_status, heading_kind)
         put(stdscr, top - 2, x, metrics, h, w - 1, metrics_style)
@@ -1464,6 +1476,12 @@ def draw(stdscr, vm, state):
     if dual:
         for y in range(top, bot + 1):
             put(stdscr, y, x + left + 1, "│", h, w, "line")
+    for region in ("body", "history"):
+        if state[region + "_rect"]:
+            x0, y0, x1, y1 = state[region + "_rect"]
+            put_scrollbar(stdscr, x1 - 2, y0, y1 - y0, state[region + "_total"],
+                          state[region + "_page"], state[region + "_offset"], h, w)
+    put_scrollbar(stdscr, w - 1, top, page, total, page, offset, h, w)
     if total > room:
         hint = f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}"
         put(stdscr, bot, max(x, x + cols - width(hint)), hint, h, w - 1, "dim")  # 靠右，像滚动指示

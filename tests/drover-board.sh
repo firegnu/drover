@@ -948,4 +948,5 @@ DROVER_BIN="${DROVER}" DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/check-
 
 DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-layout.py"
 DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-body-scroll.py"
+DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-scrollbars.py"
 DROVER_BOARD_BIN="${BOARD}" python3 "${ROOT}/tests/board-body-pty.py"

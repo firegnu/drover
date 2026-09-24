@@ -172,7 +172,9 @@ class BodyScroll(unittest.TestCase):
             B.draw(screen, vm, state)
         seen = set()
         while True:
-            seen.update(s.strip() for s in screen.lines() if 'BODY-' in s)
+            x0, y0, x1, y1 = state['body_rect']
+            # 位置条占最右两格；逐字核对文字区域，位置条另有定向检查。
+            seen.update(''.join(screen.rows[y][x0:x1 - 2]).strip() for y in range(y0, y1))
             offset = self.wheel(vm, state)[1]
             if offset == state['body_offset']:
                 break
@@ -240,7 +242,7 @@ class BodyScroll(unittest.TestCase):
                 self.assertEqual(self.wheel(vm, state, buttons=self.up), ('body_scroll', 0))
                 seen = set()
                 for _ in range(20):
-                    seen.update(''.join(screen.rows[y][x0:x1]).strip() for y in range(y0, y1))
+                    seen.update(''.join(screen.rows[y][x0:x1 - 2]).strip() for y in range(y0, y1))
                     state['body_offset'] = self.wheel(vm, state)[1]
                     B.draw(screen, vm, state)
                     self.assertEqual(state['body_rect'], rect)

@@ -251,7 +251,7 @@ class HistoryScroll(unittest.TestCase):
 
     def history_rows(self):
         rect = self.state['history_rect']
-        width = rect[2] - rect[0]
+        width = rect[2] - rect[0] - 2  # 右侧两格为位置条及间距，不是文字区域
         return B.wrap_lines([line for f in self.vm['projects'][self.state['sel']]['queue']['finished']
                              for line in B.history_lines(f, True)], width)
 
@@ -275,7 +275,7 @@ class HistoryScroll(unittest.TestCase):
                         for _ in range(len(rows) + 1):
                             off, page = self.state['history_offset'], self.state['history_page']
                             for y, (_, indent, text) in enumerate(rows[off:off + page], y0):
-                                self.assertEqual(''.join(self.screen.rows[y][x0:x1]).rstrip(),
+                                self.assertEqual(''.join(self.screen.rows[y][x0:x1 - 2]).rstrip(),
                                                  (' ' * indent + text).rstrip(), (w, h, multi, y, off))
                             seen.update(range(off, off + page))
                             action = self.wheel()

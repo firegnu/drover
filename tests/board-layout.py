@@ -25,6 +25,17 @@ class Screen:
         self.rows.append((y, x, text, attr))
 
 
+def scrollbar_cells(screen, state):
+    top = screen.h - (1 if screen.h < 12 else 2) - state['detail_room']
+    _, page = B.detail_viewport(state['detail_total'], state['detail_room'], 0)
+    cells = {(screen.w - 1, y) for y in range(top, top + page)}
+    for region in ('body', 'history'):
+        if state[region + '_rect']:
+            _, y0, x1, y1 = state[region + '_rect']
+            cells.update((x1 - 2, y) for y in range(y0, y1))
+    return cells
+
+
 # If all project-owned content is English, the board must not add Chinese UI text.
 english_vm, _ = fixture('working')
 english_pv = english_vm['projects'][0]
@@ -294,9 +305,11 @@ for scene in D['SCENES']:
                 assert not any(t == 'Projects' for _, _, t, _ in screen.rows)
             if (h, w) == (32, 120) and multi:
                 assert any(t == 'Projects' for _, _, t, _ in screen.rows)
-                assert not any(x > 23 and t == '│' for _, x, t, _ in screen.rows)
+                bars = scrollbar_cells(screen, state)
+                assert not any(x > 23 and t == '│' and (x, y) not in bars for y, x, t, _ in screen.rows)
             if (h, w) == (24, 80):
-                assert not any(t == '│' for _, _, t, _ in screen.rows)
+                bars = scrollbar_cells(screen, state)
+                assert not any(t == '│' and (x, y) not in bars for y, x, t, _ in screen.rows)
                 if multi:
                     assert any(y == 0 and '1/3' in t for y, _, t, _ in screen.rows)  # m28：序号并进 header 第一行
                 keys = ''.join(t for y, _, t, _ in screen.rows if y == h - 2)
@@ -306,11 +319,12 @@ for scene in D['SCENES']:
             while True:
                 # 每栏独立连接实际详情行，跨页时不夹入固定摘要、栏线和页码。
                 # T12 理由缩进后，末尾标记可能恰好跨页，仍须逐字可达。
-                dividers = sorted({x for _, x, t, _ in screen.rows if t == '│'})
+                bars = scrollbar_cells(screen, state)
+                dividers = sorted({x for y, x, t, _ in screen.rows if t == '│' and (x, y) not in bars})
                 top = h - (1 if h < 12 else 2) - state['detail_room']
                 page = state['detail_room'] - (state['detail_total'] > state['detail_room'])
                 for y, x, t, _ in screen.rows:
-                    if top <= y < top + page and t != '│':
+                    if top <= y < top + page and t != '│' and (x, y) not in bars:
                         seen[sum(x > divider for divider in dividers)].append(t)
                 # 布局遍历也进入正文局部视口；输入分发/步长另由 T8 回归守住。
                 if state.get('body_rect') and state['body_offset'] < state['body_total'] - state['body_page']:

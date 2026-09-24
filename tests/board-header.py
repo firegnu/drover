@@ -46,7 +46,14 @@ def pages(screen, vm, state):
     while True:
         top = screen.h - 2 - state['detail_room']
         page = state['detail_room'] - (state['detail_total'] > state['detail_room'])
-        seen += [t for y, _, t, _ in sorted(screen.rows) if top <= y < top + page]
+        # 完整原文检查只拼文字；位置条占独立列，不属于原文。
+        bars = {(screen.w - 1, y) for y in range(top, top + page)}
+        for region in ('body', 'history'):
+            if state.get(region + '_rect'):
+                x0, y0, x1, y1 = state[region + '_rect']
+                bars.update((x1 - 2, y) for y in range(y0, y1))
+        seen += [t for y, x, t, _ in sorted(screen.rows)
+                 if top <= y < top + page and (x, y) not in bars]
         if state.get('body_rect') and state['body_offset'] < state['body_total'] - state['body_page']:
             state['body_offset'] += 1
         elif state.get('history_rect') and state['history_offset'] < state['history_total'] - state['history_page']:
