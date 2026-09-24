@@ -63,3 +63,13 @@ HEAD a1f3c2 · corral connected
 - 已独立通过：criteria、drover、install、drover-board 四个 shell 套件；其中包含 layout/header 测试。主控另录制 52×24、12 场景×单多项目的 24 组真实 PTY，全部通过，证据 `/private/tmp/drover-m28-review-pty/`。普通套件未覆盖上述 Tab 临界案例，不能据此认定信息完整。
 - 视觉核对：看过 52 列单/多项目属性渲染拼图和 PTY 文本。接受深灰项目标识、蓝箭头、状态对齐、普通信息次级灰；告警优先导致项目名缩短、完整名在 Status 中的取舍符合已批准方案。Paused 沿用原模式位、loop 独立；宽屏 Tab 旧问题不在此次范围。底栏等其他区域不扩展。
 - 生命周期：开发回复末行为 DONE、提交和记录已落盘，但 corral 随后仍报 working / ScheduleWakeup；返工 send 返回 not_idle，尚未送达。此时不合并、不删 worktree、不关闭 agent。
+
+## 主控复核（2026-09-24，返工后）
+
+结论：`009be56` 可以本地合并，不推送。仅增量复核返工，首轮视觉和范围结论继续有效。
+
+- 用户确认首轮实际 DONE 后，通过公开 corral keys 接口送入返工；已核对新 UserPromptSubmit 和本轮 DONE。本轮 status 为 idle、attached=0，无需沿用上轮状态误报推断。
+- 独立 RED/GREEN：用 `3c502ca` 的生产脚本跑最终 board-header 测试，确因 52 列临界 Tab 标题完整文本不可达失败；同一测试在 `009be56` 通过。修复仅按窄屏 Tab 展开后的宽度决定展示副本，未修改 VM、共享逻辑或宽屏/矮屏。
+- 重跑 board-layout（包含 header/tab PTY）通过。另用生产 draw 在真实 PTY 独立验证 12 组临界案例：52 列标题 25/26/27 个 X + Tab + END、73/74/75 列 Tab 指标，各含单/多项目，标题及指标尾部均可达。原始 ANSI 和屏幕记录：`/private/tmp/drover-m28-r2-review-tab-pty/`；RED 日志 `/private/tmp/drover-m28-r2-review-red.log`，布局日志 `/private/tmp/drover-m28-r2-review-layout.log`。
+- 首轮主控四个 shell 套件、24 组 52 列 PTY 均已通过；开发返工后四套件和 216 组 PTY 再通过。此次增量没有理由重复扩大测试范围。差异检查通过。
+- 取舍接受：告警优先，项目全名等进入完整详情；Paused 与 loop 独立；正常连接可移至详情末尾；宽屏 Tab 和已知旧测试问题保持原范围。实际终端的主题/字体观感仍由用户最终目视。
