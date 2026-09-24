@@ -2,7 +2,7 @@
 """合成视觉演示，直接调用生产 draw/key_action；从不采集或运行写操作。
 
 交互：python3 tests/board-demo.py --scene working [--multi]
-录制：python3 tests/board-demo.py --record /tmp/m16-visual
+录制：python3 tests/board-demo.py --record /tmp/m16-visual [--sizes 52x24,40x24]
 录制在真实 PTY 内运行 curses，保存 ANSI 输出、curses 屏幕文本与尺寸/视口。
 """
 import argparse
@@ -23,7 +23,7 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-SCENES = ("working", "sent", "failed", "waiting", "idle", "empty", "warning", "long", "body")
+SCENES = ("working", "sent", "failed", "waiting", "idle", "empty", "warning", "long", "body", "paused", "alert", "noqueue")
 
 
 def load_board():
@@ -71,7 +71,11 @@ def fixture(scene="working", multi=False):
             row.update(ok=True, why=why)
         pv.update(state="Ready to release", waiting=True, needs_me=True, badge="me", waits=["T42 is complete; checks passed. Press g / run drover go to release it."])
         q.update(awaiting=True)
-    if scene in ("idle", "empty", "warning"):
+    if scene == "paused":
+        q["paused"] = True
+    if scene == "alert":  # 暂停 + loop on + 连接失败长错误 + 待处理
+        q.update(paused=True, loop=True, mode="Paused")
+    if scene in ("idle", "empty", "warning", "alert"):
         q["card"] = None
         pv["state"] = "Idle"
     if scene == "empty":
@@ -93,6 +97,8 @@ def fixture(scene="working", multi=False):
     if scene == "body":
         card["body"] = [f"正文{i:02d}：鼠标移到这里，上下滚动；判据和其它区域保持位置。" for i in range(1, 38)] + ["【正文末尾】"]
     q["counts"]["doing"] = int(bool(q["card"] and not q["card"]["waiting"]))
+    if scene == "alert":
+        pv.update(needs_me=True, badge="me", waits=["Main agent idle; checks are unmet"])
     projects = [pv]
     if multi:
         other = copy.deepcopy(pv)
@@ -101,7 +107,13 @@ def fixture(scene="working", multi=False):
         third.update(name="docs-site", repo="/synthetic/docs-site")
         third["queue"]["paused"] = True
         projects += [other, third]
-    return {"health": {"ok": True, "text": "corral connected (synthetic)"}, "waits": [
+    if scene == "noqueue":
+        pv["queue"] = None
+    health = {"ok": True, "text": "corral connected (synthetic)"}
+    if scene == "alert":
+        health = {"ok": False, "text": "corral unavailable: agent status and task delivery are unavailable"
+                  " · synthetic socket error " + "long detail " * 8 + "【连接错误末尾】"}
+    return {"health": health, "waits": [
         {"project": p["name"], "text": t, "age": "6m"} for p in projects for t in p["waits"]], "projects": projects}, msg
 
 
@@ -113,14 +125,29 @@ def demo(screen, args):
     state = {"sel": 0, "n": len(vm["projects"]), "msg": msg, "body_mouse": B.init_mouse()}
     count = 0
 
+    painted = []
+
+    class Recorder:  # 只记录 addstr，其余照转真屏幕
+        def __getattr__(self, name):
+            return getattr(screen, name)
+
+        def addstr(self, y, x, text, attr=0):
+            painted.append((y, x, text, attr))
+            screen.addstr(y, x, text, attr)
+
     def frame(label):
         nonlocal count
-        B.draw(screen, vm, state)
+        painted.clear()
+        B.draw(Recorder() if args.capture else screen, vm, state)
         screen.refresh()
         if args.capture:
             h, w = screen.getmaxyx()
             path = Path(args.capture) / f"{count:02d}-{label}-{w}x{h}"
             path.with_suffix(".txt").write_text("\n".join(screen.instr(y, 0).decode("utf-8") for y in range(h)) + "\n")
+            # 生产 draw 这一帧实际下发的 addstr：[行, 列, 文字, 色对, 粗体, 反色, 暗]
+            path.with_suffix(".attrs.json").write_text(json.dumps(
+                [[y, x, t, curses.pair_number(a & curses.A_COLOR), bool(a & curses.A_BOLD),
+                  bool(a & curses.A_REVERSE), bool(a & curses.A_DIM)] for y, x, t, a in painted], ensure_ascii=False))
             path.with_suffix(".json").write_text(json.dumps({"size": [w, h], "scene": args.scene, "multi": args.multi, "state": state}, ensure_ascii=False, indent=2))
             count += 1
 
@@ -141,7 +168,7 @@ def demo(screen, args):
                 break
             state["detail_offset"] = offset
             frame("page")
-        for h, w in ((24, 80), (10, 40), (32, 120)):
+        for h, w in ((24, 80), (24, 52), (10, 40), (32, 120), (24, 52)):
             fcntl.ioctl(sys.stdout.fileno(), termios.TIOCSWINSZ, struct.pack("HHHH", h, w, 0, 0))
             curses.resizeterm(h, w)
             frame("resize")
@@ -175,12 +202,12 @@ def demo(screen, args):
             state["msg"] = "Synthetic demo: commands and editors are disabled"
 
 
-def record(destination):
+def record(destination, sizes=((120, 32), (80, 24))):
     root = Path(destination).resolve()
     root.mkdir(parents=True, exist_ok=True)
     for scene in SCENES:
         for multi in (False, True):
-            for w, h in ((120, 32), (80, 24)):
+            for w, h in sizes:
                 target = root / f'{scene}-{"multi" if multi else "single"}-{w}x{h}'
                 target.mkdir(exist_ok=True)
                 master, slave = os.openpty()
@@ -219,9 +246,10 @@ if __name__ == "__main__":
     parser.add_argument("--scene", choices=SCENES, default="working")
     parser.add_argument("--multi", action="store_true")
     parser.add_argument("--record")
+    parser.add_argument("--sizes", default="120x32,80x24", help="录制尺寸，如 52x24,40x24")
     parser.add_argument("--capture", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.record:
-        record(args.record)
+        record(args.record, [tuple(map(int, s.split("x"))) for s in args.sizes.split(",")])
     else:
         curses.wrapper(demo, args)

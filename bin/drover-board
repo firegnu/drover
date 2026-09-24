@@ -922,6 +922,12 @@ def init_colors():
             except curses.error:
                 break
             COLORS[kind] = curses.color_pair(i) | curses.A_BOLD
+        for i, (kind, fg) in enumerate([("chip", -1), ("chip_dim", 245)], start=23):  # 窄面板 header 的当前项目
+            try:
+                curses.init_pair(i, fg, 237)
+            except curses.error:
+                break
+            COLORS[kind] = curses.color_pair(i)
     COLORS["h2"] = COLORS["key"] = COLORS.get("accent", 0) | curses.A_BOLD
     COLORS["history_heading"] = COLORS.get("accent", 0)
     COLORS["bar"] = COLORS.get("dim", 0)
@@ -1163,6 +1169,114 @@ def footer_only_message(msg, card, cols):
         re.fullmatch(r"Sent to [^\s:]+: ?" + re.escape(f'{card["id"]} {card["title"]}'), msg)))
 
 
+def joined(parts):
+    """[(文字, 色)] → 用灰点号连成一段 (文字, 样式)；样式可直接交给 put。"""
+    text, spans = "", []
+    for part, color in parts:
+        if text:
+            spans.append((len(text), len(text) + 3, "line"))
+            text += " · "
+        spans.append((len(text), len(text) + len(part), color))
+        text += part
+    return text, ("", *spans)
+
+
+def narrow_header(vm, ps, sel, cols):
+    """窄面板三行 header 的展示副本 → ([三行 (文字, 样式)], 详情开头补的原文, 详情末尾补的原文)。
+
+    第一行先按显示列宽给右侧状态留位，再分给左侧标识；右侧放不下先缩写，再从低优先级丢。
+    缩写、截断或让出去的内容，原文放进详情，翻页读得到。只读 VM，默认逻辑文本不变。"""
+    pv = ps[sel] if ps else None
+    q = pv["queue"] if pv else None
+    c = q["card"] if q else None
+    health = vm["health"]
+    full = []
+    # 右侧 (优先级, 全称, 短标签, 色)，按列表顺序显示；优先级数越小越晚丢
+    items, pending, mode = [], None, None
+    if vm["waits"]:
+        pending = (0, f'! Needs you {len(vm["waits"])}', f'!{len(vm["waits"])}', "wait")
+        items.append(pending)
+    if not health["ok"]:
+        items.append((1, health["text"].split(":")[0], "corral ✗", "bad"))
+    if q:
+        word = "Paused" if q["paused"] else "Manual" if not q["loop"] else q["mode"]
+        loop = "loop on" if q["loop"] else "loop off"
+        mode = [(2 if q["paused"] else 4, word, word, "wait" if q["paused"] else "active" if word == "Looping" else "accent"),
+                (3, loop, loop, "ok" if q["loop"] else "dim")]
+        items += mode
+    name = pv["name"].replace("\t", "    ") if pv else ""
+    index = f"{sel + 1}/{len(ps)}" if len(ps) > 1 else ""
+    base = "drover ▸ " if pv else "drover"
+    ideal = width(base + name + (" " + index if index else "")) if pv else width(base)
+    # 先试全称、短标签能否和完整项目标识并排。不行就只给左侧留产品名和项目名开头：
+    # 常规模式词和 loop 开关同义，先让出；再缩写、从低优先级丢。超窄（内容不足 32 列）时只有告警能挤掉项目名
+    least = width(base) + min(width(name), 5) if pv else width(base)
+    core = [i for i in items if i[0] < 4]
+    alerts = [i for i in core if i[0] <= 2]
+    tries = [(items, 1, ideal), (items, 2, ideal), (core, 1, least)]
+    tries += [([i for i in core if i in sorted(core)[:k]], 2, least)
+              for k in range(len(core), -1, -1) if cols >= 32 or k >= len(alerts)]
+    tries += [([i for i in alerts if i in sorted(alerts)[:k]], 2, width("drover")) for k in range(len(alerts), -1, -1)]
+    shown, at = next((kept, at) for kept, at, lim in tries
+                     if width(" · ".join(i[at] for i in kept)) <= cols - lim - 2)
+    right, right_style = joined([(i[at], i[3]) for i in shown])
+    room = cols - width(right) - (2 if right else 0)
+    # 左侧：产品名粗体、▸ 蓝、项目名默认色、序号灰；多项目时「▸ 项目 序号」落在深灰选中底上
+    left, spans = "drover", [(0, 6, "h1")]
+    if pv and room >= width(base) + min(width(name), 3):
+        keep = bool(index) and (width(base + name + " " + index) <= room
+                                or room - width(base + " " + index) >= min(width(name), 8))
+        label = trunc(name, room - width(base) - (width(" " + index) if keep else 0))
+        chip = bool(index) and {"chip", "chip_dim", "rail_mark"} <= COLORS.keys()
+        start = len(left)
+        left += " ▸ " + label + (" " + index if keep else "") + (" " if chip else "")
+        spans += [(start, start + 1, "chip" if chip else ""), (start + 1, start + 2, "rail_mark" if chip else "accent"),
+                  (start + 2, start + 3 + len(label), "chip" if chip else ""),
+                  (start + 3 + len(label), len(left), "chip_dim" if chip else "account")]
+        cut = label != name or index and not keep
+    else:
+        cut = bool(pv)
+    if cut:
+        full.append(("", 2, f"Project {name}" + (f" · {index}" if index else "")))
+    gap = cols - width(left) - width(right)
+    row1 = (left + " " * gap + right if right else left,
+            ("", *spans, *((len(left) + gap + a, len(left) + gap + b, color) for a, b, color in right_style[1:])))
+    if mode and any(i not in shown for i in mode):
+        text, style = joined([(i[1], i[3]) for i in mode])
+        full.append((style, 2, text))
+    # 待处理全属当前项目时，详情开头本来就有「Needs you · N」，不再重复
+    if pending and (pending not in shown or at == 2) and len(vm["waits"]) != len(pv["waits"] if pv else []):
+        full.append(("wait", 2, pending[1]))
+    if not health["ok"]:
+        full.append(("bad", 2, health["text"]))
+    # 第二行：任务状态与标题；没有当前任务只说队列处境，添加提示交给底栏 a Add
+    if c:
+        status = "■ Ready to release" if c["waiting"] else "▶ In progress"
+        row2 = (task_heading(pv).replace("\t", "    "),
+                ("h1", (0, len(status), "heading_wait" if c["waiting"] else "heading_active")))
+    else:
+        row2 = ("○ " + ("No registered projects" if not pv else "No task queue" if not q else
+                        "No active task" if q["todo"] else "Queue empty"), "accent")
+        if width(row2[0]) > cols:
+            full.append(("accent", 2, row2[0]))
+    # 第三行：次级信息。正常连接放不下就让到详情末尾；任务指标照旧由 draw 补完整副本
+    if c:
+        parts = [(m, "dim") for m in task_metrics(pv).replace("\t", "    ").split(" · ")]
+        if c["held"]:
+            parts[-1] = (parts[-1][0], "wait")
+    else:
+        parts = [(f'HEAD {pv["head"]}', "dim")] if pv else []
+    connected = [(health["text"], "ok")] if health["ok"] else []
+    row3 = joined(parts + connected)
+    tail = []
+    if width(row3[0]) > cols and connected:  # 可退让的放详情末尾，不把正文往下挤
+        row3 = joined(parts)
+        tail = [("", 0, ""), ("h2", 0, "Connection"), ("ok", 2, health["text"])]
+    if full:
+        full = [("h2", 0, "Status")] + full + [("", 0, "")]
+    return [row1, row2, row3], full, tail
+
+
 def draw(stdscr, vm, state):
     """字符网格：固定摘要、主辅栏共用翻页、底部按键和消息。只写内存视口。"""
     h, w = stdscr.getmaxyx()
@@ -1172,11 +1286,11 @@ def draw(stdscr, vm, state):
     pv = ps[sel] if ps else None
     project = pv["repo"] if pv else None
     compact = h < 12
+    narrow = not compact and w < 100                  # 窄面板：三行 header，项目切换并进第一行
     rail = RAIL if len(ps) > 1 and w >= 100 else 0
-    tabs = len(ps) > 1 and not rail and not compact
     x = rail + 3 if rail else 1
     cols = max(2, w - x - 1)
-    top = 2 if compact else (5 if w >= 100 else 4) + int(tabs)
+    top = 2 if compact else 5 if w >= 100 else 4
     bot = h - (2 if compact else 3)
     room = max(0, bot - top + 1) if h >= 5 and w >= 20 else 0
     msg = state.get("msg", "")
@@ -1210,8 +1324,10 @@ def draw(stdscr, vm, state):
             start = len(pv["name"] + " · ")
             end = len(metrics) - len(f' · HEAD {pv["head"]}')
             metrics_style = ("dim", (start, end, status_color(pv["state"])))
-        prefix = [(heading_style, 0, heading)] if compact or width(heading) > cols else []
-        if compact or width(metrics) > cols:
+        # 窄屏 header 画的是 Tab 展开后的副本，放不放得下也按展开后的宽度判断
+        fits = (lambda text: width(text.replace("\t", "    ")) <= cols) if narrow else (lambda text: width(text) <= cols)
+        prefix = [(heading_style, 0, heading)] if compact or not fits(heading) and (c or not narrow) else []
+        if compact or not fits(metrics) and (c or not narrow):
             prefix.append((metrics_style, 0, metrics))
         message = ([(msg_kind, 0, "Operation message")]
                    + [("", 2, line) for line in msg.split("\n")] + [("", 0, "")]
@@ -1221,6 +1337,9 @@ def draw(stdscr, vm, state):
         heading, metrics = "○ Idle  No registered projects", "Run drover init <name> in a repository"
         metrics_style = "dim"
         main, side = [("", 0, metrics)], []
+    if narrow and w >= 20:
+        header, header_full, header_tail = narrow_header(vm, ps, sel, cols)
+        main, side = header_full + main, side + header_tail
     dual = cols >= 100 and bool(main) and bool(side) and not compact
     left = (cols - 3) * 70 // 115 if dual else cols
     columns = [wrap_lines(main, left), wrap_lines(side, cols - left - 3)] if dual else [wrap_lines(main + side, cols)]
@@ -1306,12 +1425,11 @@ def draw(stdscr, vm, state):
             start = len(head) + len(" · ")
             head += " · " + text
             spans += [(start - len(" · "), start, "line"), (start, len(head), color)]
-    put(stdscr, 0, 1, head, h, w - 1, ("bar", *spans))
-    if tabs:
-        label = f'↑↓/jk [{sel + 1}/{len(ps)}] ▸ {pv["name"]}'
-        if sel + 1 < len(ps):
-            label += f'   › {ps[sel + 1]["name"]}'
-        put(stdscr, 1, 1, label, h, w - 1, "sel")
+    if narrow:
+        for y, (line, style) in enumerate(header):
+            put(stdscr, y, x, line, h, w - 1, style)
+    else:
+        put(stdscr, 0, 1, head, h, w - 1, ("bar", *spans))
     if rail:
         put(stdscr, 2, 1, "Projects", h, rail, "h2")
         rows = max(1, bot - 2)
@@ -1329,7 +1447,7 @@ def draw(stdscr, vm, state):
                                                           (1, 2, "rail_need" if on else "wait")))
         for y in range(2, bot + 1):
             put(stdscr, y, rail + 1, "│", h, w, "line")
-    if not compact:
+    if not compact and not narrow:
         put_heading(stdscr, top - 3, x, heading, h, w - 1, heading_status, heading_kind)
         put(stdscr, top - 2, x, metrics, h, w - 1, metrics_style)
     put(stdscr, top - 1, x, "─" * cols, h, w, "line")
