@@ -4,7 +4,19 @@
 
 ---
 
-## 2026-09-26 —— saddle T4 所需只读详情接口已委派
+## 2026-09-26 —— saddle T4 所需只读详情接口已完成收尾
+
+`drover show Tn --json [--with-agent-status]` 已通过主控审查并合入 main；实现 `749012e`，合法 Unicode ref 修复 `3e57156`，审查 `9db3017`，合并 `4bd1880`，收尾记号 `9562460`。用户已授权本批推送至 origin/main。
+
+- 最终公开契约为 `docs/任务详情JSON接口.md`（schema_version=1），saddle 可据此安排自己的实现。默认零 corral 调用，可选只读主控 status；历史缺失、当前重算、留存验收样本及稳定字段/原因码均已明确。
+- 主控复跑 CLI、criteria、8 项非 PTY 缓存用例通过；首轮发现 U+2028 合法分支名令新读取器崩溃，原 agent 定点返工后 show 16 项复核全过。未改原状态机、判据语义或 list 实现；未跑录屏或安装套件。
+- 已通过本机 `~/.local/bin/drover` 符号链接，对隔离合成任务实际调用新命令：正确返回 current 的 schema 1 JSON，输入数据未变，没有执行验收或联系 corral。主工作区合入后下一次命令调用已生效；没有重启用户进程或服务。
+- 开发 agent idle、attached=0，worktree 干净且分支已合入后完成清理；工作目录已删，一并关闭本次自开的 `drover/dev-show-json-1`。其余主控未动。
+- 本轮没有修改 saddle、真实队列、配置、loop、服务或安装。下一步由 saddle/main 按用户确认的 Tasks 区域详情方案实施；drover 无待返工项。约 5 秒刷新不是响应时限保证，历史完整验收快照不能恢复，关注提示不证明 agent 停工。
+
+---
+
+## 2026-09-26 —— saddle T4 所需只读详情接口已委派（历史记录）
 
 用户授权实现独立 `drover show Tn --json`，包括主控审查、合并推送和收尾。需求及最终边界见 `docs/任务/m34-show-json 任务详情只读JSON接口.md`，任务提交 `f307e0e`。
 
