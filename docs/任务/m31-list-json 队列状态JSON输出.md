@@ -1,6 +1,8 @@
 # 任务：增加 drover list --json
 
-2026-09-25，用户确认的独立后端逻辑任务。待用户从 kanban 触发，尚未委派。
+2026-09-25，主控 drover/main 委派给新开的 drover/dev-list-json（名称以 corral start 返回为准），Codex 常规档：gpt-6-astra / high。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：tier 常规，cross_review 不要，impact 改行为；模型 jev-1.13.0；无推翻）
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 
 ## 目标
 
@@ -20,9 +22,12 @@
 
 ## 执行安排
 
-这是供主控接单的需求单，不是已经指派给开发 agent 的委派单。触发后按当时安装的 corral / corral-dispatch 技能完成路由，记录模型档位、影响面、交叉审查结论和验证预算，再创建独立分支、worktree 并委派。
-
-行为变化按 AGENTS.md 先 RED 后 GREEN。验证只使用临时合成仓库与假的 corral，不操作真实数据，不做 PTY 录屏。具体命令由主控按实际路由补入委派单，不为测试技能扩大验证范围。
+- worktree：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m31-list-json`；分支：`m31-list-json`，从 main 创建。
+- 先读 AGENTS.md，以及 `bin/drover` 的 cmd_list、fold、pending、setup、main 和 `tests/drover.sh` 的合成 CLI 测试方式。
+- 只改 `bin/drover` 的 list 命令与参数处理、直接相关测试及本文件完成记录；不改 QUICKSTART、ROADMAP、命令帮助字段说明、HANDOFF 或其他任务文件。
+- 验证预算：新增一条定向测试入口 `python3 tests/list-json.py`，先确认因缺少目标行为而 RED，再实现到 GREEN；标准回归运行一次 `bash tests/drover.sh`，另做 `git diff --check`。预算不足时在回复中报告，不自行扩大。
+- 只用临时合成仓库与假的 corral，不操作真实数据；不录屏、不做覆盖矩阵或缺陷注入，不跑无关套件。
+- 不需要安装依赖；只用 Python 标准库。完成记录写做了什么、验证结果、取舍和未做事项。
 
 ## 边界
 
