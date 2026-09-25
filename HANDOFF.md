@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-09-26 —— saddle T4 所需只读详情接口已委派
+
+用户授权实现独立 `drover show Tn --json`，包括主控审查、合并推送和收尾。需求及最终边界见 `docs/任务/m34-show-json 任务详情只读JSON接口.md`，任务提交 `f307e0e`。
+
+- 当前路由三项拿不准，按技能回退为常规 / 改行为 / 不做交叉审查；开发 agent `drover/dev-show-json-1`，Codex `gpt-6-astra / high`，分支/worktree `m34-show-json`。已挂完成提醒，下一步读取状态和回复，再审查、必要返工、合并推送与清理。
+- 默认不联系 corral，可选仅公开 status 查询；不改 list、状态机或完成判据，不执行验收或写缓存/事件。验证仅隔离合成数据，禁止真实任务推进、服务、安装、其他仓库及 PTY 录屏。
+- 最终契约预计在 `docs/任务详情JSON接口.md`，供 saddle 后续实现消费；本轮不修改 saddle。本机 `~/.local/bin/drover` 已确认链接到本仓库 `bin/drover`，合入后核对下一次命令调用可用，不重启用户进程。
+- 开工前仅三个主控 agent，上一件开发 worktree 已清理；本轮新增的开发 worktree 尚在工作，不能提前清理。无真实队列变更。
+
+---
+
 ## 2026-09-25 —— JSON 完整历史已修复（saddle 联调）
 
 用户在 saddle 会话明确授权进入 drover 修复历史读取接口；本次延续该会话在 main 小步提交的方式。`list --json` 已取消十条截取，普通 list 的最近十条摘要保持。未推送，不影响真实队列放行状态。
