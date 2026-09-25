@@ -1,6 +1,8 @@
 # 任务：看板增加快捷键帮助页
 
-2026-09-25，用户确认的独立前端任务。待用户从 kanban 触发，尚未委派。
+2026-09-25，主控 drover/main 委派给新开的 drover/dev-keyboard-help（名称以 corral start 返回为准），Claude Code 常规档：opus[1m] / high。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：tier 常规，cross_review 不要，impact 改行为；模型 jev-1.13.0；无推翻）
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 
 ## 目标
 
@@ -20,9 +22,12 @@
 
 ## 执行安排
 
-这是供主控接单的需求单，不是已经指派给开发 agent 的委派单。触发后按当时安装的 corral / corral-dispatch 技能完成路由，记录模型档位、影响面、交叉审查结论和验证预算，再创建独立分支、worktree 并委派。
-
-行为变化按 AGENTS.md 先 RED 后 GREEN。验证使用合成数据和轻量屏幕检查；不做 PTY 录屏、截图拼图，也不间接运行会录制的测试。具体命令由主控按实际路由补入委派单，不为测试技能扩大验证范围。
+- worktree：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m30-keyboard-help`；分支：`m30-keyboard-help`，从 main 创建。
+- 先读 AGENTS.md，以及 `bin/drover-board` 的 draw、key_action、tui 和 `tests/board-header.py` 的轻量屏幕用法。
+- 只改 `bin/drover-board`、直接相关的轻量测试及本文件完成记录，不改 QUICKSTART、ROADMAP、HANDOFF 或其他任务文件。
+- 验证预算：新增一条定向测试入口 `python3 tests/board-help.py`，先确认因缺少目标行为而 RED，再实现到 GREEN；标准回归运行一次 `bash tests/drover.sh` 和一次 `python3 tests/board-header.py`，另做 `git diff --check`。预算不足时在回复中报告，不自行扩大。
+- 不做 PTY 录屏、截图拼图、覆盖矩阵或缺陷注入；不运行会间接录屏的 `tests/drover-board.sh`、`tests/board-layout.py` 等入口。
+- 不需要安装依赖；只用 Python 标准库。完成记录写做了什么、验证结果、取舍和未做事项。
 
 ## 边界
 
