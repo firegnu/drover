@@ -81,7 +81,7 @@ def main():
             {"id": "T20", "title": "排在后面", "body": ""},
         ]
         history = result["history"]
-        assert [t["id"] for t in history] == ["T11", "T10", "T9", "T8", "T7", "T6", "T5", "T4", "T3", "T2"]
+        assert [t["id"] for t in history] == [f"T{n}" for n in range(11, 0, -1)], "JSON history must include records older than the latest ten"
         assert history[0]["status"] == "dropped" and history[0]["reason"] == "不做了"
         assert all(t["status"] == "done" and t["end"] == "bbbbbbb2" for t in history[1:])
 
@@ -97,7 +97,7 @@ def main():
             "mode": {"loop": False, "gate": False}, "paused": False,
             "current": None, "awaiting": None, "pending": [], "history": [],
         }
-    print("PASS list JSON: queue order, states, recent history, plain output and read-only access")
+    print("PASS list JSON: queue order, states, complete history, plain output and read-only access")
 
 
 if __name__ == "__main__":

@@ -647,7 +647,7 @@ def cmd_list(as_json=False):
             "current": current,
             "awaiting": tasks.get(awaiting),
             "pending": todo,
-            "history": list(reversed(fin[-10:])),
+            "history": list(reversed(fin)),
         }))
         return 0
     mode = ("循环 + 放行模式（自动核对判据，下一件等人放行）" if GATE else "循环 + 自动模式（做完直接领下一个）") if loop_on() \
