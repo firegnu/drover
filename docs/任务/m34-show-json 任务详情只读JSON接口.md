@@ -81,3 +81,12 @@
 - 严格留在 `m34-show-json` worktree/分支；未委派、合并、推送，未改 HANDOFF.md，未操作真实队列、配置、loop、服务、安装、用户进程或其他仓库。
 
 待主控决定事项：无新增设计待决；实现与契约待主控审查，本分支未合并。
+
+### 首轮审查返工：合法 ref 中的 U+2028（2026-09-26）
+
+- 主控发现 `ShowGit.read_refs()` 使用 `splitlines()`，将合法分支名 `feature/name\u2028tail`（实际 U+2028）拆成两条记录，使查询退出 1 并输出 ValueError traceback。
+- 仅将新读取器的记录分隔改为 ASCII `\n`，跳过末尾空记录；不截断、替换或忽略合法 ref，不改共享 `task_branches`、完成判据或公开 JSON 字段/原因码。公开契约无需变更。
+- 新增 `ShowJSON.test_unicode_line_separator_in_branch_name`：在隔离 fixture 建立实际含 U+2028 的未合入分支，经公开 CLI 检查 JSON 成功返回、分支名称原样显示、判据为 unmet；合入后检查同名分支判据为 met、main 区间计数为 1、无快照误报。沿用文件快照断言保证查询只读，并确认不调用 corral。
+- RED：`python3 tests/show-json.py ShowJSON.test_unicode_line_separator_in_branch_name` 在修改实现前退出 1，明确复现 `read_refs` 的 ValueError；修复后同一命令 GREEN，退出码 0。
+- `python3 tests/show-json.py`：**16 项通过，退出码 0**；`git diff --check` 通过。全部命令前台跑完，未重跑已通过的 CLI/criteria/cache 套件。
+- 仅改新读取器、该定向测试和本完成记录；在原 `m34-show-json` 分支提交，未合并、推送或操作真实数据。无新增待决事项，待主控复核。

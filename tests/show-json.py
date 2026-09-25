@@ -79,6 +79,28 @@ class ShowJSON(unittest.TestCase):
         self.assertEqual(result["task"]["status"], "doing")
         self.assertFalse(self.calls.exists(), "默认禁止调用 corral")
 
+    def test_unicode_line_separator_in_branch_name(self):
+        branch = "feature/name\u2028tail"
+        self.git("checkout", "-q", "-b", branch)
+        self.git("commit", "-q", "--allow-empty", "-m", "branch work")
+        self.git("checkout", "-q", "main")
+        before = self.show()
+        row = next(r for r in before["completion"]["rows"] if r["id"] == "branches_merged")
+        self.assertIs(row["ok"], False)
+        self.assertEqual(row["state"], "unmet")
+        self.assertIn(branch, row["why"], "合法 ref 必须原样保留，不能截断、替换或跳过")
+        self.assertEqual(before["warnings"], [])
+
+        self.git("merge", "-q", "--ff-only", branch)
+        after = self.show()
+        row = next(r for r in after["completion"]["rows"] if r["id"] == "branches_merged")
+        self.assertIs(row["ok"], True)
+        self.assertEqual(row["state"], "met")
+        self.assertIn(branch, row["why"])
+        self.assertEqual(after["git"]["main_commits_since_start"], 1)
+        self.assertEqual(after["warnings"], [])
+        self.assertFalse(self.calls.exists())
+
     def test_lifecycle_timing_git_and_completion(self):
         current = self.show()
         self.assertEqual(current["timing"]["elapsed_seconds"], current["observed_at"] - 100)

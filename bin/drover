@@ -705,7 +705,8 @@ class ShowGit:
 
     def read_refs(self):
         out = self.run(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/").stdout
-        return dict(line.split(" ", 1) for line in out.splitlines())
+        # Git 记录只按 ASCII 换行分隔；合法 ref 中的 U+2028 等字符必须保留。
+        return dict(line.split(" ", 1) for line in out.split("\n") if line)
 
     def pinned(self, repo, *args):
         if self.refs is None:
