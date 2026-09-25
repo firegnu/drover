@@ -50,3 +50,10 @@
 - 最小修复：`draw_pending` 先看原序号上那件的 key 还是不是记住的 key，是就不动；不是（刷新后顺序变了）才按 key 找，找不到仍停在原序号。队列语义和其他功能不变。
 - `tests/board-pending.py` 加回归：两件 `id=""`、`title="same title"`，正文 first/second，`pending_sel=1` 连调两次 `draw_pending`，修复前第二次变成 0（RED），修复后两次都停在第二件并显示 second（GREEN）。
 - 返工验证只跑了 `python3 tests/board-pending.py` 和 `git diff --check`，都通过；没有重跑 CLI/header/help，没有录屏。
+
+## 主控审查
+
+- 通过。首轮 `56b0aa2` 核对四条验收与范围，CLI/header/help 三项主控回归均退出码 0；定向发现同名未编号待办切换后重绘跳回第一件，按第一条验收交回修复。
+- 复核 `2461b97` 仅看返工差异：保留原位置优先的修复正确，新增回归明确检查第二件正文。主控运行 `python3 tests/board-pending.py` 和 `git diff --check 56b0aa2..HEAD` 通过，未重跑其他回归、未录屏。
+- 同意复用现有整屏与翻页交互、显式引用全文展示、缺文件提示、无待办提示及刷新后原序号回退的取舍；帮助页与底栏均已加 u。四项用户取舍没有改变，未扩展队列推进或完成判据。
+- 已本地合并，随后清理开发 worktree/分支及自开 agent，打收尾记号。未推送、未操作真实任务推进、loop、服务或安装；等待用户目视与放行。
