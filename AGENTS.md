@@ -22,6 +22,7 @@
 
 - 这个项目的开发任务由主控拆开，派给别的 agent 做。主控负责拆任务、写任务文件、审查、合并，不自己写功能代码。分派时按 corral-dispatch 技能做。
 - 被委派的 agent（任务文件里写明了身份）照任务文件做，不再往下派。
+- 需求单只写用户要的结果；验收照抄用户原话，不补验收点。主控觉得该加的，列出来问用户。
 - agent 名字以 `drover/dev-` 开头；任务文件放 `docs/任务/`；每个任务一个分支，worktree 放 `../drover-worktrees/<分支>`，交叉审查用 detached worktree `../drover-worktrees/review-<分支>`。
 - 审查：主控审查每个任务。
 - 合并：审查通过后本地合并进 main。**不推送**——远端 `origin`（`github.com/firegnu/drover`，公开）2026-09-20 建好了，但推送仍旧在「先问人」那一节里，每次都要人点头。
