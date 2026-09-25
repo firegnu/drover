@@ -37,3 +37,24 @@
 - 开发 agent 不再委派，不合并 main；只在自己的分支提交，并在本文件追加完成记录。主控依项目规则审查、本地合并和收尾。
 
 命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录（drover/dev-keyboard-help，2026-09-25）
+
+**做了什么**（只改 `bin/drover-board`，新增 `tests/board-help.py`）
+
+- 按 `?` 进入整屏帮助页：标题 `Keyboard help`，`Keys` 一节列出 ↑↓/jk、g、n、p、a、l、r、?、Esc、q 及用途；`Scrolling` 一节说明 PgUp/PgDn 翻详情、鼠标滚轮在正文/历史区域按 3 行滚动。底栏 `Esc Back`。
+- `Esc` 或再按 `?` 返回。帮助页只写 `help_*` 状态，`draw` 进帮助页时直接返回，不碰 `sel`、`detail_offset`、正文/历史偏移，所以返回后画面与打开前逐格一致。
+- 帮助页打开时 `key_action` 只认 Esc/?、PgUp/PgDn（翻帮助页）、r/超时/缩放（刷新）和 q（退出）；g/n/p/a/l、j/k/↑↓、鼠标一律不产生动作。
+- 配色沿用现有样式：标题、节名 `h2`，按键 `key`（沙色加粗），说明 `bar`，分隔线 `line`，没有反色。窄屏时说明悬挂换行；再窄就改成按键一行、说明缩进另起；一屏放不下时 PgUp/PgDn 翻页，带位置条和 `PgUp↑ PgDn↓` 提示。
+- `tui` 启动时 `set_escdelay(25)`（有这个函数时），不然 Esc 要等 1 秒才生效。
+
+**验证**
+
+- `python3 tests/board-help.py`：实现前 RED（`key_action('?')` 没有返回 `('help', True)`）；实现后 GREEN。覆盖纯按键层；用假屏幕驱动真实 `tui()`：选第二个项目、翻一页 → ? → 连按 gnpaljk/↑↓/PgUp/PgDn/超时 → Esc，`run_drover`/`edit_queue` 一次都没调，返回后的画面与打开前完全相同；20–120 列、8–32 行共 9 种尺寸下翻完帮助页，检查全部说明可读、按键为沙色、无反色。
+- 回归：`bash tests/drover.sh` 通过；`python3 tests/board-header.py` 通过；`git diff --check` 通过。
+- 途中两次失败都出在测试自身，已改测试：打桩的 `init_colors` 递归调用了自己；前置断言没考虑 `billing-api` 和 `2/3` 是分两次写屏的。另外有一条调试命令因多写了一个空 `cat` 挂起，已停掉，没有影响。
+
+**取舍与未做**
+
+- 底栏按键提示和启动消息 `HELP` 里没有加 `? Help`：验收没要求，加了会改现有底栏布局。要不要加，由主控/用户决定。
+- 没改 QUICKSTART、ROADMAP、HANDOFF。没有运行 `tests/drover-board.sh`、`tests/board-layout.py`，没有录屏。实际终端观感待用户目视。

@@ -1292,6 +1292,9 @@ def draw(stdscr, vm, state):
     """字符网格：固定摘要、主辅栏共用翻页、底部按键和消息。只写内存视口。"""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
+    if state.get("help"):                             # 整屏覆盖；看板的选择和各处偏移原样留着
+        draw_help(stdscr, state, h, w)
+        return
     ps = vm["projects"]
     sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
     pv = ps[sel] if ps else None
@@ -1504,6 +1507,59 @@ def draw(stdscr, vm, state):
     put(stdscr, h - 1, 1, msg.split("\n")[0].replace("\t", "    "), h, w, msg_kind if msg else "")
 
 
+HELP_KEYS = (("Keys", (("↑↓ / jk", "Select project"),
+                       ("g", "Verify and release the current task"),
+                       ("n", "Send the next task (resends the one in progress)"),
+                       ("p", "Pause or resume sending new tasks"),
+                       ("a", "Add tasks: edit queue.md in $EDITOR"),
+                       ("l", "Turn the loop on or off"),
+                       ("r", "Refresh"),
+                       ("?", "Show this help"),
+                       ("Esc", "Close this help"),
+                       ("q", "Quit"))),
+             ("Scrolling", (("PgUp / PgDn", "Page through the details; in this help, page through it"),
+                            ("Mouse wheel", "Scroll the task body or history under the pointer, 3 lines at a time"))))
+
+
+def help_lines(cols):
+    """帮助页正文：放得下就键和说明并排、说明悬挂换行；太窄就说明另起一行缩进。"""
+    kw = max(width(k) for _, keys in HELP_KEYS for k, _ in keys)
+    hang = cols - kw - 2 >= 16
+    lines = []
+    for title, keys in HELP_KEYS:
+        lines.append(("h2", 0, title))
+        for key, desc in keys:
+            if hang:
+                rows = wrap_lines([("bar", 0, desc)], cols - kw - 2)
+                lines.append((("bar", (0, len(key), "key")), 0, key + " " * (kw - width(key) + 2) + rows[0][2]))
+                lines += [("bar", kw + 2, text) for _, _, text in rows[1:]]
+            else:
+                lines.append(("key", 0, key))
+                lines += wrap_lines([("bar", 2, desc)], cols)
+        lines.append(("", 0, ""))
+    return lines[:-1]
+
+
+def draw_help(stdscr, state, h, w):
+    """? 帮助页：标题、快捷键与滚动说明、底部 Esc。超出一屏时 PgUp/PgDn 翻，只动 help_offset。"""
+    if h < 5 or w < 20:
+        put(stdscr, 0, 0, "Window too small", h, w)
+        return
+    cols, room = w - 3, h - 4
+    lines = help_lines(cols)
+    offset, page = detail_viewport(len(lines), room, state.get("help_offset", 0))
+    state.update(help_offset=offset, help_total=len(lines), help_room=room)
+    put(stdscr, 0, 1, "Keyboard help", h, w - 1, "h2")
+    put(stdscr, 1, 1, "─" * cols, h, w, "line")
+    for i, (kind, indent, text) in enumerate(lines[offset:offset + page]):
+        put(stdscr, 2 + i, 1 + indent, text, h, 1 + cols, kind)
+    put_scrollbar(stdscr, w - 1, 2, page, len(lines), page, offset, h, w)
+    if len(lines) > room:
+        put(stdscr, 2 + page, 1, f"PgUp↑{offset} PgDn↓{len(lines) - offset - page}", h, w - 1, "dim")
+    put(stdscr, h - 2, 1, "Esc", h, w, "key")
+    put(stdscr, h - 2, 4, " Back", h, w, "bar")
+
+
 # ============================================================ 按键
 REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重跑，看板不存自己的状态
 HELP = "↑↓/jk select project · PgUp/PgDn scroll · g verify/release · n next · p pause · a add · l loop · r refresh · q quit"
@@ -1572,10 +1628,22 @@ def key_action(k, pv, state, mouse=None):
 
     state 里读 sel（选中第几个）、n（一共几个项目），以及 draw 当帧写入的详情视口。
     mouse 是 getmouse 的事件副本；只认当帧正文/历史坐标内的上下滚轮，最多三行，不更改外层偏移。
-    → ("sel", 新下标) | ("scroll", 新偏移) | ("body_scroll", 正文偏移) | ("history_scroll", 历史偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",) | None
+    → ("sel", 新下标) | ("scroll", 新偏移) | ("body_scroll", 正文偏移) | ("history_scroll", 历史偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",)
+      | ("help", 开/关) | ("help_scroll", 帮助页偏移) | None
       None = 这个键不认识，或者压根没有选中的项目：什么都不做，**也不重跑**——重跑要跑一圈
       git 和 corral，不能乱按一下就触发。"""
     sel, n = state.get("sel", 0), state.get("n", 0)
+    if state.get("help"):                                     # 帮助页只认关闭、翻页、刷新和退出，操作键一律不发
+        if k in (27, ord("?")):
+            return ("help", False)
+        if k in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+            return ("help_scroll", detail_viewport(state.get("help_total", 0), state.get("help_room", 0),
+                                                   state.get("help_offset", 0),
+                                                   1 if k == curses.KEY_NPAGE else -1)[0])
+        if k not in (ord("q"), ord("r"), -1, curses.KEY_RESIZE):
+            return None
+    elif k == ord("?"):
+        return ("help", True)
     if k == curses.KEY_MOUSE:
         if not mouse or not pv:
             return None
@@ -1619,6 +1687,8 @@ def key_action(k, pv, state, mouse=None):
 
 def tui(stdscr, list_path):
     curses.curs_set(0)
+    if hasattr(curses, "set_escdelay"):
+        curses.set_escdelay(25)                               # Esc 默认要等一秒才认
     init_colors()
     stdscr.timeout(REFRESH_MS)
     vm = view_model(collect(list_path))
@@ -1650,6 +1720,12 @@ def tui(stdscr, list_path):
             continue
         if act[0] == "scroll":
             state["detail_offset"] = act[1]
+            continue
+        if act[0] == "help":
+            state.update(help=act[1], help_offset=0)
+            continue
+        if act[0] == "help_scroll":
+            state["help_offset"] = act[1]
             continue
         if act[0] in ("body_scroll", "history_scroll"):
             state[act[0].replace("_scroll", "_offset")] = act[1]
