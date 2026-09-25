@@ -846,6 +846,28 @@ def card_vm(p, tv):
             "met": f'{sum(1 for r in rows if r["ok"] is True)}/{sum(1 for r in rows if r["ok"] is not None)}'}
 
 
+def text_lines(text):
+    """正文 → 去掉行尾空白和末尾空行的行列表，只进显示。"""
+    lines = [ln.rstrip() for ln in (text or "").splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
+
+
+def pending_task_file(repo, body):
+    """待办正文里显式写的「任务文件：<路径>」→ {path, text 行列表；找不到为 None}；没写就是 None。
+    只认这一行，不按标题前缀找——待办还没派出去时任务单多半还不存在。只读，不写。"""
+    m = TASK_FILE.search(body or "")
+    if not m:
+        return None
+    try:
+        with open(os.path.join(repo, os.path.expanduser(m.group(1))), encoding="utf-8", errors="replace") as f:
+            text = text_lines(f.read())
+    except OSError:
+        text = None
+    return {"path": m.group(1), "text": text}
+
+
 def queue_vm(p, tv):
     c = tv["card"]
     return {"mode": "Paused" if tv["paused"] else "Looping" if tv["loop"] else "Release mode" if tv["gate"] else "Auto mode",
@@ -855,7 +877,8 @@ def queue_vm(p, tv):
             "card": card_vm(p, tv),
             "crew": p.get("crew") or [],
             "todo": [{"id": b["id"] or "", "title": b["title"], "next": i == 0,
-                      "held": task_held(b, tv["holds"])} for i, b in enumerate(tv["todo"])],
+                      "held": task_held(b, tv["holds"]), "body": text_lines(b["body"]),
+                      "task_file": pending_task_file(p["repo"], b["body"])} for i, b in enumerate(tv["todo"])],
             "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
                           "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", ""),
                           "commits": f.get("commits", 0), "wait": f.get("wait", ""), "route": f.get("route")}
@@ -1296,6 +1319,9 @@ def draw(stdscr, vm, state):
         draw_help(stdscr, state, h, w)
         return
     ps = vm["projects"]
+    if state.get("pending"):                          # 同上：只动自己的 pending_* 状态
+        draw_pending(stdscr, ps[min(state.get("sel", 0), len(ps) - 1)] if ps else None, state, h, w)
+        return
     sel = min(max(state.get("sel", 0), 0), len(ps) - 1) if ps else 0
     pv = ps[sel] if ps else None
     project = pv["repo"] if pv else None
@@ -1490,7 +1516,7 @@ def draw(stdscr, vm, state):
         put(stdscr, bot, max(x, x + cols - width(hint)), hint, h, w - 1, "dim")  # 靠右，像滚动指示
     if not compact:
         keys = (("g", "Verify/Release"), ("n", "Next"), ("p", "Pause"), ("a", "Add"), ("l", "Loop"),
-                ("r", "Refresh"), ("q", "Quit"), ("↑↓/jk", ""), ("PgUp/Dn", ""))
+                ("u", "Up next"), ("r", "Refresh"), ("q", "Quit"), ("↑↓/jk", ""), ("PgUp/Dn", ""))
         # 放得下时项与项之间空两格（同 corral board 底栏）；放不下退回一格，不会更早截掉按键
         full = 1 + sum(width(k) + (1 + width(v) if v else 0) for k, v in keys) + 2 * (len(keys) - 1)
         sep = "  " if full <= w else " "
@@ -1513,6 +1539,7 @@ HELP_KEYS = (("Keys", (("↑↓ / jk", "Select project"),
                        ("p", "Pause or resume sending new tasks"),
                        ("a", "Add tasks: edit queue.md in $EDITOR"),
                        ("l", "Turn the loop on or off"),
+                       ("u", "View pending tasks and their task files"),
                        ("r", "Refresh"),
                        ("?", "Show this help"),
                        ("Esc", "Close this help"),
@@ -1558,6 +1585,53 @@ def draw_help(stdscr, state, h, w):
         put(stdscr, 2 + page, 1, f"PgUp↑{offset} PgDn↓{len(lines) - offset - page}", h, w - 1, "dim")
     put(stdscr, h - 2, 1, "Esc", h, w, "key")
     put(stdscr, h - 2, 4, " Back", h, w, "bar")
+
+
+def pending_lines(t):
+    """一件待办的详情：队列条目正文；正文引用了任务文件的，接着是任务单全文或找不到的提示。"""
+    lines = [("h2", 0, "Queue entry")] + [("", 2, ln) for ln in t.get("body") or []]
+    tf = t.get("task_file")
+    if tf:
+        lines += [("", 0, ""), ("h2", 0, f'Task file · {tf["path"]}')]
+        lines += ([("", 2, ln) for ln in tf["text"]] if tf["text"] is not None
+                  else [("dim", 2, f'Task file not found: {tf["path"]}')])
+    return lines
+
+
+def draw_pending(stdscr, pv, state, h, w):
+    """u 待办详情页：顶栏第几件和标题，下面正文与任务单。PgUp/PgDn 翻页，↑↓/jk 换一件。
+    正在看的那件按编号（没编号按标题）记住；刷新后它没了，就停在原来的序号上。"""
+    if h < 5 or w < 20:
+        put(stdscr, 0, 0, "Window too small", h, w)
+        return
+    todo = (pv["queue"] or {}).get("todo", []) if pv else []
+    keys = [t["id"] or t["title"] for t in todo]
+    i = min(state.get("pending_sel", 0), max(0, len(todo) - 1))
+    if state.get("pending_key") in keys and keys[i] != state["pending_key"]:   # 原序号还是它就不动，重名不跳回第一件
+        i = keys.index(state["pending_key"])
+    cols, room = w - 3, h - 4
+    if todo:
+        t = todo[i]
+        title = f'Up next {i + 1}/{len(todo)}' + (" · ▸ Next" if t["next"] else "") + " · " \
+            + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"] + (" · Hold" if t["held"] else "")
+        lines = wrap_lines(pending_lines(t), cols)
+    else:
+        title, lines = "Up next 0/0", [("dim", 0, "No pending tasks")]
+    offset, page = detail_viewport(len(lines), room, state.get("pending_offset", 0))
+    state.update(pending_sel=i, pending_key=keys[i] if todo else None, pending_n=len(todo),
+                 pending_offset=offset, pending_total=len(lines), pending_room=room)
+    put(stdscr, 0, 1, title, h, w - 1, "h2")
+    put(stdscr, 1, 1, "─" * cols, h, w, "line")
+    for j, (kind, indent, text) in enumerate(lines[offset:offset + page]):
+        put(stdscr, 2 + j, 1 + indent, text, h, 1 + cols, kind)
+    put_scrollbar(stdscr, w - 1, 2, page, len(lines), page, offset, h, w)
+    if len(lines) > room:
+        put(stdscr, 2 + page, 1, f"PgUp↑{offset} PgDn↓{len(lines) - offset - page}", h, w - 1, "dim")
+    x = 1
+    for key, hint in (("↑↓/jk", " Prev/next"), ("PgUp/PgDn", " Scroll"), ("Esc", " Back")):
+        put(stdscr, h - 2, x, key, h, w, "key")
+        put(stdscr, h - 2, x + width(key), hint + "  ", h, w, "bar")
+        x += width(key) + width(hint) + 2
 
 
 # ============================================================ 按键
@@ -1629,7 +1703,8 @@ def key_action(k, pv, state, mouse=None):
     state 里读 sel（选中第几个）、n（一共几个项目），以及 draw 当帧写入的详情视口。
     mouse 是 getmouse 的事件副本；只认当帧正文/历史坐标内的上下滚轮，最多三行，不更改外层偏移。
     → ("sel", 新下标) | ("scroll", 新偏移) | ("body_scroll", 正文偏移) | ("history_scroll", 历史偏移) | ("run", [drover 的参数…]) | ("edit",) | ("quit",) | ("refresh",)
-      | ("help", 开/关) | ("help_scroll", 帮助页偏移) | None
+      | ("help", 开/关) | ("help_scroll", 帮助页偏移)
+      | ("pending", 开/关) | ("pending_sel", 第几件待办) | ("pending_scroll", 待办详情偏移) | ("note", 消息) | None
       None = 这个键不认识，或者压根没有选中的项目：什么都不做，**也不重跑**——重跑要跑一圈
       git 和 corral，不能乱按一下就触发。"""
     sel, n = state.get("sel", 0), state.get("n", 0)
@@ -1642,8 +1717,22 @@ def key_action(k, pv, state, mouse=None):
                                                    1 if k == curses.KEY_NPAGE else -1)[0])
         if k not in (ord("q"), ord("r"), -1, curses.KEY_RESIZE):
             return None
+    elif state.get("pending"):                                # 待办详情页同理：只认返回、换一件、翻页、刷新和退出
+        if k == 27:
+            return ("pending", False)
+        if k in (curses.KEY_UP, ord("k"), curses.KEY_DOWN, ord("j")):
+            i = state.get("pending_sel", 0) + (-1 if k in (curses.KEY_UP, ord("k")) else 1)
+            return ("pending_sel", i) if 0 <= i < state.get("pending_n", 0) else None   # 到头就停
+        if k in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+            return ("pending_scroll", detail_viewport(state.get("pending_total", 0), state.get("pending_room", 0),
+                                                      state.get("pending_offset", 0),
+                                                      1 if k == curses.KEY_NPAGE else -1)[0])
+        if k not in (ord("q"), ord("r"), -1, curses.KEY_RESIZE):
+            return None
     elif k == ord("?"):
         return ("help", True)
+    elif k == ord("u") and pv:
+        return ("pending", True) if (pv["queue"] or {}).get("todo") else ("note", "No pending tasks")
     if k == curses.KEY_MOUSE:
         if not mouse or not pv:
             return None
@@ -1726,6 +1815,18 @@ def tui(stdscr, list_path):
             continue
         if act[0] == "help_scroll":
             state["help_offset"] = act[1]
+            continue
+        if act[0] == "pending":
+            state.update(pending=act[1], pending_sel=0, pending_key=None, pending_offset=0)
+            continue
+        if act[0] == "pending_sel":
+            state.update(pending_sel=act[1], pending_key=None, pending_offset=0)
+            continue
+        if act[0] == "pending_scroll":
+            state["pending_offset"] = act[1]
+            continue
+        if act[0] == "note":
+            state.update(msg=act[1], msg_kind="")
             continue
         if act[0] in ("body_scroll", "history_scroll"):
             state[act[0].replace("_scroll", "_offset")] = act[1]
