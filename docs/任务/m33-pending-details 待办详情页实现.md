@@ -1,6 +1,8 @@
 # T22：待办详情页实现
 
-2026-09-25，用户确认按 m32 方案实现；四项取舍已定。待用户在 kanban 触发，尚未路由或委派。
+2026-09-25，主控 drover/main 委派给新开的 drover/dev-pending-page（名称以 corral start 返回为准），Claude Code 常规档：opus[1m] / high。四项取舍已定。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：tier 常规，cross_review 不要，impact 改行为；模型 jev-1.13.0；无推翻）
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 
 ## 目标
 按 m32 的方案实现待办详情页
@@ -23,7 +25,10 @@
 
 ## 执行与边界
 
-- 触发后按当前 corral / corral-dispatch 技能实际路由，补齐委派信息和验证预算，再建立独立分支/worktree。
+- worktree：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m33-pending-details`；分支：`m33-pending-details`，从 main 创建。无需安装依赖。
+- 只改 `bin/drover-board`、直接相关测试及本文件完成记录；不改其他任务文件、HANDOFF、ROADMAP 或 QUICKSTART。
+- 验证预算：定向入口 `python3 tests/board-pending.py` 先 RED 后 GREEN；标准回归 `bash tests/drover.sh`、`python3 tests/board-header.py`、`python3 tests/board-help.py` 各一次，加 `git diff --check`。预算不足时在回复中报告，不自行扩大。
+- 不运行会间接录屏的 `tests/drover-board.sh`、`tests/board-layout.py` 等入口，不做覆盖矩阵或缺陷注入；m32 的验证建议仅参考，以本任务预算为准。
 - 行为改动先 RED 后 GREEN；使用合成数据和轻量检查，不录屏，不间接运行会录屏的测试。
 - 不改队列推进、完成判据、引擎或 corral / corral-dispatch；不操作真实队列推进、loop、服务、安装或其他项目，不推送。
 - 被委派的 agent 不再委派，不合并 main；只在自己的分支提交，并在本文件追加完成记录。主控按项目规则审查、本地合并与收尾，做完等用户放行。
