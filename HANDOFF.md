@@ -4,9 +4,30 @@
 
 ---
 
+## 2026-09-25 —— T20 已合并收尾，等待用户放行
+
+**这一节最新。** Codex `gpt-6-astra / high` 的 `drover/dev-list-json-1` 完成 `8b17900`，主控审查通过并本地合并，审查记录 `86bb11b`，收尾记号 `604802a`。未推送。
+
+- `drover list --json` 已可输出模式、暂停、当前/待放行任务、待办及最近历史；普通 list 输出保持原样。JSON 路径只读，不创建交接目录、不联系 agent。字段与取舍见 m31 任务文件完成记录。
+- 开发侧定向 RED/GREEN、一次 CLI 回归及差异检查通过；主控重跑一次 `tests/drover.sh` 通过，差异检查通过。未扩大测试预算、未录屏或交叉审查。
+- 开发 agent idle、attached=0，worktree 干净且分支已合并后完成清理；工作目录已删，一并关闭该自开 agent，其他 agent 未动。
+- 等用户自行放行；T21 继续等待触发，其 m32 需求单仍为此前创建的未跟踪文件，保留原样。本轮未操作真实 done/go/next/loop、服务、安装或其他项目。
+
+---
+
+## 2026-09-25 —— T20 已委派，T21 等待用户触发
+
+**（历史记录，T20 已收尾，见上。）** 用户已触发 T20。实际路由为常规 / 改行为 / 不要交叉审查，委派 Codex `gpt-6-astra / high`，agent `drover/dev-list-json-1`，分支/worktree `m31-list-json`，任务提交 `5cfbfa4`。
+
+- 任务单 `docs/任务/m31-list-json 队列状态JSON输出.md` 保留四条用户原话验收；只改 list/参数处理与定向测试，不补产品文档或命令帮助字段说明。
+- 验证预算：定向 `tests/list-json.py` RED/GREEN，标准回归 `tests/drover.sh` 一次及差异检查；不录屏、不扩展套件。完成后主控审查、本地合并与收尾，等用户放行。
+- T19 已清理收尾，未复用其 agent；T21 未触发，其 m32 需求单仍保留为未跟踪文件。本轮不操作真实任务推进、loop、服务、安装或推送。
+
+---
+
 ## 2026-09-25 —— T19 已合并收尾，等待用户放行
 
-**这一节最新。** Claude Code `opus[1m] / high` 的 `drover/dev-keyboard-help-1` 完成 `6dd2b5e`，主控审查通过并本地合并，审查记录 `bae270b`，收尾记号 `a55c634`。未推送。
+**（历史记录，用户已继续触发 T20，见上。）** Claude Code `opus[1m] / high` 的 `drover/dev-keyboard-help-1` 完成 `6dd2b5e`，主控审查通过并本地合并，审查记录 `bae270b`，收尾记号 `a55c634`。未推送。
 
 - 看板按 `?` 查看英文快捷键与滚动帮助，PgUp/PgDn 翻页，Esc 返回原项目与滚动位置；帮助页中的队列操作键不执行操作。沿用沙色，底栏暂不增加帮助入口提示。实际终端观感待用户目视。
 - 开发侧定向 RED/GREEN 及约定回归通过；主控重跑 `tests/drover.sh`、`tests/board-header.py` 通过，差异检查通过。未录屏、未扩展测试范围；详情见 m30 任务文件。
