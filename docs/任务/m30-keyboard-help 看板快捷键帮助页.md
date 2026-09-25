@@ -58,3 +58,10 @@
 
 - 底栏按键提示和启动消息 `HELP` 里没有加 `? Help`：验收没要求，加了会改现有底栏布局。要不要加，由主控/用户决定。
 - 没改 QUICKSTART、ROADMAP、HANDOFF。没有运行 `tests/drover-board.sh`、`tests/board-layout.py`，没有录屏。实际终端观感待用户目视。
+
+## 主控审查
+
+- 通过。核对 `6dd2b5e` 的实现、定向测试与完成记录，四条用户原话验收均落实；只改绘制/输入、轻量测试及本任务记录，未扩展业务逻辑或产品文档。
+- 主控重跑 `bash tests/drover.sh`、`python3 tests/board-header.py` 均通过，`git diff --check main...m30-keyboard-help` 通过；开发侧定向测试的 RED/GREEN 记录与测试内容一致。本次无交叉审查，不录屏、不额外跑套件。
+- 同意整屏帮助、独立帮助页翻页、Esc/? 返回、保留 q 退出及缩短 Esc 等待的取舍。接受底栏暂不加 `? Help`；入口可发现性作为后续建议，不扩大本任务。真实终端观感由用户目视。
+- 已本地合并；随后清理该分支/worktree 和自开的开发 agent，打收尾记号。未推送，未操作真实任务推进、loop、服务或安装；等待用户放行。
