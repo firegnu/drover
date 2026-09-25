@@ -121,6 +121,16 @@ third, back = screen.frames[4], screen.frames[-1]
 assert 'Up next 3/' in text(third) and 'T45 正文第一行' in text(third) and 'Task file' not in text(third), text(third)
 assert 'Up next 1/' in text(back), text(back)
 
+# 4b. 同名未编号的两件：选中第二件后连续重绘仍停在第二件
+same = copy.deepcopy(pv)
+same['queue']['todo'] = [{'id': '', 'title': 'same title', 'next': i == 0, 'held': False, 'body': [b], 'task_file': None}
+                         for i, b in enumerate(('first', 'second'))]
+state = {'pending': True, 'pending_sel': 1, 'pending_key': None}
+for _ in range(2):
+    screen = Screen(24, 80)
+    B.draw_pending(screen, same, state, 24, 80)
+    assert state['pending_sel'] == 1 and 'second' in text(sorted(screen.rows)), (state, text(sorted(screen.rows)))
+
 # 5. 发现入口：? 帮助页有 u 一行，看板底栏有 u 提示
 screen = Screen(40, 100, [ord('?'), ord('q')])
 run_tui(screen, vm)

@@ -1606,8 +1606,9 @@ def draw_pending(stdscr, pv, state, h, w):
         return
     todo = (pv["queue"] or {}).get("todo", []) if pv else []
     keys = [t["id"] or t["title"] for t in todo]
-    i = keys.index(state["pending_key"]) if state.get("pending_key") in keys \
-        else min(state.get("pending_sel", 0), max(0, len(todo) - 1))
+    i = min(state.get("pending_sel", 0), max(0, len(todo) - 1))
+    if state.get("pending_key") in keys and keys[i] != state["pending_key"]:   # 原序号还是它就不动，重名不跳回第一件
+        i = keys.index(state["pending_key"])
     cols, room = w - 3, h - 4
     if todo:
         t = todo[i]

@@ -43,3 +43,10 @@
 - 按键：详情页里 ↑↓/jk 换一件（到头不动），PgUp/PgDn 翻页，Esc 返回；g/n/p/a/l/u/? 和鼠标都不生效，r / 自动刷新 / q 照常。只写自己的 `pending_*` 状态，项目选择和各处滚动位置不变。正在看的那件按编号（没编号按标题）记住，刷新后没了就停在原序号。没有待办时按 `u` 不打开，消息栏显示 `No pending tasks`。
 - 验证：新增 `tests/board-pending.py`，先 RED（`queue_vm` 待办没有 `body`），实现后 GREEN。回归 `bash tests/drover.sh`、`python3 tests/board-header.py`、`python3 tests/board-help.py` 各一次全部通过，`git diff --check` 通过。没有运行 `tests/drover-board.sh`、`tests/board-layout.py` 等会录屏的入口，没有录屏。
 - 只改了 `bin/drover-board`、新增 `tests/board-pending.py` 和本文件；没动 HANDOFF、ROADMAP、QUICKSTART、队列推进、判据、引擎或 corral。
+
+## 返工记录（drover/dev-pending-page，2026-09-25）
+
+- 修主控审查的必须项：同名未编号的两件待办，选中第二件后再重绘会跳回第一件（`keys.index` 总取第一个重名）。
+- 最小修复：`draw_pending` 先看原序号上那件的 key 还是不是记住的 key，是就不动；不是（刷新后顺序变了）才按 key 找，找不到仍停在原序号。队列语义和其他功能不变。
+- `tests/board-pending.py` 加回归：两件 `id=""`、`title="same title"`，正文 first/second，`pending_sel=1` 连调两次 `draw_pending`，修复前第二次变成 0（RED），修复后两次都停在第二件并显示 second（GREEN）。
+- 返工验证只跑了 `python3 tests/board-pending.py` 和 `git diff --check`，都通过；没有重跑 CLI/header/help，没有录屏。
