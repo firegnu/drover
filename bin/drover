@@ -86,7 +86,7 @@ REPO = D = Q = S = PAUSED = LOOP = DONE_MARK = ""
 GATE = True
 
 
-def setup():
+def setup(read_only=False):
     global REPO, D, Q, S, PAUSED, LOOP, GATE, CHECK_CMD, MAIN_AGENT, DONE_MARK
     r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
@@ -98,7 +98,8 @@ def setup():
         die(2, ui(f"ERROR: {REPO}/.drover.conf 缺失或没有 HANDOFF_DIR，这个仓库还没接入 drover。",
                   f"ERROR: {REPO}/.drover.conf is missing or has no HANDOFF_DIR; this repository is not configured."))
     D = conf["HANDOFF_DIR"]
-    os.makedirs(D, exist_ok=True)
+    if not read_only:
+        os.makedirs(D, exist_ok=True)
     Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
     GATE = conf.get("TASK_GATE", "1").strip() != "0"
     CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条跑的命令；留空 = 这个项目不跑验收
@@ -635,9 +636,20 @@ def span(a, b):
     return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
 
 
-def cmd_list():
+def cmd_list(as_json=False):
     tasks, current, awaiting = fold()
     todo = pending(tasks)
+    if as_json:
+        fin = [t for t in tasks.values() if t["status"] != "doing"]
+        print(json.dumps({
+            "mode": {"loop": loop_on(), "gate": GATE},
+            "paused": os.path.exists(PAUSED),
+            "current": current,
+            "awaiting": tasks.get(awaiting),
+            "pending": todo,
+            "history": list(reversed(fin[-10:])),
+        }))
+        return 0
     mode = ("循环 + 放行模式（自动核对判据，下一件等人放行）" if GATE else "循环 + 自动模式（做完直接领下一个）") if loop_on() \
         else ("放行模式" if GATE else "自动模式")
     print(f"模式：{mode}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
@@ -776,7 +788,7 @@ def main(argv):
             else:
                 die(2, f"ERROR: drover loop 不认识这个参数：{a}\n\n{__doc__.strip()}")
         return cmd_loop_run(list_path, once, interval)
-    setup()
+    setup(read_only=argv == ["list", "--json"])
     cmd, rest = argv[0], argv[1:]
     expect = None
     if "--expect" in rest:
@@ -788,8 +800,8 @@ def main(argv):
             die(2, "ERROR: --expect 只用于 move / edit / drop --pos / hold")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
-    if cmd == "list" and not rest:
-        return cmd_list()
+    if cmd == "list" and rest in ([], ["--json"]):
+        return cmd_list(as_json=bool(rest))
     if cmd == "next" and not rest:
         return cmd_next()
     if cmd == "done" and len(rest) == 1:
