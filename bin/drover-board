@@ -160,11 +160,11 @@ def ago(ts):
 
 
 # ============================================================ 解析交接文件
-def parse_conf(path):
+def parse_conf(path, text=None):
     """.drover.conf → {键: 值}。`#` 开头的行不匹配，天然当注释跳过。
     HANDOFF_DIR 是人可能手写的路径，`~` 在这里统一展开，下面各处就不用再管。"""
     conf = {}
-    for line in (read(path) or "").splitlines():
+    for line in ((read(path) or "") if text is None else text).splitlines():
         m = re.match(r'\s*([A-Z_]+)=(.*)', line)
         if m:
             conf[m.group(1)] = m.group(2).strip().strip('"').strip("'")
@@ -392,10 +392,10 @@ MAIN_BRANCH = "main"
 CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，不能把 drover 卡住
 
 
-def task_branches(repo, base_sha, english=False):
+def task_branches(repo, base_sha, english=False, git_runner=None):
     """所有本地分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
     try:
-        result = subprocess.run(
+        result = git_runner(repo, "for-each-ref", "--format=%(refname)", "refs/heads/") if git_runner else subprocess.run(
             ["git", "-C", repo, "for-each-ref", "--format=%(refname)", "refs/heads/"],
             capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.SubprocessError) as exc:
@@ -412,7 +412,7 @@ def task_branches(repo, base_sha, english=False):
     for b in out:
         if not b or b == f"refs/heads/{MAIN_BRANCH}":
             continue
-        result = subprocess.run(
+        result = git_runner(repo, "merge-base", "--is-ancestor", base_sha, b) if git_runner else subprocess.run(
             ["git", "-C", repo, "merge-base", "--is-ancestor", base_sha, b],
             capture_output=True, text=True)
         b = b[len("refs/heads/"):]
@@ -437,7 +437,7 @@ def run_check(repo, cmd, english=False):
     return r.returncode, tail
 
 
-def criteria(repo, base_sha, check_cmd, do_check=True, english=False):
+def criteria(repo, base_sha, check_cmd, do_check=True, english=False, git_reader=None, git_runner=None):
     """三条完成判据的只读核对 → [{n, name, ok, why, failed?}]。
     failed 仅供显示明确失败；未提供时不能把 ok=False 推断为执行错误。
     ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
@@ -446,12 +446,13 @@ def criteria(repo, base_sha, check_cmd, do_check=True, english=False):
     `do_check=False` 时第 3 条不跑命令、直接标「没查」。**渲染页面时必须用这个**：第 3 条
     可能是整套测试，页面 30 秒刷一次、每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。
     前两条是纯 git，便宜，渲染时照算——「等人」的识别靠的就是它们（见 wants_human）。"""
+    # show 注入固定端点、检查退出码的读取器；旧调用仍走原有 Git 读取路径。
     rows = []
     name1 = f"{MAIN_BRANCH} advanced" if english else f"{MAIN_BRANCH} 前进了"
     name2 = "Task branches merged" if english else "这次建的分支都合进去了"
     name3 = "Check command passed" if english else "验收命令过了"
 
-    head = git(repo, "rev-parse", MAIN_BRANCH).strip()
+    head = (git_reader or git)(repo, "rev-parse", MAIN_BRANCH).strip()
     if not head:
         rows.append({"n": 1, "name": name1, "ok": False,
                      "why": (f"No {MAIN_BRANCH} branch in this repository" if english else
@@ -470,7 +471,8 @@ def criteria(repo, base_sha, check_cmd, do_check=True, english=False):
                      "why": ("No baseline SHA; cannot identify branches from this task" if english else
                              "没有 base_sha：没记下送任务之前的 sha，无法判断哪些分支是这次的")})
     else:
-        brs, excluded, errors = task_branches(repo, base_sha, english=english)
+        brs, excluded, errors = (task_branches(repo, base_sha, english=english, git_runner=git_runner)
+                                 if git_runner else task_branches(repo, base_sha, english=english))
         if errors:
             rows.append({"n": 2, "name": name2, "ok": False, "failed": True, "why": "\n".join(errors)})
         elif not brs:
@@ -482,9 +484,10 @@ def criteria(repo, base_sha, check_cmd, do_check=True, english=False):
                                   + "、".join(excluded))) if excluded else
                                 ("No unmerged branches" if english else "没有未合并的分支")})
         else:
-            codes = [(b, subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor",
+            codes = [(b, (git_runner(repo, "merge-base", "--is-ancestor", f"refs/heads/{b}", f"refs/heads/{MAIN_BRANCH}")
+                          if git_runner else subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor",
                                         f"refs/heads/{b}", f"refs/heads/{MAIN_BRANCH}"],
-                                       capture_output=True).returncode) for b in brs]
+                                       capture_output=True)).returncode) for b in brs]
             left = [b for b, code in codes if code != 0]
             rows.append({"n": 2, "name": name2, "ok": not left,
                          "failed": any(code not in (0, 1) for _, code in codes),
@@ -514,7 +517,7 @@ def criteria(repo, base_sha, check_cmd, do_check=True, english=False):
     return rows
 
 
-def find_done_mark(repo, base_sha, mark, english=False):
+def find_done_mark(repo, base_sha, mark, english=False, git_reader=None):
     """收尾记号 → {n, name, ok, why}，形状和 criteria 的每一条一样。
 
     这是判「这件活完了」的**唯一依据**，上面三条是门（见 ROADMAP 完成判据那一节）。
@@ -541,14 +544,15 @@ def find_done_mark(repo, base_sha, mark, english=False):
         return {"n": 0, "name": name, "ok": False,
                 "why": ("Dispatch baseline SHA was not recorded" if english else "没有记下送任务之前的 sha，划不出区间")}
 
+    read_git = git_reader or git
     pat = re.compile(r"^" + re.escape(mark) + r"\s*[:：]")
-    for line in git(repo, "log", "--format=%H%x09%s", f"{base_sha}..{MAIN_BRANCH}").splitlines():
+    for line in read_git(repo, "log", "--format=%H%x09%s", f"{base_sha}..{MAIN_BRANCH}").splitlines():
         sha, _, subject = line.partition("\t")
         if not pat.match(subject):
             continue
-        if len(git(repo, "rev-list", "--parents", "-n1", sha).split()) != 2:   # 自己 + 恰好一个父
+        if len(read_git(repo, "rev-list", "--parents", "-n1", sha).split()) != 2:   # 自己 + 恰好一个父
             continue
-        if git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).strip():
+        if read_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).strip():
             continue
         return {"n": 0, "name": name, "ok": True, "why": f"{sha[:7]} {subject}"}
     return {"n": 0, "name": name, "ok": False,
@@ -771,15 +775,13 @@ CHECK_RESULT_BYTES = 64 * 1024
 CHECK_WHY_CHARS = 4096
 
 
-def check_result_vm(p, c, row):
-    """第 3 条上次核对的结果，只供 card_vm 显示；判断路径绝不读它。"""
-    missing = {**row, "ok": None, "failed": False, "why": "Not run (no valid check record); " + row["why"]}
-    now = time.time()  # collect 的 NOW 可能已过去一段时间；按显示时钟容许 5 秒偏差。
+def read_check_result(path, now):
+    """有界读取和格式校验；身份校验由调用者按其观察端点完成。"""
     try:
-        with open(f"{p['dir']}/.check-result", "rb") as f:
+        with open(path, "rb") as f:
             raw = f.read(CHECK_RESULT_BYTES + 1)
         if len(raw) > CHECK_RESULT_BYTES:
-            return missing
+            return "invalid", None
         saved = json.loads(raw.decode("utf-8") or "null")
         if (not isinstance(saved, dict)
                 or not all(isinstance(saved.get(k), str) and "\0" not in saved[k]
@@ -788,10 +790,24 @@ def check_result_vm(p, c, row):
                 or len(saved["why"]) > CHECK_WHY_CHARS
                 or type(saved.get("t")) not in (int, float) or not math.isfinite(saved["t"])
                 or saved["t"] > now + 5):
-            return missing
+            return "invalid", None
         for k in ("task", "main", "cmd", "why"):
             saved[k].encode("utf-8")  # JSON 转义可能解出孤立代理码，不能送进 addstr。
-    except (OSError, ValueError, OverflowError, RecursionError):
+    except FileNotFoundError:
+        return "missing", None
+    except OSError:
+        return "unavailable", None
+    except (ValueError, OverflowError, RecursionError):
+        return "invalid", None
+    return "valid", saved
+
+
+def check_result_vm(p, c, row):
+    """第 3 条上次核对的结果，只供 card_vm 显示；判断路径绝不读它。"""
+    missing = {**row, "ok": None, "failed": False, "why": "Not run (no valid check record); " + row["why"]}
+    now = time.time()  # collect 的 NOW 可能已过去一段时间；按显示时钟容许 5 秒偏差。
+    status, saved = read_check_result(f"{p['dir']}/.check-result", now)
+    if status != "valid":
         return missing
     current = {"task": c["id"], "main": git(p["repo"], "rev-parse", MAIN_BRANCH).strip(),
                "cmd": p.get("check_cmd", "")}

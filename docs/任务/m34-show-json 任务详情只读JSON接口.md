@@ -46,3 +46,56 @@
 
 ## 做完
 在本文件追加「## 完成记录」：改动、验证、实现取舍、限制和待主控决定事项。给出提交与最终契约路径。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-26，drover/dev-show-json 完成实现，提交 **`749012e`**。
+最终公开契约：[docs/任务详情JSON接口.md](../任务详情JSON接口.md)。
+
+### 改动
+
+- `bin/drover` 新增独立 `show Tn --json [--with-agent-status]` 入口，在原 setup 之前分流，不创建交接目录。按事件中的同一 ID 覆盖 current/awaiting/history，返回原始任务文本、时间/Git/判据/缓存/路由/Hold/关注与结构化错误。
+- `bin/drover-board` 的配置解析支持传入一次读取的文本；Git 判据增加可选读取器；提取原缓存的有界读取和格式校验。原调用使用默认路径，旧判据、缓存身份和看板文案不变。
+- `tests/show-json.py` 新增 15 项公开 CLI 定向测试；公开契约列出类型、枚举、原因码、缺失与历史边界、三种位置示例和刷新成本；ROADMAP 仅追加本次已批准功能说明。
+
+### 验证与前台证据
+
+所有命令均在前台等待退出；仅使用临时合成仓库/事件/配置及假 corral，未运行真实 agent。
+
+- 初始 RED：`python3 tests/show-json.py` 因原版不识别 `show T1 --json` 返回 2 而失败；实现基本查询后 GREEN。
+- 逐步 RED→GREEN：时间/Git/判据用例先因缺少 timing 失败；缓存/路由/Hold/关注用例先因字段不存在失败；并发写入用例先因缺少 snapshot_changed 失败，不可读事件先误报 task_not_found。分别实现后通过。
+- 收尾定向 RED→GREEN：`python3 tests/show-json.py ShowJSON.test_unreadable_routing_path_is_optional` 复现路径含 NUL 导致新增快照检查抛 ValueError，修复新接口路由读取边界后完整定向入口通过。
+- 最终 `python3 tests/show-json.py`：**15 项通过，退出码 0**。覆盖 current→awaiting→history、固定结束时间、drop 未开始、HEAD/main 分离、分支未合入、Git 非零退出不伪造零/通过、缓存身份/格式、历史 Hold 回放、不从 gate 推 Hold、只调用主控 status、并发变化、原文保留与全部查询只读。
+- `bash tests/drover.sh`：**仅运行一次，通过，退出码 0**。
+- `bash tests/criteria.sh`：**仅运行一次，通过，退出码 0**，包含损坏引用、多语言错误、收尾记号四道检查。
+- `python3 tests/check-result.py CheckResult.test_deep_json_and_parser_recursion CheckResult.test_board_matching_results CheckResult.test_board_stale_results CheckResult.test_board_missing_and_invalid_results CheckResult.test_record_and_reason_limits CheckResult.test_future_time_and_collection_skew CheckResult.test_check_row_is_selected_by_number CheckResult.test_board_not_applicable_is_not_missing`：**8 个非 PTY 用例通过，退出码 0**。验证提取格式校验后旧看板的匹配/过期/坏记录/读取上限/时钟容差/按行号覆盖/不适用行为。
+- `git diff --check`、提交前 `git diff --cached --check` 均通过。没有运行全量看板、PTY 录屏、安装套件或额外项目测试。
+
+### 实现取舍与限制
+
+- 沿用 task_fold、task_route、task_holds/task_held 和已有完成判据，不调用 collect/project_state，也不对每件历史任务做 Git 查询。任务事件仍需整体读取和折叠以确定选中位置和 Hold。
+- 新接口捕获本地分支 SHA 和 HEAD，Git 查询严格检查退出码；查询错误时 Git 判据组保守降级为 unavailable。旧 helper 吞错误的默认行为留给旧调用，不改状态机或完成判定。
+- completion 不把缓存当成本次执行；last_check 单独表示上次样本。历史没有完成 main 或完整验收快照，相关字段明确 null/原因码；awaiting 的已记录 done 不受当前重算影响。routing 明确来自现在的文件，历史 Hold 截至结束事件回放。
+- 关注仅是原条件的推断：默认 unknown，显式选项只对 current 发一次配置主控的公开 status。信息不足不猜测，awaiting/history 无需查询 agent。
+- 读取期间变化用 warnings.snapshot_changed 表达，Git 复核失败单独说明；不承诺全局原子快照。每约 5 秒刷新是调用建议，不是响应时限；具体超时与成本见公开契约。
+- 严格留在 `m34-show-json` worktree/分支；未委派、合并、推送，未改 HANDOFF.md，未操作真实队列、配置、loop、服务、安装、用户进程或其他仓库。
+
+待主控决定事项：无新增设计待决；实现与契约待主控审查，本分支未合并。
+
+### 首轮审查返工：合法 ref 中的 U+2028（2026-09-26）
+
+- 主控发现 `ShowGit.read_refs()` 使用 `splitlines()`，将合法分支名 `feature/name\u2028tail`（实际 U+2028）拆成两条记录，使查询退出 1 并输出 ValueError traceback。
+- 仅将新读取器的记录分隔改为 ASCII `\n`，跳过末尾空记录；不截断、替换或忽略合法 ref，不改共享 `task_branches`、完成判据或公开 JSON 字段/原因码。公开契约无需变更。
+- 新增 `ShowJSON.test_unicode_line_separator_in_branch_name`：在隔离 fixture 建立实际含 U+2028 的未合入分支，经公开 CLI 检查 JSON 成功返回、分支名称原样显示、判据为 unmet；合入后检查同名分支判据为 met、main 区间计数为 1、无快照误报。沿用文件快照断言保证查询只读，并确认不调用 corral。
+- RED：`python3 tests/show-json.py ShowJSON.test_unicode_line_separator_in_branch_name` 在修改实现前退出 1，明确复现 `read_refs` 的 ValueError；修复后同一命令 GREEN，退出码 0。
+- `python3 tests/show-json.py`：**16 项通过，退出码 0**；`git diff --check` 通过。全部命令前台跑完，未重跑已通过的 CLI/criteria/cache 套件。
+- 仅改新读取器、该定向测试和本完成记录；在原 `m34-show-json` 分支提交，未合并、推送或操作真实数据。无新增待决事项，待主控复核。
+
+## 主控审查
+
+2026-09-26，drover/main：**通过，可合并**。首版 `749012e`、完成记录 `678d450` 与返工 `3e57156` 已核对。
+
+- 修改限于批准文件；show 在原 setup 前分流，共享判据仅增加可选读取器，原调用默认路径、状态机和 list 实现保持。缓存只读与历史/当前/上次样本的边界符合任务要求。
+- 主控前台重跑 CLI 回归、criteria 回归、8 项非 PTY 缓存用例，均通过；首轮 show 15 项通过。另以隔离 fixture 复现合法 U+2028 分支导致非 JSON 崩溃，交回原 agent 定点修复。
+- 返工只改新读取器的 ASCII 换行分隔、定向测试和记录；主控复核差异并重跑 show 16 项全部通过，未重复已通过的无关套件，差异检查通过。无未解决阻断项，不需要交叉审查。
+- 接受并在公开契约保留：历史验收快照缺失、路由来自当前文件、缓存不是本次验收、Git/状态非原子快照、5 秒刷新不是响应时限、默认不查询 agent。未改变核心判定，未做 PTY 录屏或真实任务验证。
