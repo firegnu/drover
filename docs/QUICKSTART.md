@@ -98,6 +98,8 @@ drover next
 
 已经记完成、正在等放行时，`drover go` 只放行，不重复核对；它本身不发送下一件。没看到收尾记号但三条门和工作区检查通过时，会明确警告「这次算你自己判断的」，仍接受这次手动确认；自动循环仍必须看到记号。`drover done <编号>` 保留给单独核对并记完成、兼容脚本和引擎使用，日常无需先敲它。
 
+如果已验收成果并接受未满足的检查条件，可先用 `drover show Tn --json` 读取 `manual_completion.target_token`，再运行 `drover complete-manually Tn --target-token '<令牌>' --reason '确认原因' --json`。这会保留当时检查结果和人工原因，不执行验收命令，始终等普通 `drover go` 放行，即使 `TASK_GATE=0`。目标或配置已变化时须刷新并重新确认。字段与错误码见[人工完成公开接口](人工完成JSON接口.md)。
+
 ## 6. 打开看板
 
 ```sh

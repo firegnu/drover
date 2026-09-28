@@ -47,3 +47,36 @@
 ## 做完
 
 本文件末尾追加「## 完成记录」：改了什么、RED/GREEN 和预算内实际验证结果、内部同步等取舍、未解决项。提交实现与记录在本分支，给出固定 SHA，保持 worktree 干净，保留现场待 saddle 隔离联调。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-28，被委派实现者在 `m36-manual-complete` 完成，保留 worktree 待主控审查和 saddle 隔离联调。
+
+### 改动
+
+- 实现 `complete-manually Tn --target-token TOKEN --reason 原因 --json`；成功单个 JSON／退出 0，强制 `gate=true`，检查不满足和 tracked dirty 可接受，必要读取失败仍拒绝。原因去首尾空白，保存 manual 方法、确认时间、四项检查状态、既有验收样本及 workspace 快照，不运行 CHECK_CMD。
+- show 增加只读目标令牌，绑定真实项目、包含具体 start 的事件全文及状态／配置文件版本；跨项目、重启同编号、已结束、状态／配置变化和重复确认均不能落到别的运行。查询不创建锁，快照不可用或读取中变化不给令牌。
+- 完成事件折叠保留 `completion_record`，list JSON／show 可读，普通 list 显示人工原因和时间，go 后仍保留。旧事件不补自动通过，show 原 completion 历史作用域不变；看板中文等待项、步骤及英文等待／详情仅增加人工确认文案分支。
+- 补公开契约的不可用原因和内部取舍说明、QUICKSTART 用法。通知六字段／稳定身份和自动完成判据未改。
+
+### RED → GREEN 与验证
+
+唯一新增测试文件为 `tests/manual-complete.py`，全部使用合成项目、独立 HOME/XDG/TMPDIR、假 corral／通知发送器。并发测试通过 socket 握手阻塞外部 Git／验收命令，所有子进程等待退出，不依赖固定睡眠。
+
+- 主流程 RED：实现前 `show` 缺少 `manual_completion`，断言失败；实现后通过，覆盖 main 未前进、分支未合入、dirty、gate 关闭仍等待和普通 go 留存记录。
+- 显示 RED：修正测试自身 set 序列化问题后，实际观察到旧看板仍说 `Checks passed`／「核对已通过」，目标断言失败；必要文案分支后通过。前一次夹具错误不算 RED。
+- 发布边界 RED：模拟临时文件 fsync 期间配置被另一个写入者改动，旧实现在变化后仍退出 0；补发布前版本核对后返回 `target_changed`／退出 3，状态日志无完成事件。
+- 读取边界 RED：无效 HANDOFF_DIR 含 NUL 时原实现 traceback／退出 1；补检查后返回 `configuration_unreadable`／退出 2。
+- 最终 `python3 tests/manual-complete.py`：10 项通过（8.936 秒）。另覆盖跨项目／同编号新运行／配置改回原文仍过期、失败及损坏验收样本、不适用验收、Unicode 原因、历史字节保留、读取失败、原子发布失败、双方互斥和暂停／loop 放行继续路径；普通已完成历史无人工记录。
+- 标准检查各一次：`bash tests/drover.sh` 通过；`bash tests/criteria.sh` 通过（损坏 ref 的中／法 locale 提示为该套件既有夹具输出）；`python3 tests/show-json.py` 16 项通过（9.598 秒）；`python3 tests/list-json.py` 通过。外层另设独立 HOME/XDG/TMPDIR 和假外部命令，均前台等待完成。
+- `git diff --check`：通过。未运行整套 drover-board／PTY、录屏、植入缺陷、重复基线或预算外套件。
+
+### 内部同步与取舍
+
+- 交接目录 `.tasks.lock` 使用标准库 flock 非阻塞互斥。本版本 CLI 的 done／go／next／drop／hold／队列编辑／开关命令在读取决策前取得锁，直到验收、发送和写入结束；忙时退出 4。人工确认同锁复核目标后写入，查询完全不取锁。没有通用事务或审计层，不支持外部手改 tasks.state 并发；旧版已启动的 CLI 写进程不参与新锁协议。
+- 人工完成在同目录临时文件中保留原事件前缀并附加一个 ASCII 转义 JSON 完成事件，fsync 后检查版本再原子替换；失败不发布完成事件。旧记录不回填，内部换行文字可恢复，Unicode 分隔符不会拆坏事件。
+- 人工完成只提交这一份事件日志，不修改 loop／paused 或发送下一件；正常 go 放行人工记录时，若 loop 已开启再写既有 `.loop-wait`。这避免人工确认阶段跨两个文件半成功，并已验证暂停仍阻挡引擎、恢复后只发下一件。
+
+### 未解决项与交付边界
+
+本任务范围内无已知未解决项。主控审查、saddle 消费方及隔离联调尚待进行；该完成记录不代表已合并或已发布。未改主仓库、saddle、corral、全局技能、T27、真实队列／配置／通知偏好／服务；未安装、推送、合并或清理分支／worktree，未操作任何真实 agent。固定实现提交 SHA 随最终回复交付。
