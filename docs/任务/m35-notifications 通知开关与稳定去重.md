@@ -79,3 +79,18 @@ drover notifications off --json
 
 本文件末尾追加「## 完成记录」并在本分支提交：修改、验证（含真实 RED/GREEN）、取舍、未做事项，各几句话。回复附 SHA、公开契约路径、命令绝对路径和要主控决定的事项。保留 worktree 和 agent。
 命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-28，受委派实现者在指定 `m35-notifications` 分支/worktree 完成，保留待主控审查与 saddle 联调。未合并、推送或发布。
+
+- 修改：`bin/drover` 增加任意 cwd 可用的用户级 notifications status/on/off JSON 命令；偏好采用文件锁和原子替换，实际变化才递增 revision。通知仅观察现有 awaiting，复用任务事件折叠；启动/切换按项目首次成功读取建立基线，持久保留全部已处理身份。通知错误与推进隔离。未改 board、共享签名、任务状态机或事件格式。
+- 真实 RED：首次运行 `python3 tests/notifications.py`，新增公开 CLI 用例因旧实现先执行项目 setup 而退出 2（“不在 git 仓库里”）失败；实现后该用例 GREEN。随后通知用例在旧通知逻辑下因首次观察直接弹出已有 awaiting 失败，且事件编码损坏使通知 collect 抛出 UnicodeDecodeError；改为通知层严格观察和稳定基线后 GREEN。早期清单损坏用例触及既有 loop_tick 读取边界，已收窄为通知事件读取失败，不据此改推进逻辑。
+- 最终验证：定向入口 8 项全过，覆盖开关幂等/错误 JSON、启动/升级基线、仅 awaiting、身份字段缺失、文案/短暂缺失/重启去重、路径别名、revision 切换、读取失败、发送失败无重试、通知节流及真实合成 loop 推进隔离。关闭、偏好损坏、记录不可写时，合成队列仍真实派发并记 done，保持 gate，不出现 go。全部使用临时 HOME/合成项目/假 corral/假发送器。
+- 回归：`bash tests/drover.sh` 仅运行一次，退出 0；`git diff --check` 通过。旧 `tests/drover-board.sh` 的通知块改为调用同一定向入口，未运行完整 board 套件、安装套件、PTY 录屏或截图；未扩展回归预算。所有命令等待前台完成。
+- 取舍：通知观察不再调用缺少 t0 且吞掉部分读取错误的 board collect，直接严格读项目事件、复用原折叠函数，不查询 corral 或重算判据。读失败的项目跳过、成功项目继续。身份为规范化仓库路径、id、t0 的 binary64 大端十六进制、start、main、awaiting_release 六元组；具体表示和错误码在 `docs/通知JSON接口.md`。发送前记录，失败不重试；持久集合不按可见集合裁剪，也不作为通知历史。
+- 未做与后续：没有操作真实配置、队列、通知、服务、安装、其他仓库或 T27 文件；没有再委派。无实现阻塞，等待主控审查，再交 saddle 隔离联调；联合发布时须协调旧引擎加载新版，当前不执行。不承诺系统送达、用户看见或跨渠道精确一次。
+
+公开契约：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m35-notifications/docs/通知JSON接口.md`。
+可运行命令：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m35-notifications/bin/drover notifications status --json`（联调须隔离 HOME；on/off 同路径）。
+固定实现 SHA 由本完成记录所在提交提供，见最终交付回复；worktree 保留。
