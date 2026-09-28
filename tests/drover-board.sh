@@ -69,7 +69,7 @@ git -C "${TMP}/eta/wt-m1" add a.py; git -C "${TMP}/eta/wt-m1" commit -qm 'm1 wip
 printf 'CHECK_CMD=pytest -q\n' >> "${TMP}/eta/repo/.drover.conf"
 export MOCK_ALPHA="${TMP}/alpha/repo" MOCK_ETA="${TMP}/eta/repo" MOCK_ETA_WT="${TMP}/eta/wt-m1" MOCK_DIR="${TMP}"
 export DROVER_CORRAL_BIN="${TMP}/corral"
-# 引擎每跳都会发「等你」通知：记录写 ~/.drover/board-notified.json、命令默认是 osascript。
+# 引擎节流检查待放行通知：记录写 ~/.drover/board-notified.json、命令默认是 osascript。
 # 两样都得关进临时目录，不然测试会写到真的家目录、真的弹通知。所有 drover loop 的调用都带上。
 NH="${TMP}/nhome"; mkdir -p "${NH}/.drover"
 cat > "${TMP}/notifier" <<EOF
@@ -633,57 +633,9 @@ assert s == {"sel": 1, "n": 3}, s
 PY2
 echo 'PASS key_action(): 键码 → 动作；p / l 认当前状态，上下不越界，生键不重跑'
 
-# ---- 「等你」通知：跟着守护进程走，和界面无关 ----
-# 通知现在由循环引擎（drover loop）每跳发一次，看板一点不管——开不开看板都照发。
-# 一个项目新出现的条目合成一条；没变化不重发；条目消失后再出现会重发；AppleScript 字符串要转义；
-# 通知发不出去也不能把循环带走。用假的通知命令，不真弹。
-tick() { loop "$1" --once --projects "${TMP}/projects"; }
-nlines() { if [ -f "${TMP}/notify.log" ]; then wc -l < "${TMP}/notify.log" | tr -d ' '; else echo 0; fi; }
-tick "${TMP}/notifier"
-[ "$(nlines)" = 2 ] || fail "first tick: one per project waiting on you (eta 等人, theta awaiting release), got $(nlines)"
-grep -q 'zeta/repo' "${TMP}/notify.log" && fail 'a blocked 主控 is not drover的事'
-grep -q '做完了' "${TMP}/notify.log" || fail 'waiting for release is notified'
-tick "${TMP}/notifier"
-[ "$(nlines)" = 2 ] || fail 'an unchanged tick must not notify again'
-mv "${TMP}/theta/review/tasks.state" "${TMP}/theta/state.bak"
-tick "${TMP}/notifier"
-[ "$(nlines)" = 2 ] || fail 'an item going away sends nothing'
-mv "${TMP}/theta/state.bak" "${TMP}/theta/review/tasks.state"
-tick "${TMP}/notifier"
-[ "$(nlines)" = 3 ] || fail 'an item that comes back is notified again'
-tail -1 "${TMP}/notify.log" | grep -q '做完了' || fail 'the renewed notification carries the item text'
-tail -1 "${TMP}/notify.log" | grep -qF '\"引号\"' || fail 'double quotes are escaped for AppleScript'
-[ -s "${NH}/.drover/board-notified.json" ] || fail 'the notified state lives in ~/.drover'
-tick "${TMP}/no-such-notifier" || fail 'a missing notifier must not break the loop'
-echo 'PASS 等你 notifications ride the loop engine: once per project, again when an item returns, escaped, never fatal'
-
-# ---- 通知节流：看一次「有没有新的等你」要跑一遍 collect()，不能每跳都跑 ----
-# collect() 每个项目十来个 git 子进程外加一次 corral status；引擎默认 5 秒一跳、常驻一天就是
-# 一万七千多跳。节流的是「多久看一次」，**不是**「哪些通知过了」——去重仍旧全靠
-# board-notified.json（上一块验的就是它）。循环推进（B.loop_tick）照旧每跳都跑，不跟着节流。
-TH2="${TMP}/thome"; mkdir -p "${TH2}/.drover"
-HOME="${TH2}" python3 - "${DROVER}" <<'PY2' || fail 'tick(): 通知节流'
-import importlib.machinery, importlib.util, sys
-sys.dont_write_bytecode = True
-l = importlib.machinery.SourceFileLoader("drover_cli", sys.argv[1])
-D = importlib.util.module_from_spec(importlib.util.spec_from_loader("drover_cli", l)); l.exec_module(D)
-
-collects, ticks = [], []
-D.B.collect = lambda lp: collects.append(lp) or []      # 数一数看了几次
-D.B.loop_tick = lambda lp: ticks.append(lp)
-
-D.tick("清单")
-D.tick("清单")                                          # 紧接着再来一跳
-assert len(collects) == 1, f"连着两跳看了 {len(collects)} 次，应该只看一次"
-assert len(ticks) == 2, f"循环推进被一起节流了：只跑了 {len(ticks)} 跳"
-
-D._looked_at -= D.NOTIFY_EVERY + 1                    # 装作隔了足够久
-D.tick("清单")
-assert len(collects) == 2, f"隔够了还是不看：{len(collects)}"
-assert len(ticks) == 3, len(ticks)
-assert D.NOTIFY_EVERY >= 60, D.NOTIFY_EVERY             # 别退回成「每跳都看」
-PY2
-echo 'PASS tick(): 通知节流——循环每跳都推，「有没有新的等你」隔一阵才看一次'
+# ---- 通知开关、稳定去重、基线和节流：仅合成数据/假发送器 ----
+DROVER_BIN="${DROVER}" python3 "${ROOT}/tests/notifications.py" || fail 'notification contract'
+echo 'PASS notifications: user preferences, awaiting-only, stable identity and failure isolation'
 
 # ---- 外层循环：开关只管开关，推动循环的是引擎进程 `drover loop` ----
 # 引擎看到 .loop-wait 且条件满足（有待办、没暂停、不等放行）就跑一次 drover next，由它把
