@@ -103,3 +103,12 @@ drover notifications off --json
 - 验证：核对开发记录的 8 项定向 RED→GREEN；主控一次 `bash tests/drover.sh` 退出 0（包含 direct go、拒绝/修复、g/go、合成 TUI 反馈、slow go、队列与 init 回归）。针对错误契约定点复跑 `python3 tests/notifications.py Notifications.test_preference_errors_never_claim_success`，1 项通过；`git diff --check` 通过。没有跑完整 board/安装/PTY 套件，也没有真实通知、真实队列或服务操作。
 - 取舍逐项同意：通知专用严格读取复用原事件折叠，避免共享看板读取吞错影响基线；逐项目成功观察后立基线；偏好文件锁与原子替换；t0 的 binary64 大端十六进制供跨语言一致判等；发送前记账且不重试、保留已见集合。均已在公开契约写明，不视为送达证明，不承诺跨渠道精确一次。
 - 交付：公开接口为 `docs/通知JSON接口.md`，联调入口为本 worktree 的 `bin/drover`。保留 m35-notifications 分支、worktree 和 drover/dev-notifications-1，等待 saddle 侧接入及隔离联调。首次部署让旧引擎加载新版由联合发布另行协调，当前未执行。
+
+## 联合落地记录
+
+2026-09-28，用户确认 saddle `409e34c` 与 Drover `2b20205` 的公开 CLI 隔离主流程通过，授权解除待集成限制，完成 Drover 合并、发布和清理。上述“保留待集成”状态至此结束。
+
+- 合并 `2c52bc6b6ca5a580201a6be586f3609e2804dbb9`；实现、board 与公开通知契约核对和固定交付一致。开发 worktree/分支清理、实现者关闭后，补收尾记号 `6c52bda`。本轮未重复开发或测试套件。
+- saddle 侧已接受的测试风险原样保留：标准套件 255 passed / 1 failed / 3 ignored，旧 T20 超时单项复核通过，不宣称全套通过或无负载回归；用户已接受 saddle 会话去重与启动基线，Drover 六字段/命令/身份及持久去重均不变。依据为 saddle `docs/任务/任务通知-主控审查.md` 和本轮用户消息。
+- 安装沿用现有软链，无重装。所有登记项目 loop 均关闭，才对已有 launchd 服务执行一次精确重载；旧 PID 44037 替换为 82350，重载后通知记录变为 schema 1 对象且时间晚于重载，确认新代码已执行。真实队列、配置、通知偏好、loop 标记和 T27 前后哈希均一致。
+- 原 worktree 联调入口已随清理失效，发布入口为 `/Users/firegnu/.local/bin/drover`（指向 main）。保留 drover/main；无待清理实现者或审查 worktree。未替用户重启 saddle。

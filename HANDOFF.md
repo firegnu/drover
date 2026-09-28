@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-28 —— 任务通知联合落地，旧引擎已加载新版
+
+用户确认 saddle 联调通过并授权 Drover 合并、发布及实现者收尾。固定交付 `2b20205` 合入 main，合并 `2c52bc6`，收尾记号 `6c52bda`；公开接口见 `docs/通知JSON接口.md`，审查和联合落地记录见 m35 任务文件。
+
+- Drover 原审查已通过，本轮按用户要求未重跑开发/测试套件。saddle 固定 `409e34c` 与本交付的真实公开 CLI 隔离主流程一次通过；saddle 标准测试 255 passed / 1 failed / 3 ignored，旧 T20 超时用例单项通过，但不据此宣称全套通过或无负载回归。用户接受此风险及 saddle 会话去重限制，Drover 的持久去重保持。
+- 本机 `~/.local/bin/drover` 原有软链指向本仓库，无需重跑安装或修改 PATH/plist。重载前确认所有登记项目 drover、jb-finetune、saddle 均 loop off；只重载已有 `dev.drover.loop`，PID 44037 → 82350，新进程于 2026-09-28 18:39:38 加载新版，并首次写出 schema 1 通知去重记录。未启用任何项目 loop，也未执行 done/go/next。
+- 前后哈希核对登记表、三个项目配置/queue.md/tasks.state/loop/paused/.loop-wait、真实通知偏好和无关 T27 全部不变。真实通知偏好仍缺失（默认 System）；本轮没有替用户切换渠道。
+- 实现者 idle、attached=0，worktree 干净且分支合入后，已清理 m35-notifications worktree/分支并关闭自开的 drover/dev-notifications-1。未开独立审查 agent；drover/main 与其他用户主控保留。
+- 当前通知功能与引擎加载均已完成；用户正在运行的 saddle 尚未重启，由用户自行决定。发布推送结果以本条交接提交对应的 origin/main 核对及会话交付为准。
+
+---
+
 ## 2026-09-26 —— saddle T4 所需只读详情接口已发布并生效
 
 `drover show Tn --json [--with-agent-status]` 已通过主控审查并合入 main；实现 `749012e`，合法 Unicode ref 修复 `3e57156`，审查 `9db3017`，合并 `4bd1880`，收尾记号 `9562460`。本批已推送至 origin/main（`f07bc43`），发布后已核对本地与远端 SHA 一致、工作区干净。
