@@ -17,6 +17,8 @@
   drover add "标题" [说明行 …]   人：加到队列末尾，自动编号
   drover list                    看进行中、队列、已完成
   drover show T5 --json [--with-agent-status]   只读查询一件已编号任务的详情
+  drover complete-manually T5 --target-token TOKEN --reason "原因" --json
+                                 人：确认当前具体运行完成，保留检查结果，始终等普通 go 放行
   drover notifications status|on|off --json    用户级系统通知偏好；任意目录可用，后续通知检查生效
   drover next                    把下一件送进主控；有进行中的就重发它
   drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
@@ -42,7 +44,9 @@ CHECK_CMD 是完成判据第 3 条跑的命令（留空 = 不跑验收）。
 """
 import importlib.machinery
 import importlib.util
+from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -461,7 +465,7 @@ def cmd_done(tid):
 
 
 def cmd_go():
-    _, current, awaiting = fold()
+    tasks, current, awaiting = fold()
     if current:
         if record_done(current, "drover go") is None:
             return 9
@@ -470,6 +474,8 @@ def cmd_go():
             mark_loop_wait("release")
     if not awaiting:
         die(2, ui("ERROR: 没有在等放行的任务", "ERROR: No task is awaiting release"))
+    if tasks.get(awaiting, {}).get("completion_record") and loop_on():
+        mark_loop_wait("release")
     append({"ev": "go", "id": awaiting})
     print(ui(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
                                                   else "运行 drover next 发下一件。"),
@@ -786,6 +792,9 @@ def cmd_list(as_json=False):
     for t in reversed(fin[-10:]):
         if t["status"] == "done":
             print_text(f"  {t['id']} {t['title']} · {span(t.get('t0'), t.get('t1'))} · {t['start'][:7]}..{t['end'][:7]}")
+            if t.get("completion_record"):
+                record = t["completion_record"]
+                print_text(f"    人工确认 · {record['confirmed_at']} · {record['reason']}")
         else:
             print_text(f"  {t['id']} {t['title']} · 放弃" + (f"：{t['reason']}" if t.get("reason") else ""))
     if not fin:
@@ -814,7 +823,8 @@ class ShowGit:
     def run(self, repo, *args):
         try:
             result = subprocess.run(["git", "-C", repo, *args], capture_output=True,
-                                    text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
+                                    text=True, timeout=30,
+                                    env={**os.environ, "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0"})
         except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
             raise ShowUnavailable("git_query_failed") from exc
         if result.returncode not in ((0, 1) if args[0] == "merge-base" else (0,)) or result.stderr:
@@ -1029,19 +1039,219 @@ def show_attention(location, conf, completion, with_status):
     return result
 
 
+class ManualCompletionError(Exception):
+    def __init__(self, code, why):
+        self.code, self.why = code, why
+
+
+def file_signature(path):
+    try:
+        stat = os.stat(path)
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    except (OSError, ValueError):
+        return None
+
+
+@contextmanager
+def task_write_lock(directory):
+    """同一交接目录的 CLI 从读取决策到写入全程互斥；查询不碰锁。"""
+    try:
+        lock = open(f"{directory}/.tasks.lock", "a")
+    except OSError as exc:
+        raise ManualCompletionError("write_failed", "无法打开任务操作锁") from exc
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ManualCompletionError("state_busy", "另一个任务写操作正在进行，请刷新后重试") from exc
+        except OSError as exc:
+            raise ManualCompletionError("write_failed", "无法锁定任务状态") from exc
+        yield
+
+
+def manual_state_valid(events):
+    """人工覆盖不能使用宽容折叠从损坏事件里猜出的当前运行。旧历史不补字段。"""
+    doing, waiting, statuses = None, None, {}
+    for e in events:
+        if not isinstance(e, dict):
+            return False
+        ev, tid = e.get("ev"), e.get("id")
+        if ev not in ("start", "done", "go", "drop", "hold"):
+            return False
+        if any(k in e and not isinstance(e[k], str) for k in
+               ("id", "title", "body", "key", "sha", "main", "reason")):
+            return False
+        if type(e.get("t")) not in (int, float) or not math.isfinite(e["t"]):
+            return False
+        if ev == "hold":
+            if not e.get("key") or type(e.get("on")) is not bool:
+                return False
+            continue
+        if not isinstance(tid, str) or not re.fullmatch(r"T\d+", tid):
+            return False
+        if ev == "start":
+            if doing or waiting or not e.get("sha"):
+                return False
+            doing, statuses[tid] = tid, "doing"
+        elif ev == "done":
+            if doing != tid or type(e.get("gate")) is not bool:
+                return False
+            doing, waiting, statuses[tid] = None, tid if e["gate"] else None, "done"
+        elif ev == "go":
+            if doing or statuses.get(tid) != "done" or waiting not in (None, tid):
+                return False
+            waiting = None
+        else:
+            if statuses.get(tid) in ("done", "dropped"):
+                return False
+            statuses[tid] = "dropped"
+            if doing == tid:
+                doing = None
+    return True
+
+
+def manual_token(repo, conf_text, state_text, config_signature, state_signature):
+    # 状态全文含 start 的位置和内容；文件版本也入摘要，替换回同样文本不会复活旧令牌。
+    value = [os.path.realpath(repo), conf_text, state_text, config_signature, state_signature]
+    return "m1:" + hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def manual_snapshot_available(completion, last_check, reader):
+    return (reader.head is not None and reader.refs is not None
+            and all(r["state"] != "unavailable" for r in completion["rows"])
+            and last_check["unavailable_reason"] != "cache_unreadable")
+
+
+def cmd_complete_manually(args):
+    def error(code, why):
+        print(json.dumps({"schema_version": 1, "ok": False, "error": {"code": code, "why": why}}))
+        return {"target_changed": 3, "state_busy": 4}.get(code, 2)
+
+    if len(args) != 6 or not re.fullmatch(r"T\d+", args[0]):
+        return error("invalid_arguments", "用法：complete-manually Tn --target-token TOKEN --reason 原因 --json")
+    rest, options, as_json = args[1:], {}, False
+    while rest:
+        key, rest = rest[0], rest[1:]
+        if key == "--json" and not as_json:
+            as_json = True
+            continue
+        if key not in ("--target-token", "--reason") or not rest or key in options:
+            return error("invalid_arguments", "必须提供唯一的目标令牌和原因")
+        options[key], rest = rest[0], rest[1:]
+    token, reason = options.get("--target-token", ""), options.get("--reason", "").strip()
+    if not as_json or not re.fullmatch(r"m1:[0-9a-f]{64}", token) or not reason:
+        return error("invalid_arguments", "目标令牌格式错误或原因为空")
+    try:
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                                text=True, timeout=30)
+        if result.returncode:
+            return error("repository_unavailable", "请在目标 Git 项目内调用")
+        repo = os.path.realpath(result.stdout.strip())
+        config_path = f"{repo}/.drover.conf"
+
+        def read_config():
+            try:
+                with open(config_path, encoding="utf-8", newline="") as source:
+                    text = source.read()
+                conf = B.parse_conf(config_path, text=text)
+            except FileNotFoundError as exc:
+                raise ManualCompletionError("not_configured", "配置缺失") from exc
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise ManualCompletionError("configuration_unreadable", "无法读取配置") from exc
+            if not conf.get("HANDOFF_DIR"):
+                raise ManualCompletionError("not_configured", "未配置 HANDOFF_DIR")
+            if "\0" in conf["HANDOFF_DIR"]:
+                raise ManualCompletionError("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
+            return text, conf
+
+        _, initial_conf = read_config()
+        directory = os.path.realpath(initial_conf["HANDOFF_DIR"])
+        with task_write_lock(directory):
+            config_sig = file_signature(config_path)
+            conf_text, conf = read_config()
+            if os.path.realpath(conf["HANDOFF_DIR"]) != directory:
+                return error("target_changed", "交接目录已改变")
+            state_path = f"{directory}/tasks.state"
+            state_sig = file_signature(state_path)
+            try:
+                with open(state_path, encoding="utf-8", newline="") as source:
+                    state_text = source.read()
+            except (OSError, UnicodeError) as exc:
+                raise ManualCompletionError("state_unreadable", "无法读取任务状态") from exc
+            try:
+                events = [json.loads(line) for line in state_text.splitlines() if line.strip()]
+                valid = manual_state_valid(events)
+            except (ValueError, RecursionError, OverflowError):
+                valid = False
+            if not valid:
+                return error("state_invalid", "任务事件损坏或运行身份不明确")
+            _, current, awaiting = B.task_fold(events)
+            if (not current or awaiting or current["id"] != args[0]
+                    or token != manual_token(repo, conf_text, state_text, config_sig, state_sig)):
+                return error("target_changed", "项目、具体运行或状态／配置已改变，请刷新后重新确认")
+            cache_path = f"{directory}/.check-result"
+            cache_sig = file_signature(cache_path)
+            reader = ShowGit(repo)
+            observed = time.time()
+            completion = show_completion(current, "current", conf, reader)
+            last_check = show_last_check(current, "current", conf, reader, observed)
+            if not manual_snapshot_available(completion, last_check, reader):
+                return error("snapshot_unavailable", "无法可靠读取检查快照")
+            dirty = bool(reader.read(repo, "status", "--porcelain", "--untracked-files=no").strip())
+            if reader.read_refs() != reader.refs or reader.read(repo, "rev-parse", "--verify", "HEAD^{commit}").strip() != reader.head:
+                return error("snapshot_unavailable", "Git 在读取快照期间改变")
+            if file_signature(cache_path) != cache_sig:
+                return error("snapshot_unavailable", "验收缓存在读取期间改变")
+            if file_signature(config_path) != config_sig or file_signature(state_path) != state_sig:
+                return error("target_changed", "状态／配置在读取期间改变")
+            record = {"method": "manual", "reason": reason, "confirmed_at": time.time(),
+                      "completion": completion, "last_check": last_check,
+                      "workspace": {"state": "dirty" if dirty else "clean", "tracked_dirty": dirty}}
+            event = {"ev": "done", "id": current["id"], "t": record["confirmed_at"],
+                     "sha": reader.head, "gate": True, "completion_record": record}
+            # 保持事件日志前缀；一次原子替换提交 receipt，写失败不留下半条完成事件。
+            tmp = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                                 prefix=".manual-complete-", delete=False) as dest:
+                    tmp = dest.name
+                    dest.write(state_text)
+                    if state_text and not state_text.endswith("\n"):
+                        dest.write("\n")
+                    dest.write(json.dumps(event, ensure_ascii=True) + "\n")
+                    dest.flush()
+                    os.fsync(dest.fileno())
+                if (file_signature(config_path) != config_sig or file_signature(state_path) != state_sig
+                        or os.path.realpath(conf["HANDOFF_DIR"]) != directory):
+                    return error("target_changed", "发布前状态／配置已改变")
+                if file_signature(cache_path) != cache_sig:
+                    return error("snapshot_unavailable", "发布前验收缓存已改变")
+                os.replace(tmp, state_path)
+            except (OSError, UnicodeError) as exc:
+                raise ManualCompletionError("write_failed", "未能写入人工完成记录") from exc
+            finally:
+                if tmp:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+            print(json.dumps({"schema_version": 1, "ok": True, "task_id": current["id"],
+                              "state": "awaiting_release", "completion_record": record}))
+            return 0
+    except ManualCompletionError as exc:
+        return error(exc.code, exc.why)
+    except ShowUnavailable:
+        return error("snapshot_unavailable", "无法可靠读取 Git 快照")
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return error("repository_unavailable", "无法查询当前 Git 仓库")
+
+
 def cmd_show(args):
     observed = time.time()
     watched = {}
 
-    def signature(path):
-        try:
-            stat = os.stat(path)
-            return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-        except (OSError, ValueError):
-            return None
-
     def watch(path, label):
-        watched[path] = (label, signature(path))
+        watched[path] = (label, file_signature(path))
 
     def error(reason, why):
         print(json.dumps({"schema_version": 1, "ok": False, "observed_at": observed,
@@ -1061,19 +1271,22 @@ def cmd_show(args):
     config_path = f"{repo}/.drover.conf"
     watch(config_path, "configuration")
     try:
-        with open(config_path, encoding="utf-8") as source:
-            conf = B.parse_conf(config_path, text=source.read())
+        with open(config_path, encoding="utf-8", newline="") as source:
+            conf_text = source.read()
+            conf = B.parse_conf(config_path, text=conf_text)
     except FileNotFoundError:
         return error("not_configured", "配置缺失")
     except (OSError, UnicodeError):
         return error("configuration_unreadable", "无法读取项目配置")
     if not conf.get("HANDOFF_DIR"):
         return error("not_configured", "配置缺失或未设置 HANDOFF_DIR")
+    if "\0" in conf["HANDOFF_DIR"]:
+        return error("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
     state_path = f"{conf['HANDOFF_DIR']}/tasks.state"
     watch(state_path, "tasks.state")
     watch(f"{conf['HANDOFF_DIR']}/.check-result", "check_cache")
     try:
-        with open(state_path, encoding="utf-8") as source:
+        with open(state_path, encoding="utf-8", newline="") as source:
             state_text = source.read()
     except FileNotFoundError:
         state_text = ""
@@ -1122,7 +1335,19 @@ def cmd_show(args):
               "hold": show_hold(task, location, events),
               "attention": show_attention(location, conf, completion, "--with-agent-status" in args),
               "warnings": []}
-    changed = [label for path, (label, before) in watched.items() if signature(path) != before]
+    manual_reason = None
+    if location != "current":
+        manual_reason = "target_changed"
+    elif not manual_state_valid(events):
+        manual_reason = "state_invalid"
+    elif not manual_snapshot_available(completion, result["last_check"], reader):
+        manual_reason = "snapshot_unavailable"
+    else:
+        try:
+            reader.read(repo, "status", "--porcelain", "--untracked-files=no")
+        except ShowUnavailable:
+            manual_reason = "snapshot_unavailable"
+    changed = [label for path, (label, before) in watched.items() if file_signature(path) != before]
     try:
         if reader.read_refs() != reader.refs:
             changed.append("git_refs")
@@ -1132,6 +1357,11 @@ def cmd_show(args):
         result["warnings"].append({"code": "snapshot_verification_unavailable", "sources": ["git"]})
     if changed:
         result["warnings"].append({"code": "snapshot_changed", "sources": sorted(set(changed))})
+    if result["warnings"]:
+        manual_reason = "snapshot_unavailable"
+    result["manual_completion"] = {"target_token": None if manual_reason else manual_token(
+        repo, conf_text, state_text, watched[config_path][1], watched[state_path][1]),
+        "unavailable_reason": manual_reason}
     print(json.dumps(result))
     return 0
 
@@ -1232,6 +1462,8 @@ def main(argv):
         return 0 if argv else 2
     if argv[0] == "show":
         return cmd_show(argv[1:])
+    if argv[0] == "complete-manually":
+        return cmd_complete_manually(argv[1:])
     if argv[0] == "notifications":
         return cmd_notifications(argv[1:])
     if argv[0] == "board":                  # drover board … → 转给看板，参数原样透传
@@ -1255,7 +1487,22 @@ def main(argv):
             else:
                 die(2, f"ERROR: drover loop 不认识这个参数：{a}\n\n{__doc__.strip()}")
         return cmd_loop_run(list_path, once, interval)
-    setup(read_only=argv == ["list", "--json"])
+    setup(read_only=True)
+    if argv[0] == "list":
+        return project_command(argv)
+    os.makedirs(D, exist_ok=True)
+    directory = os.path.realpath(D)
+    try:
+        with task_write_lock(directory):
+            setup(read_only=True)
+            if os.path.realpath(D) != directory:
+                die(2, "ERROR: 配置在取得操作锁期间改变，请刷新后重试")
+            return project_command(argv)
+    except ManualCompletionError as exc:
+        die(4 if exc.code == "state_busy" else 2, f"ERROR: {exc.why}")
+
+
+def project_command(argv):
     cmd, rest = argv[0], argv[1:]
     expect = None
     if "--expect" in rest:

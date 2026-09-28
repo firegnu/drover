@@ -222,7 +222,8 @@ def add_waits(p):
                                             f'{attach_hint((p.get("agents") or {}).get("writer", {}).get("name", ""))}'))
     tv = p.get("tasks")
     if tv and tv["awaiting"] and tv["card"]:
-        new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} 做完了，核对已通过。"
+        confirmation = "已人工确认完成。" if tv["card"].get("completion_record") else "做完了，核对已通过。"
+        new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} {confirmation}"
                     "运行 drover go 放行，下一件会自动送进主控"))
         p["state"] = "等你放行"
     if new:
@@ -365,6 +366,8 @@ def task_fold(evs):
             awaiting = None
         elif ev == "done" and tid in tasks:
             tasks[tid].update(status="done", end=e.get("sha", ""), t1=e.get("t"))
+            if "completion_record" in e:
+                tasks[tid]["completion_record"] = e["completion_record"]
             awaiting = tid if e.get("gate") else None
         elif ev == "drop":
             t = tasks.setdefault(tid, {"id": tid, "title": e.get("title", ""), "body": "", "key": e.get("key", ""), "start": ""})
@@ -617,10 +620,11 @@ def task_view(repo, conf, p):
     if t:
         commits = task_commits(repo, t["start"], t.get("end") or p["head"])
         now = "收尾" if t["id"] == awaiting else "实施"
+        confirmation = "人工确认" if t.get("completion_record") else "核对通过"
         n = len(commits)
         steps = [
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
-            ("收尾", "now release" if now == "收尾" else "", "核对通过 · 等你放行" if now == "收尾" else "按 g 核对并放行"),
+            ("收尾", "now release" if now == "收尾" else "", f"{confirmation} · 等你放行" if now == "收尾" else "按 g 核对并放行"),
         ]
         # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
         # 纯 git，便宜；判据第 1 条看的也是这个 sha，两处说的是同一件事。
@@ -628,6 +632,7 @@ def task_view(repo, conf, p):
         on_main = task_commits(repo, base, MAIN_BRANCH) if base else []
         last_at = int(git(repo, "log", "-1", "--format=%ct", MAIN_BRANCH).strip() or 0) if on_main else 0
         card = {"id": t["id"], "title": t["title"], "start": t["start"], "main": base,
+                "completion_record": t.get("completion_record"),
                 "on_main": len(on_main), "last_at": last_at,
                 "commits": n, "steps": steps, "body": t.get("body", ""),
                 "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
@@ -766,7 +771,8 @@ def wait_items(p, english=False):
             text += f'Inspect: corral attach {name}' if name else 'Inspect the main agent.'
         elif english and kind == "release":
             card = p["tasks"]["card"]
-            text = f'{card["id"]} {card["title"]} is complete; checks passed. Press g / run drover go to release it.'
+            confirmation = "Manually confirmed" if card.get("completion_record") else "is complete; checks passed"
+            text = f'{card["id"]} {card["title"]} {confirmation}. Press g / run drover go to release it.'
         out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text))
     return out
 
@@ -851,6 +857,7 @@ def card_vm(p, tv):
     while body and not body[-1]:
         body.pop()
     return {"id": c["id"], "title": c["title"], "body": body,
+            "completion_record": c.get("completion_record"),
             "waiting": c["waiting"], "held": c["held"],
             "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
             # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
@@ -1103,8 +1110,11 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         main.append(section("h2", f'Completion checks · {c["met"]}', presentation))
         main.append(("dim", 2, c["progress"]))
         if c["waiting"]:
-            main.append((("wait", (0, len("Checks passed"), "ok")) if presentation else "wait",
-                         2, "Checks passed; press g to release"))
+            if c.get("completion_record"):
+                main.append(("wait", 2, "Manually confirmed; press g to release"))
+            else:
+                main.append((("wait", (0, len("Checks passed"), "ok")) if presentation else "wait",
+                             2, "Checks passed; press g to release"))
         if c["route"]:
             rt = c["route"]
             main.append(("dim", 2, f'Routing {route_tier(rt)} · Cross-review {"yes" if rt["cross"] else "no"}'
