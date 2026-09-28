@@ -88,3 +88,14 @@
 主控在独立 HOME/XDG/TMPDIR、假 corral／通知器下复跑约定标准检查各一次：CLI 通过；criteria 通过（损坏 ref 的 locale 提示属既有夹具）；show 16 项通过；list JSON 通过；diff --check 通过。未重跑新增测试／扩展矩阵／PTY，未操作真实状态或服务。
 
 接受实现取舍：公共 CLI 写操作从读决策到写入使用非阻塞互斥，忙时退出 4；人工确认原子发布单一事件日志，普通 go 才衔接本来开启的 loop；原始事件字节保留，旧历史没有 completion_record。查询不加锁，Git 条件在确认时重新采样而不单独令令牌过期。互斥只协调本版本 CLI，不把手工改状态或已启动旧版写进程纳入承诺；联合落地时需注意版本切换边界。无契约异议，未发现本范围必须返工项，交独立审查核实身份／并发／放行核心边界。
+
+
+## 最终审查与待联调交付
+
+2026-09-28，独立 Codex `drover/dev-manual-review-1`（gpt-6-astra / xhigh）对固定审查点 `ef0a7233554f52316ef0c396a02779deef1afadf` 给出“可以合并”：必须改 0、建议改 0、可以不改 6。其隔离运行 T36 定向测试 10 项通过，未重复标准套件；全文归档于同目录 `m36-manual-complete 独立审查.md`。
+
+主控逐条接受：①读决策至写入全程非阻塞互斥；②人工阶段仅发布事件、普通 go 衔接原本开启的 loop；③保留原事件字节且旧历史不回填；④show 保持无锁只读并拒发不可靠令牌；⑤Git 变化在确认时重新采样，与运行身份分开；⑥互斥只覆盖本版本公共 CLI，旧版已启动写进程和外部直接编辑不在承诺内，联合落地需核对版本切换。六项均无需修改，未发现未解决的代码审查问题，无契约异议。
+
+实现固定 `b50d36091d54085ba56beba6768fb28f215fe6cf`。本次最终归档仅改文档，代码与已审查点一致，主控不重复测试套件。固定交付为包含本记录的提交（完整 SHA 在交付消息），分支 `m36-manual-complete`；公开契约 `docs/人工完成JSON接口.md`；CLI `/Users/firegnu/Developer/personal_projs/drover-worktrees/m36-manual-complete/bin/drover`。
+
+阶段：审查通过，等待 saddle 消费方及隔离联调，尚未完成联合落地。开发 worktree `../drover-worktrees/m36-manual-complete` 与 detached 审查 worktree `../drover-worktrees/review-m36-manual-complete`、实现者与审查者均保留；不合并、不推送、不安装发布、不清理。没有操作真实队列／配置／服务、T27 或用户主控。联调使用独立 HOME/XDG/TMPDIR、合成项目、假 corral／禁用真实通知发送器，消费方只通过公开 CLI，不能把源码中的函数视作契约。

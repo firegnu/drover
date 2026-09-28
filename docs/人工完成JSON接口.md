@@ -51,6 +51,6 @@ python3 <drover绝对路径> complete-manually Tn --target-token '<show返回的
 
 ## 阶段和调用路径
 
-实现分支 `m36-manual-complete`，预定 CLI：
+实现分支 `m36-manual-complete`，已审查 CLI：
 `/Users/firegnu/Developer/personal_projs/drover-worktrees/m36-manual-complete/bin/drover`。
-联调仅允许独立 HOME/XDG/TMPDIR、合成项目、假 corral／禁用真实 OS 通知发送器。审查通过后补固定提交 SHA；此阶段不要调用真实项目的写命令。
+联调仅允许独立 HOME/XDG/TMPDIR、合成项目、假 corral／禁用真实 OS 通知发送器。实现固定 SHA：`b50d36091d54085ba56beba6768fb28f215fe6cf`，主控与独立审查均通过；包含审查归档的最终交付 SHA 见交付消息。此阶段不要调用真实项目的写命令。
