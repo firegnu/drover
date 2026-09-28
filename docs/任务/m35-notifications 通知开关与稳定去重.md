@@ -94,3 +94,12 @@ drover notifications off --json
 公开契约：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m35-notifications/docs/通知JSON接口.md`。
 可运行命令：`/Users/firegnu/Developer/personal_projs/drover-worktrees/m35-notifications/bin/drover notifications status --json`（联调须隔离 HOME；on/off 同路径）。
 固定实现 SHA 由本完成记录所在提交提供，见最终交付回复；worktree 保留。
+
+## 主控审查
+
+2026-09-28，drover/main 审查实现提交 `9b6d9c25a560bff75b797e47e4b847c8f6196318`，结论：通过，可交 saddle 隔离联调；本阶段不合并、不发布。无必须改项、无待裁决契约异议。路由保持常规 / 改行为 / 不做独立交叉审查，本轮未另开审查 agent。
+
+- 范围与契约：六个差异文件均在任务范围内；bin/drover-board、next/done/go、loop_tick 内部、完成判据、show_attention 未改。公开六字段、错误 JSON、用户级作用范围、首次成功观察基线、revision 切换和保留已见身份符合共同契约 40be7f0；主分支仍为 ed8a860，T27 未触碰。
+- 验证：核对开发记录的 8 项定向 RED→GREEN；主控一次 `bash tests/drover.sh` 退出 0（包含 direct go、拒绝/修复、g/go、合成 TUI 反馈、slow go、队列与 init 回归）。针对错误契约定点复跑 `python3 tests/notifications.py Notifications.test_preference_errors_never_claim_success`，1 项通过；`git diff --check` 通过。没有跑完整 board/安装/PTY 套件，也没有真实通知、真实队列或服务操作。
+- 取舍逐项同意：通知专用严格读取复用原事件折叠，避免共享看板读取吞错影响基线；逐项目成功观察后立基线；偏好文件锁与原子替换；t0 的 binary64 大端十六进制供跨语言一致判等；发送前记账且不重试、保留已见集合。均已在公开契约写明，不视为送达证明，不承诺跨渠道精确一次。
+- 交付：公开接口为 `docs/通知JSON接口.md`，联调入口为本 worktree 的 `bin/drover`。保留 m35-notifications 分支、worktree 和 drover/dev-notifications-1，等待 saddle 侧接入及隔离联调。首次部署让旧引擎加载新版由联合发布另行协调，当前未执行。
