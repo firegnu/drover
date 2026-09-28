@@ -1,6 +1,6 @@
 # 人工完成公开接口（T36，schema_version 1）
 
-2026-09-28，drover/main 在 saddle DESIGN §49 和 T36 实施委托批准语义内固定。本文是 saddle 消费方契约；实现审查通过前不是可用功能声明。本阶段只在实现 worktree 交付，不合并安装。
+2026-09-28，drover/main 在 saddle DESIGN §49 和 T36 实施委托批准语义内固定。本文是 saddle 消费方契约。已审固定实现按用户直接收尾决定合入 main；本次没有执行隔离联调，不记作联调通过。
 
 ## 查询目标
 
@@ -51,6 +51,6 @@ python3 <drover绝对路径> complete-manually Tn --target-token '<show返回的
 
 ## 阶段和调用路径
 
-实现分支 `m36-manual-complete`，已审查 CLI：
-`/Users/firegnu/Developer/personal_projs/drover-worktrees/m36-manual-complete/bin/drover`。
-联调仅允许独立 HOME/XDG/TMPDIR、合成项目、假 corral／禁用真实 OS 通知发送器。实现固定 SHA：`b50d36091d54085ba56beba6768fb28f215fe6cf`，主控与独立审查均通过；包含审查归档的最终交付 SHA 见交付消息。此阶段不要调用真实项目的写命令。
+固定交付 `0e4d031d3a570ef00e66b4df2f1e97b191f6607f`，实现 `b50d36091d54085ba56beba6768fb28f215fe6cf`，主控和独立审查均通过。2026-09-28 用户决定直接收尾，取消后续 saddle 独立审查及追加验证／隔离联调；未执行联调，不声称联调通过。合并 `2b6e65784493cd85a23e565b55e4c0e5159d7539`，原开发／审查 worktree 已清理。
+
+部署入口 `/Users/firegnu/.local/bin/drover`，既有软链指向 `/Users/firegnu/Developer/personal_projs/drover/bin/drover`；在目标项目 cwd 调用，需 Python 时用 `python3 /Users/firegnu/Developer/personal_projs/drover/bin/drover ...`。既有 launchd 引擎已在三个登记项目 loop 均关闭时重载，未推进真实队列或修改通知偏好／配置。

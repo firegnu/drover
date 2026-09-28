@@ -99,3 +99,14 @@
 实现固定 `b50d36091d54085ba56beba6768fb28f215fe6cf`。本次最终归档仅改文档，代码与已审查点一致，主控不重复测试套件。固定交付为包含本记录的提交（完整 SHA 在交付消息），分支 `m36-manual-complete`；公开契约 `docs/人工完成JSON接口.md`；CLI `/Users/firegnu/Developer/personal_projs/drover-worktrees/m36-manual-complete/bin/drover`。
 
 阶段：审查通过，等待 saddle 消费方及隔离联调，尚未完成联合落地。开发 worktree `../drover-worktrees/m36-manual-complete` 与 detached 审查 worktree `../drover-worktrees/review-m36-manual-complete`、实现者与审查者均保留；不合并、不推送、不安装发布、不清理。没有操作真实队列／配置／服务、T27 或用户主控。联调使用独立 HOME/XDG/TMPDIR、合成项目、假 corral／禁用真实通知发送器，消费方只通过公开 CLI，不能把源码中的函数视作契约。
+
+
+## 用户决定直接收尾与部署清理
+
+2026-09-28，用户通过 saddle 委托末尾“用户决定直接收尾”及本会话明确授权：已审固定 0e4d031 直接合并、推送、必要部署与清理，取消 saddle 独立审查，不再追加验证／隔离联调。**本次没有执行隔离联调，不记为联调通过。** 既有 Drover 主控／独立审查结论保留，本轮未重跑测试、未扩展实现。
+
+已合入 main：`2b6e65784493cd85a23e565b55e4c0e5159d7539`；清理后空提交收尾记号 `d3605ef`。既有 `~/.local/bin/drover` 和 drover-board 均指向本仓库，合入即更新，无需重跑安装。部署前核对登记项目 drover、jb-finetune、saddle 的 loop 均关闭，未见活跃 Drover 写命令；只沿已有 `gui/501/dev.drover.loop` 执行 kickstart 重载，PID 82350 → 37103，新进程 20:10:54 启动并输出启动行，stderr 无输出，载入合并后的脚本；没有修改 plist／PATH 或启用 loop。首次进程筛选误匹配 corral 主控的 cwd，断言终止未执行重载；修正只识别 Python 实际脚本入口后执行，未触碰主控。
+
+部署前后核对 21 个路径：登记表、三项目配置／queue.md／tasks.state／loop／paused／.loop-wait、真实通知偏好及 T27 全部哈希或缺失状态相同。没有调用真实 done/go/next/人工完成，也没有操作真实队列或配置。
+
+实现者及独立审查者均 idle、attached=0，开发／审查 worktree 干净且对应提交已合入 main 后，已移除两处 worktree，删除 m36-manual-complete 分支，并关闭自开的 drover/dev-manual-complete-1、drover/dev-manual-review-1；工作目录已删，一并关闭。只剩 main worktree，所有用户主控（含 drover/main）保留。最终交接提交随 main 推送，完整 main/origin SHA 和推送核对结果通过会话及 corral 通知 saddle/main；本方无遗留部署／清理项。
