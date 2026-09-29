@@ -75,6 +75,10 @@ def main():
         current = result["current"]
         assert (current["id"], current["status"], current["body"], current["start"]) == (
             "T12", "doing", "已发出的正文", "ccccccc3")
+        for pos, task in enumerate(result["pending"], 1):
+            dispatch = task.pop("dispatch_pending")
+            assert dispatch["pos"] == pos and dispatch["target_token"].startswith("d1:")
+            assert dispatch["unavailable_reason"] is None
         assert result["pending"] == [
             {"id": "T30", "title": "排在前面", "body": "说明甲"},
             {"id": None, "title": "手写待办", "body": "说明乙"},

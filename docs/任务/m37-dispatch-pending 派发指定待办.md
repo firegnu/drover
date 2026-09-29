@@ -64,3 +64,14 @@
 ## 交付回复
 说明实现与验证结果、提交 SHA、公开命令示例、调用方如何读取目标/校验信息、成功/失败 JSON与退出码，以及旧CLI兼容和是否需重载。将契约写入你的 repo 文档并给出路径，供 Saddle 在后续放行后读取。
 命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-09-29，受委派实现者在 `m37-dispatch-pending` 完成，未再开 agent。
+
+- 实现：增加 `dispatch-pending --pos N --target-token TOKEN --json`；`list --json` 的每项 Pending 提供 `dispatch_pending.pos / target_token / unavailable_reason`。同一既有写锁覆盖锁内重读、目标与派发条件核对、发送和本地记录；发送前再核对文件版本。复用 `issue` 的 corral 调用、`start_task` 和原事件折叠规则，不写 queue.md、不重排、不重发 Current，不越过暂停或待放行。不运行 CHECK_CMD。
+- 验证：新增公开 CLI 合成专项 `tests/dispatch-pending.py`，13 项通过。首个 RED 明确为 list 缺少目标字段；随后分别保留矛盾发送回包、歧义条目、发送前配置变化及非法长位置的失败证据，再 GREEN。覆盖目标内容／编号／位置／排序／配置／状态变化、跨项目、旧 token、未编号任务、既有 Current／暂停／awaiting、送达／拒绝／不确定／手动模式、写入和清理失败；在外部发送与本地追加两个阶段验证写锁互斥。所有数据及假 corral 均在临时合成项目，命令在前台等待退出。
+- 回归：`bash tests/drover.sh`、`python3 tests/list-json.py`、`python3 tests/show-json.py`（16 项）各一次通过；人工完成（10 项）和撤回（11 项）的首次运行因额外隔离目录导致 Unix socket 路径超长，改用 `/tmp` 短目录后仅重跑这两个套件，均通过。`git diff --check` 通过。没有跑全仓库、PTY 录屏或另建覆盖矩阵；验证预算足够。
+- 契约：见 `docs/指定派发JSON接口.md`，并在 QUICKSTART 和命令帮助中给出入口。命令 stdout 为单个 schema 1 JSON；退出 0 为操作完成（必须看 delivery 区分真实送达和手动记账），3 为目标变化，4 为写锁忙，8 为派发约束／拒绝／发送不确定，2 为参数／前置读取／歧义／本地写入失败。独立报告 `delivery` 与 `record`，本地失败不抹掉已知发送结果；不把外部发送与落盘称为原子事务，不自动重试，不新增自动 next 等待标记。
+- 取舍：用户在实施中明确接受「歧义条目先补编号」。当既有编号／标题规则会连带隐藏其他待办时，令牌为 null、原因及命令错误为 `target_ambiguous`；不同编号同名和无歧义未编号任务正常支持。这保留旧状态规则，不额外引入队列身份迁移。corral 返回 0／3 仍按原规则记开始；包装层结果未知不记开始；MAIN_AGENT 未配仍本地记账，并返回未发送及手动正文。旧 next 的文本、退出码和循环行为保持；独立引擎已有开关和等待标记仍按原规则工作。
+- 未做项：仅在本分支提交，交主控继续审查／合并。未改 bin/drover-board、Saddle、corral、corral-dispatch、dispatch-log、全局技能或服务；未操作真实队列、T45/T29、开关或 agent，未安装、推送、部署／重载，也未合并 main。本功能不增加事件格式，CLI 合入后下一次调用加载即可，无需重载常驻引擎；Saddle 后续仍需用户重新放行。

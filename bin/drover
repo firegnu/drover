@@ -23,6 +23,8 @@
                                  人：确认实际工作停止，撤回本次运行，同编号回队首并暂停
   drover notifications status|on|off --json    用户级系统通知偏好；任意目录可用，后续通知检查生效
   drover next                    把下一件送进主控；有进行中的就重发它
+  drover dispatch-pending --pos N --target-token TOKEN --json
+                                 派发 list --json 刚展示的指定待办；不重发 current、不重排
   drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
   drover go                      人：核对并记完成、放行；已完成的只放行，不发下一件
   drover drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
@@ -41,6 +43,7 @@
                                       --expect：queue.md 的指纹，对不上说明队列刚被改过，不写（move / edit / drop --pos）
 退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
         2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
+指定派发 JSON 另有 3 目标变化、4 写锁忙；8 也可能是送达结果不确定，须分别读取 delivery 和 record。
 配置见 .drover.conf：MAIN_AGENT 送给谁（空 = 不自动送，打出来让人粘）、TASK_GATE 放行模式、
 CHECK_CMD 是完成判据第 3 条跑的命令（留空 = 不跑验收）。
 """
@@ -156,18 +159,23 @@ def pending(tasks):
     return B.task_pending(parse_queue(), tasks)
 
 
-def next_num():
-    ids = [b["id"] for b in parse_queue() if b["id"]] + list(fold()[0])
+def next_num(blocks=None, tasks=None):
+    ids = [b["id"] for b in (parse_queue() if blocks is None else blocks) if b["id"]]
+    ids += list(fold()[0] if tasks is None else tasks)
     return max([int(i[1:]) for i in ids if re.fullmatch(r"T\d+", i or "")], default=0) + 1
 
 
-def start_task(t, again):
-    """记下「这件活发出去了」。**只在真的送达之后才调**——corral 拒绝送（主控在忙、有人在打字、
-    主控不在）时一个字都不能写，否则队列里会留下一件主控从没收到的「进行中」任务。
+def start_task(t, again, record=None):
+    """按 issue 的规则记开始：发送返回 0／3，或未配置 MAIN_AGENT 的手动粘贴模式。
+    corral 拒绝送（主控在忙、有人在打字、主控不在）时不能记开始。
     again 是重发进行中的那件，它早就有 start 事件了，不再记一条。"""
     if not again:
+        if record is not None:
+            record["status"] = "unknown"   # append 失败可能已写入部分内容
         append({"ev": "start", "id": t["id"], "title": t["title"], "body": t.get("body", ""), "key": t["title"],
                 "sha": head(), "main": main_sha()})
+    if record is not None:
+        record["status"] = "recorded"
     if os.path.exists(f"{D}/.loop-wait"):
         os.remove(f"{D}/.loop-wait")             # 发出去了：停下的标记作废
     return 0
@@ -187,16 +195,20 @@ def task_text(t, again=False):
     return "\n".join(out)
 
 
-def issue(t, again=False):
+def issue(t, again=False, as_json=False):
     """把任务送进主控。没配 MAIN_AGENT 就打出来让人自己粘 —— 内循环全靠人手工做的项目，
     drover 照样能用，只是少了自动送这一步（ROADMAP「怎么算成功」里那条依赖方向的验证）。"""
     text = task_text(t, again)
     if not MAIN_AGENT:
+        if as_json:
+            return issue_json(t, again, None, {})
         print_text(text)
         print(ui("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）",
                  "\n(MAIN_AGENT is unset: the task was not sent. Paste the text above to the main agent.)"))
         return start_task(t, again)
     code, j = B.corral("send", MAIN_AGENT, text, timeout=60)
+    if as_json:
+        return issue_json(t, again, code, j)
     if code == 0:
         rc = start_task(t, again)
         extra = (ui("（和人留的草稿拼在一起提交了，去看一眼）", " (merged with a human draft; inspect it)")
@@ -768,6 +780,19 @@ def cmd_list(as_json=False):
     tasks, current, awaiting = fold()
     todo = pending(tasks)
     if as_json:
+        try:
+            snapshot = dispatch_snapshot(REPO)
+            tasks, current, awaiting = B.task_fold(snapshot["events"])
+            todo = B.task_pending(B.task_blocks(snapshot["queue"]), tasks)
+            for pos, task in enumerate(todo, 1):
+                ambiguous = dispatch_ambiguous(todo, task)
+                task["dispatch_pending"] = {"pos": pos,
+                                            "target_token": None if ambiguous else dispatch_token(snapshot, pos),
+                                            "unavailable_reason": "target_ambiguous" if ambiguous else None}
+        except ManualCompletionError as exc:
+            for pos, task in enumerate(todo, 1):
+                task["dispatch_pending"] = {"pos": pos, "target_token": None,
+                                            "unavailable_reason": exc.code}
         fin = [t for t in tasks.values() if t["status"] in ("done", "dropped")]
         print(json.dumps({
             "mode": {"loop": loop_on(), "gate": GATE},
@@ -1127,6 +1152,161 @@ def manual_token(repo, conf_text, state_text, config_signature, state_signature)
     # 状态全文含 start 的位置和内容；文件版本也入摘要，替换回同样文本不会复活旧令牌。
     value = [os.path.realpath(repo), conf_text, state_text, config_signature, state_signature]
     return "m1:" + hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def dispatch_snapshot(repo, config_only=False):
+    """严格读取展示／派发共用的身份快照；不创建文件，不调用 corral。"""
+    signatures = {}
+
+    def read(path, code, missing=False):
+        signatures[path] = file_signature(path)
+        try:
+            with open(path, encoding="utf-8", newline="") as source:
+                return source.read()
+        except FileNotFoundError as exc:
+            if missing:
+                return ""
+            raise ManualCompletionError("not_configured", "配置缺失") from exc
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ManualCompletionError(code, "无法读取派发快照") from exc
+
+    config_path = f"{repo}/.drover.conf"
+    config = read(config_path, "configuration_unreadable")
+    conf = B.parse_conf(config_path, text=config)
+    if not conf.get("HANDOFF_DIR"):
+        raise ManualCompletionError("not_configured", "未配置 HANDOFF_DIR")
+    if "\0" in conf["HANDOFF_DIR"]:
+        raise ManualCompletionError("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
+    directory = os.path.realpath(conf["HANDOFF_DIR"])
+    if config_only:                       # 取锁前只定位目录，决策所需状态全部在锁内重读
+        return {"directory": directory}
+    state = read(f"{directory}/tasks.state", "state_unreadable", missing=True)
+    queue = read(f"{directory}/queue.md", "snapshot_unavailable", missing=True)
+    try:
+        events = [json.loads(line) for line in state.splitlines() if line.strip()]
+        valid = manual_state_valid(events)
+    except (ValueError, RecursionError, OverflowError):
+        valid = False
+    if not valid:
+        raise ManualCompletionError("state_invalid", "任务事件损坏或运行身份不明确")
+    if any(file_signature(path) != sig for path, sig in signatures.items()):
+        raise ManualCompletionError("snapshot_unavailable", "读取期间配置／队列／状态已改变")
+    return {"repo": os.path.realpath(repo), "directory": directory, "conf": conf, "config": config,
+            "state": state, "queue": queue, "events": events, "signatures": signatures}
+
+
+def dispatch_token(snapshot, pos):
+    identity = [snapshot[k] for k in ("repo", "directory", "config", "state", "queue", "signatures")]
+    return "d1:" + hashlib.sha256(json.dumps([identity, pos], ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def dispatch_ambiguous(todo, target):
+    # start 按编号或 title key 排除待办；不能让选中一项顺带隐藏另一项。
+    return any(task is not target and
+               (task["id"] == target["id"] if task["id"] else task["title"] == target["title"])
+               for task in todo)
+
+
+def dispatch_response(code=None, why=None, *, task_id=None, delivery=None, record=None, manual_text=None):
+    delivery = delivery or {"status": "not_attempted", "attempted": False, "corral_exit_code": None,
+                            "confirmed": None, "merged_with_draft": None}
+    record = record or {"status": "not_attempted"}
+    result = {"schema_version": 1, "ok": code is None, "task_id": task_id,
+              "state": "current" if record["status"] == "recorded" else
+                       "unknown" if record["status"] == "unknown" else "pending" if task_id else None,
+              "delivery": delivery, "record": record, "manual_text": manual_text}
+    if code:
+        result["error"] = {"code": code, "why": why}
+    print(json.dumps(result))
+    return {None: 0, "target_changed": 3, "state_busy": 4, "paused": 8, "current_exists": 8,
+            "awaiting_release": 8, "send_rejected": 8, "delivery_unconfirmed": 8,
+            "delivery_unknown": 8}.get(code, 2)
+
+
+def issue_json(t, again, code, reply):
+    # 复用 issue 的发送和 start_task 的记账规则；机器字段不推测传输是否真的送到。
+    reply = reply if isinstance(reply, dict) else {}
+    confirmed = reply.get("confirmed") if type(reply.get("confirmed")) is bool else None
+    merged = reply.get("merged_with_draft") if type(reply.get("merged_with_draft")) is bool else None
+    if not MAIN_AGENT:
+        status, error = "not_sent", None
+    elif code == 0 or code == B.CORRAL_NOT_DELIVERED:
+        status = "confirmed" if code == 0 and reply.get("ok") is True and confirmed is True else "unconfirmed"
+        error = None if status == "confirmed" else "delivery_unconfirmed"
+    elif code in (B.CORRAL_NOT_FOUND, B.CORRAL_NOT_IDLE, B.CORRAL_HUMAN_ACTIVE, 6):
+        status, error = "rejected", "send_rejected"
+    else:
+        status, error = "unknown", "delivery_unknown"
+    delivery = {"status": status, "attempted": bool(MAIN_AGENT), "corral_exit_code": code,
+                "confirmed": confirmed, "merged_with_draft": merged}
+    record = {"status": "not_attempted"}
+    why = "派发未确认完成，请核对主控和本地状态；不要自动重试" if error else None
+    if not MAIN_AGENT or code in (0, B.CORRAL_NOT_DELIVERED):
+        try:
+            start_task(t, again, record=record)
+        except (OSError, UnicodeError) as exc:
+            error, why = "write_failed", f"本地记录或等待标记写入失败：{exc}；请核对，不要重试发送"
+    return dispatch_response(error, why, task_id=t["id"], delivery=delivery, record=record,
+                             manual_text=task_text(t, again) if not MAIN_AGENT else None)
+
+
+def cmd_dispatch_pending(args):
+    global REPO, D, Q, S, PAUSED, LOOP, GATE, MAIN_AGENT
+    options, rest, as_json = {}, list(args), False
+    while rest:
+        key = rest.pop(0)
+        if key == "--json" and not as_json:
+            as_json = True
+        elif key in ("--pos", "--target-token") and key not in options and rest:
+            options[key] = rest.pop(0)
+        else:
+            return dispatch_response("invalid_arguments", "用法：dispatch-pending --pos N --target-token TOKEN --json")
+    pos, token = options.get("--pos", ""), options.get("--target-token", "")
+    if not as_json or not re.fullmatch(r"[1-9][0-9]*", pos) or not re.fullmatch(r"d1:[0-9a-f]{64}", token):
+        return dispatch_response("invalid_arguments", "必须提供正整数位置、指定派发令牌和 --json")
+    try:
+        pos = int(pos)
+    except ValueError:
+        return dispatch_response("invalid_arguments", "位置数字过长")
+    try:
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                                text=True, timeout=30)
+        if result.returncode:
+            return dispatch_response("repository_unavailable", "请在目标 Git 项目内调用")
+        REPO = os.path.realpath(result.stdout.strip())
+        initial = dispatch_snapshot(REPO, config_only=True)
+        with task_write_lock(initial["directory"]):
+            snapshot = dispatch_snapshot(REPO)
+            if snapshot["directory"] != initial["directory"]:
+                return dispatch_response("target_changed", "项目、位置、配置／队列／状态已改变，请刷新后重新确认")
+            tasks, current, awaiting = B.task_fold(snapshot["events"])
+            blocks = B.task_blocks(snapshot["queue"])
+            todo = B.task_pending(blocks, tasks)
+            if pos > len(todo):
+                return dispatch_response("target_changed", "目标已不在 Pending 中")
+            task = todo[pos - 1]
+            if dispatch_ambiguous(todo, task):
+                return dispatch_response("target_ambiguous", "现有编号／标题规则会同时匹配其他待办，请先补不同编号")
+            if token != dispatch_token(snapshot, pos):
+                return dispatch_response("target_changed", "项目、位置、配置／队列／状态已改变，请刷新后重新确认")
+            D = snapshot["directory"]
+            Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
+            GATE = snapshot["conf"].get("TASK_GATE", "1").strip() != "0"
+            MAIN_AGENT = snapshot["conf"].get("MAIN_AGENT", "")
+            if current:
+                return dispatch_response("current_exists", "已有进行中任务，不派发待办或重发 current")
+            if os.path.exists(PAUSED):
+                return dispatch_response("paused", "队列已暂停")
+            if awaiting:
+                return dispatch_response("awaiting_release", "已完成任务正在等待放行")
+            if any(file_signature(path) != sig for path, sig in snapshot["signatures"].items()):
+                return dispatch_response("target_changed", "发送前配置／队列／状态已改变，请刷新后重新确认")
+            return issue({"id": task["id"] or f"T{next_num(blocks, tasks)}", "title": task["title"],
+                          "body": task["body"]}, as_json=True)
+    except ManualCompletionError as exc:
+        return dispatch_response(exc.code, exc.why)
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return dispatch_response("repository_unavailable", "无法查询当前 Git 仓库")
 
 
 def manual_snapshot_available(completion, last_check, reader):
@@ -1583,6 +1763,8 @@ def main(argv):
         return 0 if argv else 2
     if argv[0] == "show":
         return cmd_show(argv[1:])
+    if argv[0] == "dispatch-pending":
+        return cmd_dispatch_pending(argv[1:])
     if argv[0] in ("complete-manually", "return-to-pending"):
         return cmd_complete_manually(argv[1:], returning=argv[0] == "return-to-pending")
     if argv[0] == "notifications":
