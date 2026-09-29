@@ -4,6 +4,18 @@
 
 ---
 
+
+## 2026-09-29 —— Running 撤回 Pending 已直接实现并本地收尾
+
+用户明确授权本次不走派发，由 drover 主控直接完成接口、验证与文档；未开 agent。实现 `d545ce9` 已合入 main，收尾空提交 `25b66d3`，开发分支已删除，本次没有新建 worktree。公开契约见 `docs/撤回JSON接口.md`。
+
+- 新命令 `return-to-pending Tn --target-token TOKEN --reason 原因 --work-stopped --json`；show 专属 `return_to_pending` 令牌，锁内复核同次 current，拒绝 awaiting/旧令牌。成功同编号原正文回 pending 首位并暂停，保留 `return_history`，不记 Done/Dropped、不自动派发、不调用 corral 或 CHECK_CMD。
+- 自审覆盖状态折叠、同编号再派发、正文恢复顺序、共享互斥、失败方向与消费者兼容。写入失败可能留下暂停和队列重排，结束运行的事件最后发布；详情仍使用派发快照，pending 编辑后正文读 list.pending。没有标题/正文的旧派发拒绝撤回。
+- RED：专项因 show 缺少撤回目标失败；后续 literal reason 与旧派发正文缺失检查各自失败后修复。GREEN：`tests/return-to-pending.py` 11 项，`manual-complete.py` 10 项，`show-json.py` 16 项，`list-output.py` 1 项，`board-history.py` 13 项，`check-result.py` 21 项，`notifications.py` 8 项，以及 `bash tests/drover.sh`、`tests/list-json.py`、`tests/board-pending.py`。最后共享逻辑变动后重跑人工完成和 show，全部通过。`git diff --check` 通过。临时副本的「去掉暂停」「绕过令牌」变异均被专项测试捕获；无 PTY 录屏或截图，未运行含 PTY 录制的整套 drover-board.sh。
+- 不推送、不安装、不重载 launchd、不操作真实队列或 T29；不改 saddle、corral、dispatch-log、全局技能。当前代码由每次新启动的 CLI 加载；旧常驻引擎/看板不认识新 return 事件，真实实验前需要使用新版进程，服务操作留给用户另行授权。
+- 契约已多次尝试 `corral send saddle/main`，对方 working 时被拒绝；随后使用 `--after saddle/main --timeout 600` 排队，返回 `pending:true`。这只证明已排队，不冒充送达确认；最终提交信息另行通知。下一步由 saddle 主控消费公开接口、由用户拿真实 T29 实验。本次不代做真实实验或联调。
+- 用户原有未跟踪 `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 保留，未改、未提交。其余无未完成实现工作。
+
 ## 2026-09-28 —— T36 按用户决定直接落地并收尾
 
 用户决定结束追加验证，取消 saddle 独立审查，不再做隔离联调；**没有执行联调，不记作联调通过**。已审固定 `0e4d031` 合入 main（`2b6e657`），收尾记号 `d3605ef`；公开契约 `docs/人工完成JSON接口.md`，完整审查／收尾记录见 m36 任务及独立审查文件。
