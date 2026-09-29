@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-09-29 —— 指定 Pending 派发接口完成，仅本地合入
+
+用户委托 Drover 先实现公开接口，按项目流程审查、合并和交接；本轮明确不推送、不部署／重载、不操作任何真实队列或开关，Saddle T45 不恢复。以下状态优先于旧章节。
+
+- **代码及契约：** 实现 `b1b52ee686ca02f01cbfc95d17b5ba3cdc3d3ca5`，合并 `986c185`，收尾空提交 `ce57da9`。`list --json` 每项 Pending 新增 `dispatch_pending.pos / target_token / unavailable_reason`；写入口 `dispatch-pending --pos N --target-token TOKEN --json`。完整成功／失败 JSON、退出码、歧义条目和兼容边界见 `docs/指定派发JSON接口.md`，设计见 ROADMAP。
+- **审查及验证：** 主控前台复跑专项 13 项、drover.sh、list-json、show 16 项、人工完成 10 项、撤回 11 项，全部通过；独立审查通过，专项另核实 13 项。没有 PTY、全仓库矩阵或真实队列／Saddle 联合验证。独立审查的唯一建议为配置切换期间 list 模式字段可能短暂与任务快照不一致；写入口仍会重新核对，本次不扩张实现，后续是否修由用户决定。记录在 m37 实现任务及独立审查文件。
+- **部署状态：** 仅本地 main；本轮未推送、安装或重载服务，没有新增事件格式，因此本功能不要求重载支持基线事件的常驻引擎。普通 CLI 下一次启动读取新脚本即可；没有进行真实队列调用或部署实测。真实 T45／T29 和任何开关均未操作，Saddle 后续接入／放行等待用户授权。
+- **清理：** 两个干净且已合入的开发／审查 worktree 已移除，开发分支已删除；工作目录已删，一并关闭本次自开的 `drover/dev-dispatch-pending-1` 和 `drover/dev-review-dispatch-pending-1`。当前仅 main worktree，保留 corral/main、dispatchlog/main、drover/main、globalmesh/main、saddle/main，均仍在各自同名项目目录。
+- **当前下一步：** 接口工作完成，用户另要求完成后调查本次 Astra / xhigh 选择依据；调查只读，不借此更改全局技能或重派任务。Saddle 可在后续放行后读取契约，不自动发消息或恢复任务。
+- **原有文件：** 未跟踪的 `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 保留，未改、未提交。本轮无其他未完成实现项。
+
 ## 2026-09-29 —— Running 撤回 Pending 完成，已重启新版引擎
 
 本次用户授权 drover 与 saddle 主控直接实施，未走派发、未开 agent。drover 接口、合成验证、文档和本地收尾已完成；用户随后批准重启引擎，并在本轮授权交接、提交和推送 `origin/main`（`github.com/firegnu/drover`）。
