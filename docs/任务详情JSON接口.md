@@ -9,7 +9,7 @@ drover show T5 --json --with-agent-status
 
 任务 ID 必须是 `T` 加数字，位于选项之前；两个选项可以交换顺序，不能重复。
 `--json` 必填。项目由调用 cwd 的 Git 顶层目录确定，从该目录读取 `.drover.conf`。
-只定位已有 start/done/drop 事件的任务，不支持 pending、未编号任务或按标题查找。
+只定位已有 start/done/drop 事件的任务；支持撤回后的 pending，不支持从未派发的普通 pending、未编号任务或按标题查找。
 同一 ID 完成或放行后仍可查询；`task.location` 区分位置。
 
 标准输出始终是单个 JSON 对象，文本使用 JSON 转义，解码后保留任务原文（包括换行、控制字符）。
@@ -41,14 +41,16 @@ drover show T5 --json --with-agent-status
 | 字段 | 类型 / 是否存在 | 含义 |
 |---|---|---|
 | id, title, body, key, start | string / 必有 | 编号、原始标题、原始正文、记账匹配键、开始 HEAD；未记录文本/起点为空字符串 |
-| status | string / 必有 | doing、done、dropped |
-| location | string / 必有 | current、awaiting、history；awaiting 的 status 仍为 done |
+| status | string / 必有 | doing、done、dropped、pending（撤回后） |
+| location | string / 必有 | current、awaiting、history、pending（撤回后）；awaiting 的 status 仍为 done |
 | main | string / 有 start 时存在 | 发出时的 main；旧事件缺失时为空字符串 |
 | t0 | number / null / 有 start 时存在 | 开始时间 |
 | end | string / 有 done 时存在 | done 记录的结束 HEAD；**不是完成时的 main** |
-| t1 | number / null / 有 done/drop 时存在 | 完成或放弃时间 |
+| t1 | number / null / 有 done/drop/return 时存在 | 完成、放弃或撤回时间 |
 | t2 | number / null / 有 go 时存在 | 放行时间 |
 | reason | string / 有 drop 时存在 | 放弃原文 |
+
+人工操作的目标、错误和留存记录分别见[人工完成接口](人工完成JSON接口.md)与[撤回接口](撤回JSON接口.md)。撤回后 task 仍是上次派发快照，pending 编辑后的最新正文读取 list.pending；return_history 保留历次派发/撤回时间和原因。pending 的 completion 为 `{scope:"not_applicable",rows:null,unavailable_reason:"task_pending"}`，不表示通过。
 
 未开始就 drop 没有 t0/main/end；body 没有被保存，折叠结果的空字符串不证明当时正文为空。
 
