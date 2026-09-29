@@ -102,7 +102,7 @@ drover next
 
 运行中的任务要留待以后做：先自行停止实际工作，再从 `drover show Tn --json` 读取 `return_to_pending.target_token`，运行 `drover return-to-pending Tn --target-token '<令牌>' --reason '撤回原因' --work-stopped --json`。同编号及派发正文回到队首，队列暂停，不计完成或放弃。继续时由你 `resume` 并 `next`。详情保留历次派发/撤回时间与原因；字段和失败处理见[撤回公开接口](撤回JSON接口.md)。
 
-需要直接派发列表中的某个待办时，先运行 `drover list --json`，保存选中项 `dispatch_pending` 的 `pos` 和 `target_token`，再运行 `drover dispatch-pending --pos N --target-token '<令牌>' --json`。队列不重排；暂停、进行中或等待放行都会拒绝。发送结果和本地记录分别报告，失败后不要自动重试；完整字段和歧义条目边界见[指定派发公开接口](指定派发JSON接口.md)。
+需要直接派发列表中的某个待办时，先运行 `drover list --json`，保存选中项 `dispatch_pending` 的 `pos` 和 `target_token`，再运行 `drover dispatch-pending --pos N --target-token '<令牌>' --json`。队列不重排；暂停、进行中或等待放行都会拒绝。若目标变化导致旧令牌失效，应重新读取 `drover list --json`，由用户重新确认后再提交；不要自动替换令牌重试。发送结果和本地记录分别报告，失败后不要自动重试；完整字段和歧义条目边界见[指定派发公开接口](指定派发JSON接口.md)。
 
 ## 6. 打开看板
 
