@@ -4,20 +4,17 @@
 
 ---
 
+## 2026-09-29 —— Running 撤回 Pending 完成，已重启新版引擎
 
-## 2026-09-29 —— Running 撤回 Pending 已直接实现并本地收尾
+本次用户授权 drover 与 saddle 主控直接实施，未走派发、未开 agent。drover 接口、合成验证、文档和本地收尾已完成；用户随后批准重启引擎，并在本轮授权交接、提交和推送 `origin/main`（`github.com/firegnu/drover`）。
 
-**部署更新（2026-09-29 14:52:33）：** 用户随后明确批准重启引擎。执行 `launchctl kickstart -kp "gui/$(id -u)/dev.drover.loop"` 成功，旧 PID 37103 已退出，新 PID 46666 为 running，加载本仓库新版代码（功能/部署文档提交 `fdcd70d`）；stdout 新增启动行，stderr 无新增内容。重启前核对三项目 loop 均 off、无活跃 drover 写命令；前后 17 个路径哈希/缺失状态一致（项目登记、通知偏好、三项目配置/队列/任务状态/loop/pause）。未改变项目开关、未推进真实队列或撤回 T29，未改 plist/PATH、未推送。下方“待授权重载”为重启前记录，现常驻引擎部署已完成，真实 T29 实验仍由用户执行。
-
-用户明确授权本次不走派发，由 drover 主控直接完成接口、验证与文档；未开 agent。实现 `d545ce9` 已合入 main，收尾空提交 `25b66d3`，开发分支已删除，本次没有新建 worktree。公开契约见 `docs/撤回JSON接口.md`。
-
-- 新命令 `return-to-pending Tn --target-token TOKEN --reason 原因 --work-stopped --json`；show 专属 `return_to_pending` 令牌，锁内复核同次 current，拒绝 awaiting/旧令牌。成功同编号原正文回 pending 首位并暂停，保留 `return_history`，不记 Done/Dropped、不自动派发、不调用 corral 或 CHECK_CMD。
-- 自审覆盖状态折叠、同编号再派发、正文恢复顺序、共享互斥、失败方向与消费者兼容。写入失败可能留下暂停和队列重排，结束运行的事件最后发布；详情仍使用派发快照，pending 编辑后正文读 list.pending。没有标题/正文的旧派发拒绝撤回。
-- RED：专项因 show 缺少撤回目标失败；后续 literal reason 与旧派发正文缺失检查各自失败后修复。GREEN：`tests/return-to-pending.py` 11 项，`manual-complete.py` 10 项，`show-json.py` 16 项，`list-output.py` 1 项，`board-history.py` 13 项，`check-result.py` 21 项，`notifications.py` 8 项，以及 `bash tests/drover.sh`、`tests/list-json.py`、`tests/board-pending.py`。最后共享逻辑变动后重跑人工完成和 show，全部通过。`git diff --check` 通过。临时副本的「去掉暂停」「绕过令牌」变异均被专项测试捕获；无 PTY 录屏或截图，未运行含 PTY 录制的整套 drover-board.sh。
-- 不推送、不安装、不重载 launchd、不操作真实队列或 T29；不改 saddle、corral、dispatch-log、全局技能。当前代码由每次新启动的 CLI 加载；旧常驻引擎/看板不认识新 return 事件，真实实验前需要使用新版进程，服务操作留给用户另行授权。
-- saddle 主控已确认读取契约并接入命令、停止确认、专属令牌与 return_history；其合成检查通过，标准套件有既有 picker 偶发失败（单独一次通过），由 saddle 自行收尾，不记作联合全套通过。真实 T29 尚未实验。
-- 2026-09-29 补充部署核对：`ps`/`launchctl print` 显示旧 PID 37103 仍运行；CLI 软链已指向新版 main，但常驻引擎未升级。只读查看三个登记项目 drover/jb-finetune/saddle，loop 均 off（saddle paused，其余未暂停）；执行部署前须重新核对。公开重载命令及会立即检查全部登记项目的风险见 `docs/撤回JSON接口.md`「部署与常驻引擎」。pause 不阻止当前任务自动完成检查；本轮未运行 kickstart、未改开关、未操作真实任务。待用户授权实际重载，不能声称常驻部署已完成。
-- 用户原有未跟踪 `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 保留，未改、未提交。其余无未完成实现工作。
+- **代码：** 实现 `d545ce9`，合并 `c4d173f`，收尾空提交 `25b66d3`。开发分支已清理，无新增 worktree 或待关闭 agent。新命令为 `return-to-pending Tn --target-token TOKEN --reason 原因 --work-stopped --json`；公开接口及部署边界见 `docs/撤回JSON接口.md`，设计见 `docs/ROADMAP.md`，此处不重复。
+- **验证：** 撤回专项 11 项、人工完成 10 项、show 16 项、list-output 1 项、board-history 13 项、check-result 21 项、notifications 8 项，以及 drover.sh、list-json、board-pending 均通过。保留先 RED 后 GREEN 的证据；临时副本的「去掉暂停」「绕过令牌」变异均被捕获。未做 PTY 录屏、真实 T29 实验或联合全套验证。纯部署/交接轮未重跑功能套件，`git diff --check` 通过。
+- **部署：** 用户批准后于 2026-09-29 14:52:33 执行 `launchctl kickstart -kp "gui/$(id -u)/dev.drover.loop"`。旧 PID 37103 已退出，新 PID 46666 running，已加载本仓库新版代码；stdout 新增启动行，stderr 无新增。重启前后三项目 loop 均 off，17 个登记/偏好/配置/队列/任务状态/开关路径的哈希或缺失状态一致。未改 plist、PATH、项目开关，未推进真实队列或撤回 T29。这些是部署时快照，后续操作前须重新核对。
+- **Saddle 协作：** saddle/main 已确认读取契约并接入；其合成检查通过，标准套件有既有 picker 偶发失败（单项一次通过），由 saddle 自行收尾。新版引擎已部署的通知经 corral send 返回 `confirmed:true`、`merged_with_draft:false`，不是仅排队。不开 corral/dispatch 的新能力，不改 dispatch-log 或全局技能。
+- **当前待办：** 暂无已知 drover 实现或部署工作。真实 T29 由用户自行实验；接手等待用户反馈，不自动撤回、resume、派发或重启服务，不把 saddle 的偶发失败扩展成本仓库任务。发布目标为 `origin/main`，接手用 `git status -sb` / `git rev-list --left-right --count main...origin/main` 核对发布状态，不依据旧章节的“未推送/待重启”记录判断现状。
+- **用户原有未提交文件：** `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 为未跟踪文件，未改、未提交，继续保留；用户曾决定暂缓，不自行实现或删除。
+- **接手先读：** `AGENTS.md`、`docs/撤回JSON接口.md`、`docs/任务详情JSON接口.md`；需要复查撤回验证时读 `tests/return-to-pending.py`。以下旧章节仅作历史记录。
 
 ## 2026-09-28 —— T36 按用户决定直接落地并收尾
 
