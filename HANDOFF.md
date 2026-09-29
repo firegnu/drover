@@ -7,6 +7,8 @@
 
 ## 2026-09-29 —— Running 撤回 Pending 已直接实现并本地收尾
 
+**部署更新（2026-09-29 14:52:33）：** 用户随后明确批准重启引擎。执行 `launchctl kickstart -kp "gui/$(id -u)/dev.drover.loop"` 成功，旧 PID 37103 已退出，新 PID 46666 为 running，加载本仓库新版代码（功能/部署文档提交 `fdcd70d`）；stdout 新增启动行，stderr 无新增内容。重启前核对三项目 loop 均 off、无活跃 drover 写命令；前后 17 个路径哈希/缺失状态一致（项目登记、通知偏好、三项目配置/队列/任务状态/loop/pause）。未改变项目开关、未推进真实队列或撤回 T29，未改 plist/PATH、未推送。下方“待授权重载”为重启前记录，现常驻引擎部署已完成，真实 T29 实验仍由用户执行。
+
 用户明确授权本次不走派发，由 drover 主控直接完成接口、验证与文档；未开 agent。实现 `d545ce9` 已合入 main，收尾空提交 `25b66d3`，开发分支已删除，本次没有新建 worktree。公开契约见 `docs/撤回JSON接口.md`。
 
 - 新命令 `return-to-pending Tn --target-token TOKEN --reason 原因 --work-stopped --json`；show 专属 `return_to_pending` 令牌，锁内复核同次 current，拒绝 awaiting/旧令牌。成功同编号原正文回 pending 首位并暂停，保留 `return_history`，不记 Done/Dropped、不自动派发、不调用 corral 或 CHECK_CMD。
