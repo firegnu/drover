@@ -588,3 +588,9 @@ current/awaiting/history。公开字段、原因码、错误和示例见 [任务
 用户授权 saddle 与 drover 主控直接完成，不走派发，不操作真实队列。新增 `return-to-pending`：用户确认实际工作停止后，以 show 专属令牌、编号及原因结束本次 current；同编号及派发正文回到 pending 首位，队列暂停，不记 Done/Dropped，不自动派发，不停止/注入 agent。awaiting 不接受撤回。
 
 沿用人工完成的操作互斥；专属令牌额外绑定队列版本，防旧确认撤回同编号的新运行。增加 return 事件与可保留多次撤回的 return_history。先暂停并恢复正文，最后发布事件；中途失败可能保持暂停/队列重排，但不提前结束运行。公开字段、错误及消费者兼容规则见[撤回JSON接口](撤回JSON接口.md)。不改 corral、dispatch-log 或全局技能。
+
+## 指定 Pending 派发（2026-09-29，用户授权）
+
+新增 `dispatch-pending --pos N --target-token TOKEN --json`，目标取自 `list --json` 的 Pending 项。同一既有写锁覆盖重新读取展示身份、检查 current／paused／awaiting、调用既有 issue 和 start_task；不使用 move + next，不重排 queue.md。令牌绑定项目、位置和配置／队列／状态版本，旧确认不能作用于变化后的任务。
+
+保留既有按编号、未编号按标题识别的状态规则。用户确认：会连带匹配其他待办的歧义条目先补不同编号，本次拒绝派发，不迁移身份模型。外部发送与本地追加不具备原子性，JSON 分别报告 delivery 与 record，不自动重试；旧 next 的行为不变，不增加事件格式，因此无需重载常驻引擎。完整契约见[指定派发JSON接口](指定派发JSON接口.md)。本次只做 Drover 接口，Saddle 后续另行授权，不操作真实 T45／T29 或任何真实队列与开关。
