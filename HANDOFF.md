@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-09-29 —— T29 文档任务及 dispatch-log 接入已发布
+
+本会话完成项目主控的可选 dispatch-log 接入，并在用户触发 T29 后补充指定派发旧令牌的操作说明。用户随后授权推送，`85fec52f161f71ede9d0531b383b0647471cd16f` 已发布且核对本地／远端一致；本轮另获授权更新本交接、提交并推送。
+
+- **T29 成果：** 只在 `docs/QUICKSTART.md` 指定待办派发段落增加一句：旧令牌失效后重读 `list --json`，由用户重新确认后提交，不自动换令牌重试。实现 `a1c2a80`，合并 `d88d3d4`，收尾空提交 `85fec52`。路由为轻档／看得见，实际使用 Codex Luna / medium；主控文档 diff 审查通过，实现者 `git diff --check` 通过，未做交叉审查、功能测试、构建或录屏。
+- **记录器已启用：** `AGENTS.md` 接入提交 `657a04d` 也已发布。新主控在任务路由、派发及审查收尾前先读 `/Users/firegnu/Developer/personal_projs/dispatch-log/USAGE.md`；项目关联使用 Drover 项目根，任务号关联实际任务。T29 的路由、实际决定、任务书快照、回复、阶段审查、清理及发布记录已保存，记录 ID 为 `4bef00cc9df24f1b97bdfd886445befc`。审查只记阶段增量，收尾按实际结果记录；不补历史、不因采集失败重发，也不改变队列授权。临时任务文件不是持久交接入口，接手通过记录器的 ls/show/cat 查询。
+- **清理与状态：** T29 开发分支和 worktree 已清理，本次自开的 `drover/dev-t29-token-doc-1` 在 idle、attached=0 后关闭；只剩 main worktree。T29 实施阶段按单处修改限制未改 HANDOFF，本轮由用户另行授权更新。没有执行队列 done/go、启动其他待办或重启服务；代码完成与推送不等于用户已放行。
+- **发布检查：** 上轮 Gitleaks、TruffleHog 对待推送提交扫描无发现，TruffleHog 未在线验证凭证。本轮只检查交接差异和新的发布范围，不重跑功能套件；最终发布状态以承载本交接的 main／origin/main／远端 refs/heads/main SHA 一致为准。
+- **用户原有未提交文件：** `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 仍未跟踪，未改、未提交，不自行删除或实施。
+- **下一步：** 暂无已知待完成实现工作，等待用户放行或新指示，不自动推进队列。指定派发列表在并发配置切换时可能短暂显示模式不一致，仍是已记录的非阻断建议，不自行扩修。接手先读 `AGENTS.md`、dispatch-log 的 `USAGE.md`、`docs/QUICKSTART.md` 和 `docs/指定派发JSON接口.md`。下方旧章节中的未推送、未启用记录器或不得触碰 T29 等描述仅代表各次授权范围。
+
 ## 2026-09-29 —— 指定 Pending 派发接口完成，用户授权发布
 
 用户委托 Drover 先实现公开接口，已完成审查、合并和交接；随后明确授权「handoff 之后提交＋推送」，发布目标为 `origin/main`（公开仓库 `github.com/firegnu/drover`）。本轮仅更新交接并发布已有成果，不部署／重载、不操作任何真实队列或开关，Saddle T45 不恢复。以下状态优先于旧章节。
