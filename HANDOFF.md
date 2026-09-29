@@ -13,7 +13,8 @@
 - 自审覆盖状态折叠、同编号再派发、正文恢复顺序、共享互斥、失败方向与消费者兼容。写入失败可能留下暂停和队列重排，结束运行的事件最后发布；详情仍使用派发快照，pending 编辑后正文读 list.pending。没有标题/正文的旧派发拒绝撤回。
 - RED：专项因 show 缺少撤回目标失败；后续 literal reason 与旧派发正文缺失检查各自失败后修复。GREEN：`tests/return-to-pending.py` 11 项，`manual-complete.py` 10 项，`show-json.py` 16 项，`list-output.py` 1 项，`board-history.py` 13 项，`check-result.py` 21 项，`notifications.py` 8 项，以及 `bash tests/drover.sh`、`tests/list-json.py`、`tests/board-pending.py`。最后共享逻辑变动后重跑人工完成和 show，全部通过。`git diff --check` 通过。临时副本的「去掉暂停」「绕过令牌」变异均被专项测试捕获；无 PTY 录屏或截图，未运行含 PTY 录制的整套 drover-board.sh。
 - 不推送、不安装、不重载 launchd、不操作真实队列或 T29；不改 saddle、corral、dispatch-log、全局技能。当前代码由每次新启动的 CLI 加载；旧常驻引擎/看板不认识新 return 事件，真实实验前需要使用新版进程，服务操作留给用户另行授权。
-- 契约已多次尝试 `corral send saddle/main`，对方 working 时被拒绝；随后使用 `--after saddle/main --timeout 600` 排队，返回 `pending:true`。这只证明已排队，不冒充送达确认；最终提交信息另行通知。下一步由 saddle 主控消费公开接口、由用户拿真实 T29 实验。本次不代做真实实验或联调。
+- saddle 主控已确认读取契约并接入命令、停止确认、专属令牌与 return_history；其合成检查通过，标准套件有既有 picker 偶发失败（单独一次通过），由 saddle 自行收尾，不记作联合全套通过。真实 T29 尚未实验。
+- 2026-09-29 补充部署核对：`ps`/`launchctl print` 显示旧 PID 37103 仍运行；CLI 软链已指向新版 main，但常驻引擎未升级。只读查看三个登记项目 drover/jb-finetune/saddle，loop 均 off（saddle paused，其余未暂停）；执行部署前须重新核对。公开重载命令及会立即检查全部登记项目的风险见 `docs/撤回JSON接口.md`「部署与常驻引擎」。pause 不阻止当前任务自动完成检查；本轮未运行 kickstart、未改开关、未操作真实任务。待用户授权实际重载，不能声称常驻部署已完成。
 - 用户原有未跟踪 `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 保留，未改、未提交。其余无未完成实现工作。
 
 ## 2026-09-28 —— T36 按用户决定直接落地并收尾
