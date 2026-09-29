@@ -100,6 +100,8 @@ drover next
 
 如果已验收成果并接受未满足的检查条件，可先用 `drover show Tn --json` 读取 `manual_completion.target_token`，再运行 `drover complete-manually Tn --target-token '<令牌>' --reason '确认原因' --json`。这会保留当时检查结果和人工原因，不执行验收命令，始终等普通 `drover go` 放行，即使 `TASK_GATE=0`。目标或配置已变化时须刷新并重新确认。字段与错误码见[人工完成公开接口](人工完成JSON接口.md)。
 
+运行中的任务要留待以后做：先自行停止实际工作，再从 `drover show Tn --json` 读取 `return_to_pending.target_token`，运行 `drover return-to-pending Tn --target-token '<令牌>' --reason '撤回原因' --work-stopped --json`。同编号及派发正文回到队首，队列暂停，不计完成或放弃。继续时由你 `resume` 并 `next`。详情保留历次派发/撤回时间与原因；字段和失败处理见[撤回公开接口](撤回JSON接口.md)。
+
 ## 6. 打开看板
 
 ```sh

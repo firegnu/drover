@@ -582,3 +582,9 @@ current/awaiting/history。公开字段、原因码、错误和示例见 [任务
 - 不读 corral 的内部文件，不安装、不升级、不管理 corral。
 - 不为 drover 的需求改 corral 或 corral-dispatch。
 - 不做 Windows、远程机器支持。
+
+## Running 撤回 Pending（2026-09-29，用户授权）
+
+用户授权 saddle 与 drover 主控直接完成，不走派发，不操作真实队列。新增 `return-to-pending`：用户确认实际工作停止后，以 show 专属令牌、编号及原因结束本次 current；同编号及派发正文回到 pending 首位，队列暂停，不记 Done/Dropped，不自动派发，不停止/注入 agent。awaiting 不接受撤回。
+
+沿用人工完成的操作互斥；专属令牌额外绑定队列版本，防旧确认撤回同编号的新运行。增加 return 事件与可保留多次撤回的 return_history。先暂停并恢复正文，最后发布事件；中途失败可能保持暂停/队列重排，但不提前结束运行。公开字段、错误及消费者兼容规则见[撤回JSON接口](撤回JSON接口.md)。不改 corral、dispatch-log 或全局技能。

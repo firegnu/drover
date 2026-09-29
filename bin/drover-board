@@ -361,9 +361,15 @@ def task_fold(evs):
     for e in evs:
         tid, ev = e.get("id"), e.get("ev")
         if ev == "start":
+            returns = tasks.get(tid, {}).get("return_history")
             tasks[tid] = {"id": tid, "title": e.get("title", ""), "body": e.get("body", ""), "key": e.get("key", ""),
                           "start": e.get("sha", ""), "main": e.get("main", ""), "t0": e.get("t"), "status": "doing"}
+            if returns:
+                tasks[tid]["return_history"] = returns
             awaiting = None
+        elif ev == "return" and tid in tasks:
+            tasks[tid].update(status="pending", t1=e.get("t"))
+            tasks[tid].setdefault("return_history", []).append(e["return_record"])
         elif ev == "done" and tid in tasks:
             tasks[tid].update(status="done", end=e.get("sha", ""), t1=e.get("t"))
             if "completion_record" in e:
@@ -382,8 +388,13 @@ def task_fold(evs):
 
 def task_pending(blocks, tasks):
     """队列里还没开始的块，按文件顺序。有编号按编号认，没编号按标题认（所以开始过的任务别改标题）。"""
-    keys = {t["key"] for t in tasks.values() if t.get("key")}
-    return [b for b in blocks if not (b["id"] in tasks if b["id"] else b["title"] in keys)]
+    active = {tid: t for tid, t in tasks.items() if t["status"] != "pending"}
+    keys = {t["key"] for t in active.values() if t.get("key")}
+    pending = [b for b in blocks if not (b["id"] in active if b["id"] else b["title"] in keys)]
+    for b in pending:
+        if tasks.get(b["id"], {}).get("return_history"):
+            b["return_history"] = tasks[b["id"]]["return_history"]
+    return pending
 
 
 def task_commits(repo, a, b):
@@ -640,7 +651,7 @@ def task_view(repo, conf, p):
                 # 任务文件开头那行「路由：…」，只显示，不参与任何判断；读不出来就是 None
                 "route": task_route(repo, t.get("body", ""), t.get("title", ""), task_dir)}
     finished = []
-    history = [x for x in tasks.values() if x["status"] != "doing" and x["id"] != awaiting]
+    history = [x for x in tasks.values() if x["status"] in ("done", "dropped") and x["id"] != awaiting]
     commit_counts = history_commit_counts(repo, history)
     for f in reversed(history):
         if f["status"] == "dropped":

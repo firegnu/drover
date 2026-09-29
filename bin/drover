@@ -7,7 +7,7 @@
 不启动、不关闭、也不接入任何 agent。**对目标仓库完全只读**——一个字节都不写。
   queue.md    交接目录里，只归人。「## T7 标题」或「## 标题」开一块，下面随意写约束和验收；
               编号可省（发出时补上），文件里的先后就是执行顺序。
-  tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop），只追加。
+  tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop / return），只追加。
 「做完了」由本工具只读核对 git，不听主控一句话。交接文件的解析和三条判据都复用看板
 （drover-board）里的函数，两边用同一套。
 
@@ -19,6 +19,8 @@
   drover show T5 --json [--with-agent-status]   只读查询一件已编号任务的详情
   drover complete-manually T5 --target-token TOKEN --reason "原因" --json
                                  人：确认当前具体运行完成，保留检查结果，始终等普通 go 放行
+  drover return-to-pending T5 --target-token TOKEN --reason "原因" --work-stopped --json
+                                 人：确认实际工作停止，撤回本次运行，同编号回队首并暂停
   drover notifications status|on|off --json    用户级系统通知偏好；任意目录可用，后续通知检查生效
   drover next                    把下一件送进主控；有进行中的就重发它
   drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
@@ -487,7 +489,7 @@ def cmd_go():
 def cmd_drop(tid, reason):
     tasks, _, _ = fold()
     t = tasks.get(tid)
-    if t and t["status"] != "doing":
+    if t and t["status"] not in ("doing", "pending"):
         die(2, f"ERROR: {tid} 已经{'完成' if t['status'] == 'done' else '放弃'}了")
     if not t:
         b = next((b for b in parse_queue() if b["id"] == tid), None)
@@ -766,7 +768,7 @@ def cmd_list(as_json=False):
     tasks, current, awaiting = fold()
     todo = pending(tasks)
     if as_json:
-        fin = [t for t in tasks.values() if t["status"] != "doing"]
+        fin = [t for t in tasks.values() if t["status"] in ("done", "dropped")]
         print(json.dumps({
             "mode": {"loop": loop_on(), "gate": GATE},
             "paused": os.path.exists(PAUSED),
@@ -787,7 +789,7 @@ def cmd_list(as_json=False):
         print_text(f"  {i}. {b['id'] or '（未编号）'} {b['title']}" + ("  ← 下一个" if i == 1 else ""))
     if not todo:
         print("  （空）")
-    fin = [t for t in tasks.values() if t["status"] != "doing"]
+    fin = [t for t in tasks.values() if t["status"] in ("done", "dropped")]
     print("\n已完成 / 放弃：")
     for t in reversed(fin[-10:]):
         if t["status"] == "done":
@@ -914,6 +916,8 @@ def show_git(task, location, reader):
 
 
 def show_completion(task, location, conf, reader):
+    if location == "pending":
+        return {"scope": "not_applicable", "rows": None, "unavailable_reason": "task_pending"}
     if location == "history":
         return {"scope": "recorded_history", "rows": None,
                 "unavailable_reason": "completion_snapshot_not_recorded"}
@@ -1076,7 +1080,7 @@ def manual_state_valid(events):
         if not isinstance(e, dict):
             return False
         ev, tid = e.get("ev"), e.get("id")
-        if ev not in ("start", "done", "go", "drop", "hold"):
+        if ev not in ("start", "done", "go", "drop", "hold", "return"):
             return False
         if any(k in e and not isinstance(e[k], str) for k in
                ("id", "title", "body", "key", "sha", "main", "reason")):
@@ -1093,6 +1097,15 @@ def manual_state_valid(events):
             if doing or waiting or not e.get("sha"):
                 return False
             doing, statuses[tid] = tid, "doing"
+        elif ev == "return":
+            record = e.get("return_record")
+            if (doing != tid or waiting or not isinstance(record, dict)
+                    or record.get("work_stopped") is not True
+                    or not isinstance(record.get("reason"), str) or not record["reason"].strip()
+                    or any(type(record.get(k)) not in (int, float) or not math.isfinite(record[k])
+                           for k in ("dispatched_at", "returned_at"))):
+                return False
+            doing, statuses[tid] = None, "pending"
         elif ev == "done":
             if doing != tid or type(e.get("gate")) is not bool:
                 return False
@@ -1122,24 +1135,101 @@ def manual_snapshot_available(completion, last_check, reader):
             and last_check["unavailable_reason"] != "cache_unreadable")
 
 
-def cmd_complete_manually(args):
+def read_return_queue(path):
+    try:
+        with open(path, encoding="utf-8", newline="") as source:
+            return source.read()
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeError) as exc:
+        raise ManualCompletionError("snapshot_unavailable", "无法读取队列") from exc
+
+
+def return_token(identity, queue_text, queue_sig):
+    value = [identity, queue_text, queue_sig]
+    return "r1:" + hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def return_body_known(events, current):
+    if not current:
+        return True
+    start = next(e for e in reversed(events) if e.get("ev") == "start" and e.get("id") == current["id"])
+    return "body" in start and "title" in start
+
+
+def publish_return(current, reason, directory, config_path, config_sig,
+                   state_text, state_sig, queue_text, queue_sig, error):
+    state_path, queue_path = f"{directory}/tasks.state", f"{directory}/queue.md"
+    record = {"dispatched_at": current["t0"], "returned_at": time.time(),
+              "reason": reason, "work_stopped": True}
+    event = {"ev": "return", "id": current["id"], "t": record["returned_at"], "return_record": record}
+    pre, blocks = split_blocks(queue_text)
+    kept = []
+    for block in blocks:
+        task = B.task_blocks(block)[0]
+        if (task["id"] == current["id"] or not task["id"]
+                and task["title"] == (current.get("key") or current["title"])):
+            continue
+        kept.append(block)
+    restored = f"## {current['id']} {current['title']}\n{current['body']}\n"
+    queue = join_blocks(pre, [restored, *kept])
+    state = state_text + ("\n" if state_text and not state_text.endswith("\n") else "")
+    state += json.dumps(event, ensure_ascii=True) + "\n"
+    staged = []
+    try:
+        for text, path in ((queue, queue_path), (state, state_path)):
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                             prefix=".return-pending-", delete=False) as dest:
+                staged.append((dest.name, path))
+                dest.write(text)
+                dest.flush()
+                os.fsync(dest.fileno())
+        if (file_signature(config_path) != config_sig or file_signature(state_path) != state_sig
+                or file_signature(queue_path) != queue_sig):
+            return error("target_changed", "发布前状态／配置／队列已改变，请刷新后重新确认")
+        # 多文件写入按安全顺序：结束运行之前必须已经暂停并恢复正文。
+        # 失败可能留下暂停或队列排序变化，但不发布半条撤回事件。
+        with open(f"{directory}/paused", "a") as paused:
+            paused.flush()
+            os.fsync(paused.fileno())
+        for tmp, path in staged:
+            os.replace(tmp, path)
+    except (OSError, UnicodeError) as exc:
+        raise ManualCompletionError("write_failed", "撤回写入失败；队列可能已暂停，请刷新后核对") from exc
+    finally:
+        for tmp, _ in staged:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    print(json.dumps({"schema_version": 1, "ok": True, "task_id": current["id"],
+                      "state": "pending", "paused": True, "return_record": record}))
+    return 0
+
+
+def cmd_complete_manually(args, returning=False):
     def error(code, why):
         print(json.dumps({"schema_version": 1, "ok": False, "error": {"code": code, "why": why}}))
         return {"target_changed": 3, "state_busy": 4}.get(code, 2)
 
-    if len(args) != 6 or not re.fullmatch(r"T\d+", args[0]):
-        return error("invalid_arguments", "用法：complete-manually Tn --target-token TOKEN --reason 原因 --json")
-    rest, options, as_json = args[1:], {}, False
+    command = "return-to-pending" if returning else "complete-manually"
+    if len(args) != (7 if returning else 6) or not re.fullmatch(r"T\d+", args[0]):
+        return error("invalid_arguments", f"用法：{command} Tn --target-token TOKEN --reason 原因 --json")
+    rest, options, as_json, work_stopped = args[1:], {}, False, False
     while rest:
         key, rest = rest[0], rest[1:]
         if key == "--json" and not as_json:
             as_json = True
             continue
+        if returning and key == "--work-stopped" and not work_stopped:
+            work_stopped = True
+            continue
         if key not in ("--target-token", "--reason") or not rest or key in options:
             return error("invalid_arguments", "必须提供唯一的目标令牌和原因")
         options[key], rest = rest[0], rest[1:]
     token, reason = options.get("--target-token", ""), options.get("--reason", "").strip()
-    if not as_json or not re.fullmatch(r"m1:[0-9a-f]{64}", token) or not reason:
+    if (not as_json or returning and not work_stopped
+            or not re.fullmatch(r"r1:[0-9a-f]{64}" if returning else r"m1:[0-9a-f]{64}", token) or not reason):
         return error("invalid_arguments", "目标令牌格式错误或原因为空")
     try:
         result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -1186,9 +1276,20 @@ def cmd_complete_manually(args):
             if not valid:
                 return error("state_invalid", "任务事件损坏或运行身份不明确")
             _, current, awaiting = B.task_fold(events)
+            if returning and not return_body_known(events, current):
+                return error("state_invalid", "本次派发未保存标题／正文，无法可靠恢复")
+            expected = manual_token(repo, conf_text, state_text, config_sig, state_sig)
+            if returning:
+                queue_path = f"{directory}/queue.md"
+                queue_sig = file_signature(queue_path)
+                queue_text = read_return_queue(queue_path)
+                expected = return_token(expected, queue_text, queue_sig)
             if (not current or awaiting or current["id"] != args[0]
-                    or token != manual_token(repo, conf_text, state_text, config_sig, state_sig)):
+                    or token != expected):
                 return error("target_changed", "项目、具体运行或状态／配置已改变，请刷新后重新确认")
+            if returning:
+                return publish_return(current, reason, directory, config_path, config_sig,
+                                      state_text, state_sig, queue_text, queue_sig, error)
             cache_path = f"{directory}/.check-result"
             cache_sig = file_signature(cache_path)
             reader = ShowGit(repo)
@@ -1304,11 +1405,13 @@ def cmd_show(args):
                    or (e.get("t") is not None and (type(e["t"]) not in (int, float) or not math.isfinite(e["t"])))
                    for e in events)):
         return error("state_invalid", "任务事件格式损坏")
+    if any(e.get("ev") == "return" for e in events) and not manual_state_valid(events):
+        return error("state_invalid", "撤回事件或运行身份损坏")
     tasks, current, awaiting = B.task_fold(events)
     task = tasks.get(args[0])
     if not task:
         return error("task_not_found", "没有该任务的开始或结束记录；不查询待办")
-    location = "current" if current and task["id"] == current["id"] else (
+    location = "pending" if task["status"] == "pending" else "current" if current and task["id"] == current["id"] else (
         "awaiting" if task["id"] == awaiting else "history")
     reader = ShowGit(repo)
     completion = show_completion(task, location, conf, reader)
@@ -1362,6 +1465,24 @@ def cmd_show(args):
     result["manual_completion"] = {"target_token": None if manual_reason else manual_token(
         repo, conf_text, state_text, watched[config_path][1], watched[state_path][1]),
         "unavailable_reason": manual_reason}
+    return_reason = None
+    queue_path = f"{conf['HANDOFF_DIR']}/queue.md"
+    queue_sig = file_signature(queue_path)
+    try:
+        queue_text = read_return_queue(queue_path)
+    except ManualCompletionError:
+        queue_text, return_reason = "", "snapshot_unavailable"
+    if location != "current":
+        return_reason = "target_changed"
+    elif not manual_state_valid(events) or not return_body_known(events, current):
+        return_reason = "state_invalid"
+    elif (file_signature(config_path) != watched[config_path][1]
+          or file_signature(state_path) != watched[state_path][1]
+          or file_signature(queue_path) != queue_sig):
+        return_reason = "snapshot_unavailable"
+    result["return_to_pending"] = {"target_token": None if return_reason else return_token(
+        manual_token(repo, conf_text, state_text, watched[config_path][1], watched[state_path][1]),
+        queue_text, queue_sig), "unavailable_reason": return_reason}
     print(json.dumps(result))
     return 0
 
@@ -1462,8 +1583,8 @@ def main(argv):
         return 0 if argv else 2
     if argv[0] == "show":
         return cmd_show(argv[1:])
-    if argv[0] == "complete-manually":
-        return cmd_complete_manually(argv[1:])
+    if argv[0] in ("complete-manually", "return-to-pending"):
+        return cmd_complete_manually(argv[1:], returning=argv[0] == "return-to-pending")
     if argv[0] == "notifications":
         return cmd_notifications(argv[1:])
     if argv[0] == "board":                  # drover board … → 转给看板，参数原样透传
