@@ -52,9 +52,9 @@ with tempfile.TemporaryDirectory() as repo:
     (Path(repo) / 'docs/T2 同名前缀.md').write_text('# 不该被按标题匹配出来\n', encoding='utf-8')
     tv = {'card': None, 'paused': False, 'loop': False, 'gate': True, 'awaiting': None, 'done': 0, 'dropped': 0,
           'holds': set(), 'finished': [], 'todo': [
-              {'id': 'T1', 'title': '有引用', 'body': '任务文件：docs/t1.md\n按任务文件做。\n'},
-              {'id': 'T2', 'title': '没有引用', 'body': '只有正文'},
-              {'id': None, 'title': '引用缺失', 'body': '任务文件： docs/missing.md'}]}
+              {'id': 'T1', 'title': '有引用', 'actions': {}, 'body': '任务文件：docs/t1.md\n按任务文件做。\n'},
+              {'id': 'T2', 'title': '没有引用', 'actions': {}, 'body': '只有正文'},
+              {'id': None, 'title': '引用缺失', 'actions': {}, 'body': '任务文件： docs/missing.md'}]}
     todo = B.queue_vm({'repo': repo, 'crew': []}, tv)['todo']
     assert todo[0]['body'] == ['任务文件：docs/t1.md', '按任务文件做。'], todo[0]
     assert todo[0]['task_file'] == {'path': 'docs/t1.md', 'text': ['# T1 任务单', '', '任务单正文第二段']}, todo[0]

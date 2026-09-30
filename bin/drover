@@ -1,71 +1,39 @@
 #!/usr/bin/env python3
-"""drover —— 外层循环的队列：人往 queue.md 里写任务，本工具一件接一件送进主控。
+"""Drover: explicit task submission and acceptance.
 
-**这是 drover 侧的工具，不在主控里跑。** 它做的只有两件事（见 ROADMAP「全部动作」）：
-用 `corral send` 往主控送一句话（任务正文），以及只读核对 git。送出去的就是任务正文本身，
-和人手动粘一段任务进去一模一样——主控甚至不需要知道有 drover 这个东西。
-不启动、不关闭、也不接入任何 agent。**对目标仓库完全只读**——一个字节都不写。
-  queue.md    交接目录里，只归人。「## T7 标题」或「## 标题」开一块，下面随意写约束和验收；
-              编号可省（发出时补上），文件里的先后就是执行顺序。
-  tasks.state 交接目录里，只归本工具。每行一个 JSON 事件（start / done / go / drop / return），只追加。
-「做完了」由本工具只读核对 git，不听主控一句话。交接文件的解析和三条判据都复用看板
-（drover-board）里的函数，两边用同一套。
+  list --json / show Tn --json [--with-agent-status]
+  dispatch-pending --pos N --target-token TOKEN --json
+  done Tn --target-token TOKEN --json           Running -> Awaiting release
+  go Tn --target-token TOKEN --json             Awaiting release -> Done
+  return-to-pending Tn --target-token TOKEN --reason TEXT --work-stopped --json
+  pause / resume                              Control explicit dispatch only
+  add TITLE [NOTES ...] / edit POS TITLE [NOTES ...] / move FROM TO / drop --pos POS
+  notifications status|on|off --json
+  notifications watch [--once] [--projects FILE] [--interval SECONDS]
+  board / init SHORTNAME
 
-在仓库目录里运行：
-  drover init <短名>             人：把这个仓库接上 drover（写 .drover.conf、建交接目录、登记）
-  drover board                   打开看板（curses TUI；参数原样转给 drover-board，见它的 --help）
-  drover add "标题" [说明行 …]   人：加到队列末尾，自动编号
-  drover list                    看进行中、队列、已完成
-  drover show T5 --json [--with-agent-status]   只读查询一件已编号任务的详情
-  drover complete-manually T5 --target-token TOKEN --reason "原因" --json
-                                 人：确认当前具体运行完成，保留检查结果，始终等普通 go 放行
-  drover return-to-pending T5 --target-token TOKEN --reason "原因" --work-stopped --json
-                                 人：确认实际工作停止，撤回本次运行，同编号回队首并暂停
-  drover notifications status|on|off --json    用户级系统通知偏好；任意目录可用，后续通知检查生效
-  drover next                    把下一件送进主控；有进行中的就重发它
-  drover dispatch-pending --pos N --target-token TOKEN --json
-                                 派发 list --json 刚展示的指定待办；不重发 current、不重排
-  drover done T5                 只读核对三条判据；通过后停下等放行，或直接发下一件
-  drover go                      人：核对并记完成、放行；已完成的只放行，不发下一件
-  drover drop T5 "原因"          人：放弃一个任务（进行中的，或队列里还没开始的）
-  drover drop --pos 3 "原因" [--expect V]   人：按队列位置放弃还没开始的任务，没编号的也行（编号记进 tasks.state，按标题认）
-  drover pause | resume          人：暂停 / 恢复发新任务，正在做的照常做完
-  drover loop on | off           人：这个项目的外层循环开 / 关（交接目录里的 loop 文件，默认没有 = 关）。开着时
-                                      主控空闲下来就核对判据、自己记 done；下一件发不发看 TASK_GATE。
-                                      停在队列那一步（队列空 / 暂停 / 等放行 / 主控在忙）时留下 .loop-wait，引擎再跑一次 next
-  drover loop [--once] [--interval 秒] [--projects F]
-                                 引擎本身：把 ~/.drover/projects 里开着循环的项目各跑一跳。默认常驻，
-                                      --once 跑一跳就退出。它是唯一推动外层循环的东西，看板开不开都不影响
-  drover hold 3 on|off [--expect V]   人：「做完停」—— 队列里第 3 个还没开始的任务做完后停下等放行，不管什么模式
-                                      （记进 tasks.state，不改 queue.md；正文里写一行「做完：等我放行」效果一样）
-  drover move 4 1 [--expect V]   人：把队列里第 4 个还没开始的任务挪到第 1 个（位置同 list 里「队列」的序号）
-  drover edit 2 "标题" [说明行 …] [--expect V]   人：整块改写第 2 个还没开始的任务，编号不变
-                                      --expect：queue.md 的指纹，对不上说明队列刚被改过，不写（move / edit / drop --pos）
-退出码：0 送达或操作成功；8 停下了（队列空、暂停、等放行、主控在忙 / 不在 / 有人在打字）；9 判据没满足；
-        2 用法或前置条件不满足；10 队列在这期间被改过（--expect 对不上），什么都没写。
-指定派发 JSON 另有 3 目标变化、4 写锁忙；8 也可能是送达结果不确定，须分别读取 delivery 和 record。
-配置见 .drover.conf：MAIN_AGENT 送给谁（空 = 不自动送，打出来让人粘）、TASK_GATE 放行模式、
-CHECK_CMD 是完成判据第 3 条跑的命令（留空 = 不跑验收）。
+Task JSON schema 2. Read action tokens from list/show. Old next, loop, hold,
+complete-manually and unqualified go are retired; no automatic progression.
+Task API exits: 0 success; 2 arguments/data unavailable; 3 stale/illegal target;
+4 writer busy; 5 write failed; 8 delivery rejected/unconfirmed/unknown.
+Queue editing retains --expect queue fingerprint (conflict exit 10).
 """
+import argparse
 import importlib.machinery
 import importlib.util
-from contextlib import contextmanager
 import fcntl
-import hashlib
 import json
 import math
 import os
 import re
 import subprocess
-import struct
 import sys
 import tempfile
 import time
-
-sys.dont_write_bytecode = True   # 下面按文件路径加载看板；别在 bin/ 里留下 __pycache__
-UI_ENGLISH = os.environ.get("DROVER_BOARD_ENGLISH") == "1"
-
-
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import drover_core as C
+UI_ENGLISH = os.environ.get('DROVER_BOARD_ENGLISH') == '1'
 def ui(zh, en):
     """Keep CLI output unchanged; the board requests English operation feedback."""
     return en if UI_ENGLISH else zh
@@ -81,15 +49,10 @@ def die(code, msg):
     sys.exit(code)
 
 
-def stop(msg):
-    print(msg)
-    return 8
-
-
 def load_board():
     path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover-board")
     if not os.path.exists(path):
-        die(2, f"ERROR: 找不到 {path}。drover 用看板的函数读交接文件和算判据，两个文件必须装在同一个目录里。")
+        die(2, f"ERROR: 找不到 {path}。drover 命令、看板和共享核心必须保留在同一个目录里。")
     loader = importlib.machinery.SourceFileLoader("drover_board", path)
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("drover_board", loader))
     loader.exec_module(mod)
@@ -97,67 +60,24 @@ def load_board():
 
 
 B = load_board()
-REPO = D = Q = S = PAUSED = LOOP = DONE_MARK = ""
-GATE = True
+REPO = D = Q = S = PAUSED = ''
 
+def setup():
+    global REPO, D, Q, S, PAUSED
+    REPO = C.locate_project()
+    snap = C.snapshot(REPO, config_only=True)
+    D = snap['directory']
+    Q, S, PAUSED = (os.path.join(D, x) for x in ('queue.md', 'tasks.state', 'paused'))
 
-def setup(read_only=False):
-    global REPO, D, Q, S, PAUSED, LOOP, GATE, CHECK_CMD, MAIN_AGENT, DONE_MARK
-    r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    if r.returncode:
-        die(2, ui("ERROR: 不在 git 仓库里。到项目目录里运行 drover。",
-                  "ERROR: Not in a git repository. Run drover from a project directory."))
-    REPO = r.stdout.strip()
-    conf = B.parse_conf(f"{REPO}/.drover.conf")
-    if not conf.get("HANDOFF_DIR"):
-        die(2, ui(f"ERROR: {REPO}/.drover.conf 缺失或没有 HANDOFF_DIR，这个仓库还没接入 drover。",
-                  f"ERROR: {REPO}/.drover.conf is missing or has no HANDOFF_DIR; this repository is not configured."))
-    D = conf["HANDOFF_DIR"]
-    if not read_only:
-        os.makedirs(D, exist_ok=True)
-    Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
-    GATE = conf.get("TASK_GATE", "1").strip() != "0"
-    CHECK_CMD = conf.get("CHECK_CMD", "")            # 判据第 3 条跑的命令；留空 = 这个项目不跑验收
-    MAIN_AGENT = conf.get("MAIN_AGENT", "")          # 送给谁；空 = 不自动送，打出来让人粘
-    DONE_MARK = conf.get("DONE_MARK", "收尾").strip()  # 收尾记号的前缀；空 = 这个项目不打记号，判不出完成
-
-
-def sh(*args):
-    return subprocess.run(["git", "-c", "core.quotepath=false", "-C", REPO, *args], capture_output=True, text=True)
-
-
-def git(*args):
-    return sh(*args).stdout
-
-
-def head():
-    return git("rev-parse", "HEAD").strip()
-
-
-def main_sha():
-    """送任务之前 main 停在哪。判据第 1 条拿它比——不能用 HEAD，仓库不一定在 main 上。"""
-    return git("rev-parse", B.MAIN_BRANCH).strip()
-
-
-# ============================================================ 队列（人的）与进度（本工具的）
-# 解析放在看板里（task_blocks / task_events / task_fold / task_pending），看板显示的和这里发出去的是同一个队列。
 def parse_queue():
-    return B.task_blocks(B.read(Q))
-
-
-def append(ev):
-    with open(S, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"t": int(time.time()), **ev}, ensure_ascii=False) + "\n")
-
+    return C.task_blocks(C.read(Q))
 
 def fold():
-    """→ ({id: task}（按开始顺序）, 进行中的那个, 在等放行的 id)"""
-    return B.task_fold(B.task_events(B.read(S)))
+    snap = C.snapshot(REPO)
+    return snap['tasks'], snap['current'], snap['awaiting']
 
-
-def pending(tasks):
-    return B.task_pending(parse_queue(), tasks)
-
+def append(event):
+    C.append_event(C.snapshot(REPO), {'t': time.time(), **event})
 
 def next_num(blocks=None, tasks=None):
     ids = [b["id"] for b in (parse_queue() if blocks is None else blocks) if b["id"]]
@@ -165,138 +85,6 @@ def next_num(blocks=None, tasks=None):
     return max([int(i[1:]) for i in ids if re.fullmatch(r"T\d+", i or "")], default=0) + 1
 
 
-def start_task(t, again, record=None):
-    """按 issue 的规则记开始：发送返回 0／3，或未配置 MAIN_AGENT 的手动粘贴模式。
-    corral 拒绝送（主控在忙、有人在打字、主控不在）时不能记开始。
-    again 是重发进行中的那件，它早就有 start 事件了，不再记一条。"""
-    if not again:
-        if record is not None:
-            record["status"] = "unknown"   # append 失败可能已写入部分内容
-        append({"ev": "start", "id": t["id"], "title": t["title"], "body": t.get("body", ""), "key": t["title"],
-                "sha": head(), "main": main_sha()})
-    if record is not None:
-        record["status"] = "recorded"
-    if os.path.exists(f"{D}/.loop-wait"):
-        os.remove(f"{D}/.loop-wait")             # 发出去了：停下的标记作废
-    return 0
-
-
-def task_text(t, again=False):
-    """送进主控的那段话 —— 就是任务正文本身，和人手动粘一段任务进去一模一样。
-
-    **这里绝不能出现「运行 drover …」这类话。** 老 herdsman 往写手窗格里注入的是
-    「运行 review-task next，按它的输出办」，那是内循环依赖外循环；drover 送任务正文，
-    主控甚至不需要知道有 drover 这个东西（见 ROADMAP「全部动作」）。"""
-    out = [f"TASK {t['id']}: {t['title']}"]
-    if t.get("body"):
-        out += ["", t["body"]]
-    if again:
-        out += ["", "（这件活之前发过，接着做；进度都在 git 里。）"]
-    return "\n".join(out)
-
-
-def issue(t, again=False, as_json=False):
-    """把任务送进主控。没配 MAIN_AGENT 就打出来让人自己粘 —— 内循环全靠人手工做的项目，
-    drover 照样能用，只是少了自动送这一步（ROADMAP「怎么算成功」里那条依赖方向的验证）。"""
-    text = task_text(t, again)
-    if not MAIN_AGENT:
-        if as_json:
-            return issue_json(t, again, None, {})
-        print_text(text)
-        print(ui("\n（没配 MAIN_AGENT：上面这段没有送出去，自己粘给主控。）",
-                 "\n(MAIN_AGENT is unset: the task was not sent. Paste the text above to the main agent.)"))
-        return start_task(t, again)
-    code, j = B.corral("send", MAIN_AGENT, text, timeout=60)
-    if as_json:
-        return issue_json(t, again, code, j)
-    if code == 0:
-        rc = start_task(t, again)
-        extra = (ui("（和人留的草稿拼在一起提交了，去看一眼）", " (merged with a human draft; inspect it)")
-                 if j.get("merged_with_draft") else "")
-        print(ui(f"已送给 {MAIN_AGENT}：{t['id']} {t['title']}{extra}",
-                 f"Sent to {MAIN_AGENT}: {t['id']} {t['title']}{extra}"))
-        return rc
-    if code == B.CORRAL_NOT_DELIVERED:
-        # 契约：corral 不补发任何按键，**不要重送**。可能已经到了，所以照样记开始，
-        # 但要显眼地报出来让人去看一眼——这是唯一一种「状态真的不确定」的情况。
-        start_task(t, again)
-        print(ui(f"送了但没确认送达：{t['id']} 已按发出记账，不会重送。去 {MAIN_AGENT} 那边看一眼收到没有。",
-                 f"Delivery unconfirmed: {t['id']} was recorded as sent and will not be retried. Check {MAIN_AGENT}."))
-        return 8
-    why = {B.CORRAL_NOT_FOUND: f"corral 里没有 {MAIN_AGENT}（主控没开，或者名字配错了）。drover 不会替你开它。",
-           B.CORRAL_NOT_IDLE: f"{MAIN_AGENT} 不是 idle（{j.get('state', '?')}），它正忙：等它这一轮结束再送。",
-           B.CORRAL_HUMAN_ACTIVE: f"最近 30 秒有人在 {MAIN_AGENT} 的接入窗口里操作：让着人，等会儿再送。",
-           }.get(code, f"corral send 退出码 {code}：{j.get('message', '')}")
-    if UI_ENGLISH:
-        why = {B.CORRAL_NOT_FOUND: f"{MAIN_AGENT} was not found in corral. Drover will not start it.",
-               B.CORRAL_NOT_IDLE: f"{MAIN_AGENT} is {j.get('state', '?')}; wait until it is idle.",
-               B.CORRAL_HUMAN_ACTIVE: f"A person used {MAIN_AGENT} in the last 30 seconds; try later."}.get(
-                   code, f"corral send exit {code}: {j.get('message', '')}")
-    return loop_stop("blocked", ui(f"STOP: {t['id']} 没送出去。{why}", f"STOP: {t['id']} was not sent. {why}"))
-
-
-# ============================================================ 「做完了」的核对（只读）
-def tree_dirty():
-    return [l[3:].split(" -> ")[-1] for l in git("status", "--porcelain", "--untracked-files=no").splitlines()]
-
-
-def check_done(task):
-    """→ (问题列表, 同次核对的三条门)。只读核对 git，不听主控一句话。
-    三条门见 docs/ROADMAP.md；求值在 drover-board.criteria 里，看板和这里用同一份。
-    「不适用」的那几条（没有 base_sha、没有验收命令）不算不过，但会照原样报出来——
-    3 条里过了几条要看得见，不能让跳过的悄悄混成通过。
-
-    **收尾记号（依据）不在这里拦。** 手动 `drover go` / `done` 是人在说「这件活完了」，drover 只报告
-    自己有没有认出来（见 criteria_report）。自动那条路由 drover-board.close_if_done 卡死：
-    见不到记号就不跑到这里来。"""
-    probs = []
-    dirty = tree_dirty()
-    if dirty:
-        probs.append(("Uncommitted changes: " + ", ".join(dirty[:5]) + (" and more" if len(dirty) > 5 else ""))
-                     if UI_ENGLISH else
-                     ("工作区有没提交的改动：" + "、".join(dirty[:5]) + (" 等" if len(dirty) > 5 else "")))
-    cmd, sha = CHECK_CMD, main_sha()
-    rows = (B.criteria(REPO, task.get("main", ""), cmd, english=True) if UI_ENGLISH else
-            B.criteria(REPO, task.get("main", ""), cmd))
-    # 发布和报告都复用决定能否 done 的这次核对。
-    check = next(r for r in rows if r["n"] == 3)
-    mark = f"{D}/.check-result"
-    tmp = f"{mark}.{os.getpid()}.tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"task": task["id"], "main": sha, "cmd": cmd, "ok": check["ok"],
-                       "why": check["why"], "t": int(time.time())}, f, ensure_ascii=False)
-        os.replace(tmp, mark)
-    except (OSError, UnicodeError) as e:
-        # 显示记录是可失败的旁路，不能成为完成判断或队列推进的新前提。
-        print(ui(f"WARNING: 未能发布 {mark}：{e}", f"WARNING: Could not publish {mark}: {e}"), file=sys.stderr)
-    for r in rows:
-        if r["ok"] is False:
-            probs.append(ui(f'判据 {r["n"]}（{r["name"]}）没满足：{r["why"]}',
-                            f'Check {r["n"]} ({r["name"]}) is unmet: {r["why"]}'))
-    return probs, rows
-
-
-def done_mark_row(task):
-    """收尾记号：判「这件活完了」的唯一依据。求值在 drover-board.find_done_mark 里。"""
-    return (B.find_done_mark(REPO, task.get("main", ""), DONE_MARK, english=True) if UI_ENGLISH else
-            B.find_done_mark(REPO, task.get("main", ""), DONE_MARK))
-
-
-def criteria_report(task, rows):
-    """依据（收尾记号）+ 三条门各自什么状态，原样打给人看。跳过的也要出现。
-
-    依据不满足时**照样打，不拦**：手动 `drover go` / `done` 是人在说「这件活完了」，drover 没资格
-    拦人。它只负责把「我没认出完成」说清楚。自动那条路是另一回事——循环引擎见不到记号就
-    不会走到这里（drover-board.close_if_done）。"""
-    out = []
-    for r in [done_mark_row(task)] + rows:
-        mark = "✓" if r["ok"] else ("—" if r["ok"] is None else "✗")
-        out.append(f'  {mark} {r["n"] or ("Evidence" if UI_ENGLISH else "依据")} {r["name"]}{":" if UI_ENGLISH else "："}{r["why"]}')
-    return out
-
-
-# ============================================================ 命令
 def split_blocks(text):
     """queue.md → (第一个 ## 之前的前言, [每块的原文])；和看板的 task_blocks 用同一个标题行判据，逐行原样保留。"""
     pre, blocks = [], []
@@ -323,11 +111,7 @@ def join_blocks(pre, blocks):
 
 
 def write_queue(text):
-    """先写临时文件再整体替换：写手这时运行 next 读到的要么是旧的，要么是新的，不会是半个。"""
-    tmp = f"{Q}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, Q)
+    C.atomic_write(Q, text)
 
 
 def pending_slots(expect):
@@ -337,8 +121,8 @@ def pending_slots(expect):
         die(10, "CONFLICT: queue.md 在这期间被改过（别人刚加了或改了任务），什么都没写。刷新后再操作。")
     pre, raw = split_blocks(text)
     parsed = [B.task_blocks(r)[0] for r in raw]
-    todo = B.task_pending(parsed, fold()[0])
-    return pre, raw, [next(i for i, b in enumerate(parsed) if b is t) for t in todo]
+    tasks = fold()[0]
+    return pre, raw, [i for i, block in enumerate(parsed) if C.task_pending([block], tasks)]
 
 
 def check_task_text(title, notes):
@@ -397,111 +181,10 @@ def cmd_add(title, notes):
     return 0
 
 
-def loop_on():
-    return os.path.exists(LOOP)
-
-
-def mark_loop_wait(reason):
-    """留下队列推进标记，下一件由引擎调用 next。"""
-    mark = f"{D}/.loop-wait"
-    tmp = f"{mark}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"reason": reason, "t": int(time.time())}, f, ensure_ascii=False)
-    os.replace(tmp, mark)
-
-
-def loop_stop(reason, msg):
-    """停在队列那一步（队列空 / 暂停 / 等放行）。循环开着时留下标记，引擎（`drover loop`）
-    等条件重新满足就再跑一次 next。标记里只有原因和时间——要送给谁看配置里的 MAIN_AGENT，
-    不需要记 pane，也不需要核对 pane 的身份（那是老 herdsman 往写手窗格里注入时才要的）。"""
-    if loop_on():
-        mark_loop_wait(reason)
-        return stop(msg + ui("（循环开着：条件满足后会自动接着往下发。）",
-                             " (Loop is on: progression will resume automatically when conditions are met.)"))
-    return stop(msg)
-
-
-def cmd_next():
-    tasks, current, awaiting = fold()
-    if current:
-        return issue(current, again=True)
-    if os.path.exists(PAUSED):
-        return loop_stop("paused", ui("PAUSED: 队列已暂停，不发新任务。停下，把这句报告给人；人运行 drover resume 之后，再运行 drover next。",
-                                      "PAUSED: No new task will be sent. Run drover resume, then drover next."))
-    if awaiting:
-        return loop_stop("release", ui(f"WAIT: {awaiting} 已完成，放行模式下要等人放行。停下，把这句报告给人；人运行 drover go 之后，再运行 drover next。",
-                                       f"WAIT: {awaiting} is complete and awaits release. Run drover go, then drover next."))
-    todo = pending(tasks)
-    if not todo:
-        return loop_stop("empty", ui(f"EMPTY: 队列空了，没有新任务。往 {Q} 里加了任务之后会自动接着发。",
-                                     f"EMPTY: No pending tasks. Add a task to {Q} to continue."))
-    b = todo[0]
-    return issue({"id": b["id"] or f"T{next_num()}", "title": b["title"], "body": b["body"]})
-
-
-def record_done(current, retry):
-    """核对一次、报告并记完成；返回 (gate, held)，失败返回 None，不推进下一件。"""
-    tid = current["id"]
-    probs, rows = check_done(current)
-    if probs:
-        print(ui(f"NOT DONE: {tid} 还没收尾：", f"NOT DONE: {tid} is not complete:"))
-        for p in probs:
-            print_text(f"  - {p}")
-        print(ui(f"处理完再运行 {retry}。", f"Resolve these issues, then run {retry}."))
-        return None
-    print(ui(f"核对通过 {tid}：", f"Checks passed for {tid}:"))
-    for line in criteria_report(current, rows):
-        print_text(line)
-    if done_mark_row(current)["ok"] is not True:
-        print(ui("  ↑ 没看到收尾记号，这次算你自己判断的——循环开着时不会自动走到这一步。",
-                 "  ↑ No completion marker was found; this release is a manual judgment and cannot happen automatically."))
-    held =B.task_held(current, B.task_holds(B.task_events(B.read(S))))
-    gate = GATE or held                          # 循环开不开都听 TASK_GATE；打了「做完停」的不管什么模式都停
-    append({"ev": "done", "id": tid, "sha": head(), "gate": gate})
-    return gate, held
-
-
-def cmd_done(tid):
-    tasks, current, awaiting = fold()
-    if not current or current["id"] != tid:
-        die(2, f"ERROR: {tid} 不是进行中的任务" + (f"，进行中的是 {current['id']}" if current else "，现在没有进行中的任务"))
-    result = record_done(current, f"drover done {tid}")
-    if result is None:
-        return 9
-    gate, held = result
-    if gate and loop_on():
-        why = "人标了「做完停」" if held else "放行模式"
-        return loop_stop("release", f"DONE {tid}：核对通过。{why}：等人放行（drover go）。")
-    if gate:
-        return stop(f"DONE {tid}：核对通过。放行模式：等人放行（drover go）。")
-    print(f"DONE {tid}：核对通过。")
-    return cmd_next()
-
-
-def cmd_go():
-    tasks, current, awaiting = fold()
-    if current:
-        if record_done(current, "drover go") is None:
-            return 9
-        awaiting = current["id"]
-        if loop_on():
-            mark_loop_wait("release")
-    if not awaiting:
-        die(2, ui("ERROR: 没有在等放行的任务", "ERROR: No task is awaiting release"))
-    if tasks.get(awaiting, {}).get("completion_record") and loop_on():
-        mark_loop_wait("release")
-    append({"ev": "go", "id": awaiting})
-    print(ui(f"已放行（{awaiting} 之后）。" + ("循环开着：下一件会自动送进主控。" if loop_on()
-                                                  else "运行 drover next 发下一件。"),
-             f"Released after {awaiting}. " + ("Loop is on: the next task will be sent automatically." if loop_on()
-                                                else "Run drover next for the next task.")))
-    return 0
-
-
 def cmd_drop(tid, reason):
     tasks, _, _ = fold()
     t = tasks.get(tid)
-    if t and t["status"] not in ("doing", "pending"):
+    if t and t["status"] != "pending":
         die(2, f"ERROR: {tid} 已经{'完成' if t['status'] == 'done' else '放弃'}了")
     if not t:
         b = next((b for b in parse_queue() if b["id"] == tid), None)
@@ -515,7 +198,7 @@ def cmd_drop(tid, reason):
 
 def cmd_drop_pos(pos, reason, expect):
     """按队列位置放弃还没开始的任务。有编号走 cmd_drop；没编号的在 tasks.state 里给个编号、以标题为 key 记下，
-    task_pending 按标题认出它已放弃（和 next 发没编号的任务同一个办法）；queue.md 原文不动。"""
+    task_pending 按标题认出它已放弃（和明确派发未编号任务同一个办法）；queue.md 原文不动。"""
     _, raw, slots = pending_slots(expect)
     b = B.task_blocks(raw[slots[slot(pos, slots)]])[0]
     if b["id"]:
@@ -527,22 +210,24 @@ def cmd_drop_pos(pos, reason, expect):
     return 0
 
 
-def cmd_hold(pos, on, expect):
-    _, raw, slots = pending_slots(expect)
-    b = B.task_blocks(raw[slots[slot(pos, slots)]])[0]
-    append({"ev": "hold", "key": b["id"] or b["title"], "title": b["title"], "on": on})
-    print(f"{'已标' if on else '已取消'}「做完停」：{b['id'] or '（未编号）'} {b['title']}"
-          + ("。它做完后会停下等放行，不管是不是开着循环。" if on else "。"))
+def cmd_pause(on):
+    if on:
+        open(PAUSED, "a").close()
+        print(ui("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。",
+                 "Paused: no new tasks will be sent."))
+    else:
+        if os.path.exists(PAUSED):
+            os.remove(PAUSED)
+        print(ui("已恢复：可以重新明确派发待办；不会自动派发。",
+                 "Resumed: explicit dispatch is enabled."))
     return 0
 
 
-# ============================================================ 系统通知
-# 通知跟着引擎走；仅完成且等待放行的任务进入自动提示，持续 Attention 保持原样。
 NOTIFY_BIN = os.environ.get("DROVER_NOTIFY_BIN", "osascript")
 NOTIFY_STATE = os.path.expanduser("~/.drover/board-notified.json")
 NOTIFY_PREFS = os.path.expanduser("~/.drover/notifications.json")
-
-
+_notify_revision = None
+_notify_baselined = set()
 class NotificationError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -613,53 +298,6 @@ def applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def notification_snapshot(list_path):
-    """仅通知层严格读取；读取失败的项目不建立基线，复用原有事件折叠语义。"""
-    with open(list_path or B.PROJ_LIST, encoding="utf-8") as source:
-        repos = {os.path.realpath(os.path.expanduser(line.strip()))
-                 for line in source.read().splitlines() if line.strip() and not line.strip().startswith("#")}
-    snapshot = {}
-    for repo in sorted(repos):
-        try:
-            path = f"{repo}/.drover.conf"
-            with open(path, encoding="utf-8") as source:
-                conf = B.parse_conf(path, text=source.read())
-            with open(f"{conf['HANDOFF_DIR']}/tasks.state", encoding="utf-8") as source:
-                events = [json.loads(line) for line in source.read().splitlines() if line.strip()]
-            if any(not isinstance(e, dict)
-                   or any(k in e and not isinstance(e[k], str) for k in
-                          ("ev", "id", "title", "body", "key", "sha", "main", "reason"))
-                   for e in events):
-                raise ValueError("invalid task events")
-            tasks, _, awaiting = B.task_fold(events)
-            snapshot[repo] = tasks.get(awaiting)
-        except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-            # 不能把读不了的 tasks.state 当空集；下次成功读取才首次建立该项目基线。
-            continue
-    return snapshot
-
-
-def notification_identity(repo, task):
-    if (not task or task.get("status") != "done"
-            or not all(isinstance(task.get(k), str) and task[k] for k in ("id", "start", "main"))
-            or type(task.get("t0")) not in (int, float)):
-        return None
-    try:
-        stamp = float(task["t0"])
-        if not math.isfinite(stamp):
-            return None
-    except (ValueError, OverflowError):
-        return None
-    # binary64 大端字节给跨语言消费者一个无十进制格式歧义的时间表示；±0 统一。
-    identity = [os.path.realpath(repo), task["id"], struct.pack(">d", stamp or 0.0).hex(),
-                task["start"], task["main"], "awaiting_release"]
-    return json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
-
-
-_notify_revision = None
-_notify_baselined = set()
-
-
 def notify_new(projects, state_path, preferences):
     """每次进程启动/偏好 revision 变化先立基线；保留所有已处理身份，发送前记账。"""
     global _notify_revision, _notify_baselined
@@ -687,7 +325,7 @@ def notify_new(projects, state_path, preferences):
     write_notification_json(state_path, {"schema_version": 1, "seen": sorted(seen)})
     _notify_revision, _notify_baselined = preferences["revision"], baselined
     for repo, task in pending:
-        body = " ".join(f"{task['id']} {task.get('title', '')} 做完了，正在等待放行。".split())[:220]
+        body = " ".join(f"{task['id']} {task.get('title', '')} 已提交，正在等待验收。".split())[:220]
         script = f"display notification {applescript_str(body)} with title {applescript_str('drover · ' + os.path.basename(repo) + ' 等你')}"
         try:
             subprocess.run([NOTIFY_BIN, "-e", script], capture_output=True, timeout=10)
@@ -695,977 +333,116 @@ def notify_new(projects, state_path, preferences):
             pass                    # 尽力发送，无重试；记录不是送达证明。
 
 
-NOTIFY_EVERY = 60        # 两次通知检查之间至少隔这么久，不承诺生效时限
-_looked_at = 0.0         # 上次看的时刻。引擎是常驻进程，记在内存里就够，不用落文件
+def notification_snapshot(list_path):
+    projects = {}
+    for repo in B.discover(list_path):
+        try:
+            snap = C.snapshot(repo)
+            projects[snap['repo']] = snap['tasks'].get(snap['awaiting'])
+        except C.FlowError:
+            continue
+    return projects
+
+notification_identity = C.notification_identity
 
 
 def tick(list_path):
-    """推进每跳照常执行；通知独立节流，只读任务事件、不运行判据或查询 agent。"""
-    global _looked_at
-    B.loop_tick(list_path)
-    now = time.time()
-    if now - _looked_at < NOTIFY_EVERY:
-        return
-    _looked_at = now
+    # Observer only: no Git, agent checks, or task mutation calls.
     try:
-        preferences = notification_preferences()
-        notify_new(notification_snapshot(list_path), NOTIFY_STATE, preferences)
+        notify_new(notification_snapshot(list_path), NOTIFY_STATE, notification_preferences())
     except Exception as exc:
-        # 偏好、观察或去重写入失败都不能使 loop --once 失败或打断后续推进。
-        print(f"notification check: {exc}", file=sys.stderr)
+        print(f'notification check: {exc}', file=sys.stderr, flush=True)
 
-
-def cmd_loop_run(list_path, once, interval):
-    """外层循环的引擎，独立进程。一跳做什么全在 drover-board.loop_tick 里，这里只管「多久一跳」、
-    「一跳出错不许把进程带走」，外加节流的系统通知检查。
-
-    以前它是 `drover board serve` 里的一个守护线程——**不开那个网页服务，外层循环一跳都不转**，
-    「无人值守」根本不成立。拆出来之后看板退回纯观察者：开不开、关没关，都不影响循环。
-
-    哪个项目转不转不在这里判断，看它交接目录里有没有 loop 文件（`drover loop on/off`）。
-    这个命令不需要待在某个仓库里，所以不走 setup()。"""
-    if once:
-        tick(list_path)
-        return 0
-    print(f"drover loop：每 {interval} 秒一跳，项目清单 {list_path or '~/.drover/projects'}", flush=True)
+def watch(args):
+    parser = Parser(prog='drover notifications watch')
+    parser.add_argument('--once', action='store_true')
+    parser.add_argument('--projects', default='')
+    parser.add_argument('--interval', type=float, default=60)
+    opt = parser.parse_args(args)
+    if not math.isfinite(opt.interval) or opt.interval <= 0:
+        raise C.FlowError('invalid_arguments', 'interval 必须是有限正数')
     while True:
-        try:
-            tick(list_path)
-        except Exception as e:                       # 一个项目出岔子，不能把整条循环带走
-            print(f"loop_tick: {e}", file=sys.stderr, flush=True)
-        time.sleep(interval)
+        tick(opt.projects)
+        if opt.once:
+            return 0
+        time.sleep(opt.interval)
 
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        if self.prog == 'drover go':
+            message = 'go 只接受 Awaiting；Running 请先 done。' + message
+        raise C.FlowError('invalid_arguments', message)
 
-def cmd_loop(on):
-    if on:
-        with open(LOOP, "w", encoding="utf-8") as f:     # 重写一遍：修改时间就是这次开循环的时刻（「连续做了几个」从这里数）
-            f.write(f"{int(time.time())}\n")
-        print(ui("循环已开：主控空闲下来自动核对判据、自动记 done。下一件发不发看 TASK_GATE——"
-                 "放行模式（默认）等人 drover go，自动模式直接发。停在队列那一步（队列空 / 暂停 / 等放行）时，"
-                 "条件满足后引擎会叫醒它。\n"
-                 "  注意：真正推动它的是引擎进程 `drover loop`，这个开关只是告诉引擎「这个项目要转」。"
-                 "引擎没跑，开关开着也不会动。\ndrover loop off 关掉。",
-                 "Loop enabled: the engine checks completed work when the main agent is idle. TASK_GATE controls release. "
-                 "The engine must be running separately; this switch only enables this project. Use drover loop off to disable it."))
+def result(value):
+    print(json.dumps(value, ensure_ascii=True))
+    if value.get('ok', False):
+        return 0
+    return {'target_changed': 3, 'invalid_state': 3, 'current_exists': 3, 'awaiting_release': 3,
+            'paused': 3, 'state_busy': 4, 'write_failed': 5, 'send_rejected': 8,
+            'delivery_unconfirmed': 8, 'delivery_unknown': 8}.get(value['error']['code'], 2)
+
+def task_command(command, args):
+    parser = Parser(prog='drover ' + command)
+    if command == 'dispatch-pending':
+        parser.add_argument('--pos', required=True, type=int)
     else:
-        for f in (LOOP, f"{D}/.loop-wait"):
-            if os.path.exists(f):
-                os.remove(f)
-        print(ui("循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。",
-                 "Loop disabled; manual task progression is in effect."))
-    return 0
-
-
-def cmd_pause(on):
-    if on:
-        open(PAUSED, "a").close()
-        print(ui("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。",
-                 "Paused: no new tasks will be sent."))
-    else:
-        if os.path.exists(PAUSED):
-            os.remove(PAUSED)
-        print(ui("已恢复：写手下次运行 drover next 会拿到新任务。",
-                 "Resumed: the next drover next call can send a task."))
-    return 0
-
-
-def span(a, b):
-    if not a or not b:
-        return ""
-    m = max(0, int(b - a)) // 60
-    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
-
+        parser.add_argument('task_id')
+    parser.add_argument('--target-token', required=True)
+    parser.add_argument('--json', required=True, action='store_true')
+    if command == 'return-to-pending':
+        parser.add_argument('--reason', required=True)
+        parser.add_argument('--work-stopped', required=True, action='store_true')
+    if len([a for a in args if a.startswith('--')]) != len(set(a for a in args if a.startswith('--'))):
+        raise C.FlowError('invalid_arguments', '选项不能重复')
+    opt = parser.parse_args(args)
+    if not re.fullmatch(r'v2:[0-9a-f]{64}', opt.target_token):
+        raise C.FlowError('invalid_arguments', '需要 list/show 提供的 v2 目标令牌')
+    setup()
+    if command == 'dispatch-pending':
+        if opt.pos < 1:
+            raise C.FlowError('invalid_arguments', '位置必须是正整数')
+        return result(C.dispatch(REPO, opt.pos, opt.target_token, B.corral))
+    if not re.fullmatch(r'T[0-9]+', opt.task_id):
+        raise C.FlowError('invalid_arguments', '任务编号必须为 Tn')
+    return result(C.transition(REPO, command, opt.task_id, opt.target_token,
+                              getattr(opt, 'reason', ''), getattr(opt, 'work_stopped', False)))
 
 def cmd_list(as_json=False):
-    tasks, current, awaiting = fold()
-    todo = pending(tasks)
+    value = C.listing(C.snapshot(REPO))
     if as_json:
-        try:
-            snapshot = dispatch_snapshot(REPO)
-            tasks, current, awaiting = B.task_fold(snapshot["events"])
-            todo = B.task_pending(B.task_blocks(snapshot["queue"]), tasks)
-            for pos, task in enumerate(todo, 1):
-                ambiguous = dispatch_ambiguous(todo, task)
-                task["dispatch_pending"] = {"pos": pos,
-                                            "target_token": None if ambiguous else dispatch_token(snapshot, pos),
-                                            "unavailable_reason": "target_ambiguous" if ambiguous else None}
-        except ManualCompletionError as exc:
-            for pos, task in enumerate(todo, 1):
-                task["dispatch_pending"] = {"pos": pos, "target_token": None,
-                                            "unavailable_reason": exc.code}
-        fin = [t for t in tasks.values() if t["status"] in ("done", "dropped")]
-        print(json.dumps({
-            "mode": {"loop": loop_on(), "gate": GATE},
-            "paused": os.path.exists(PAUSED),
-            "current": current,
-            "awaiting": tasks.get(awaiting),
-            "pending": todo,
-            "history": list(reversed(fin)),
-        }))
-        return 0
-    mode = ("循环 + 放行模式（自动核对判据，下一件等人放行）" if GATE else "循环 + 自动模式（做完直接领下一个）") if loop_on() \
-        else ("放行模式" if GATE else "自动模式")
-    print(f"模式：{mode}" + ("（已暂停）" if os.path.exists(PAUSED) else "")
-          + (f"；{awaiting} 已完成，等人放行" if awaiting else ""))
-    print("\n进行中：")
-    print_text(f"  {current['id']} {current['title']}（开始于 {current['start'][:7]}）" if current else "  （无）")
-    print("\n队列：")
-    for i, b in enumerate(todo, 1):
-        print_text(f"  {i}. {b['id'] or '（未编号）'} {b['title']}" + ("  ← 下一个" if i == 1 else ""))
-    if not todo:
-        print("  （空）")
-    fin = [t for t in tasks.values() if t["status"] in ("done", "dropped")]
-    print("\n已完成 / 放弃：")
-    for t in reversed(fin[-10:]):
-        if t["status"] == "done":
-            print_text(f"  {t['id']} {t['title']} · {span(t.get('t0'), t.get('t1'))} · {t['start'][:7]}..{t['end'][:7]}")
-            if t.get("completion_record"):
-                record = t["completion_record"]
-                print_text(f"    人工确认 · {record['confirmed_at']} · {record['reason']}")
-        else:
-            print_text(f"  {t['id']} {t['title']} · 放弃" + (f"：{t['reason']}" if t.get("reason") else ""))
-    if not fin:
-        print("  （无）")
+        return result(value)
+    print('明确提交 / 用户接受' + ('（已暂停派发）' if value['paused'] else ''))
+    for key, label in (('current', '进行中'), ('awaiting', '待验收')):
+        task = value[key]
+        print_text(f"{label}：" + (f"{task['id']} {task['title']}" if task else '（无）'))
+    print('队列：')
+    for pos, task in enumerate(value['pending'], 1):
+        print_text(f"  {pos}. {task['id'] or '（未编号）'} {task['title']}")
+    print('历史：')
+    for task in value['history'][:10]:
+        print_text(f"  {task['id']} {task['title']} · {task['status']}")
     return 0
-
-
-class ShowUnavailable(Exception):
-    """仅用于详情读取边界；不改变原完成判断的失败语义。"""
-
-
-class ShowGit:
-    def __init__(self, repo):
-        self.repo = repo
-        self.refs = None
-        self.head = None
-        try:
-            self.refs = self.read_refs()
-        except ShowUnavailable:
-            pass
-        try:
-            self.head = self.read(repo, "rev-parse", "--verify", "HEAD^{commit}").strip()
-        except ShowUnavailable:
-            pass
-
-    def run(self, repo, *args):
-        try:
-            result = subprocess.run(["git", "-C", repo, *args], capture_output=True,
-                                    text=True, timeout=30,
-                                    env={**os.environ, "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0"})
-        except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-            raise ShowUnavailable("git_query_failed") from exc
-        if result.returncode not in ((0, 1) if args[0] == "merge-base" else (0,)) or result.stderr:
-            raise ShowUnavailable("git_query_failed")
-        return result
-
-    def read_refs(self):
-        out = self.run(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/").stdout
-        # Git 记录只按 ASCII 换行分隔；合法 ref 中的 U+2028 等字符必须保留。
-        return dict(line.split(" ", 1) for line in out.split("\n") if line)
-
-    def pinned(self, repo, *args):
-        if self.refs is None:
-            raise ShowUnavailable("git_query_failed")
-        if args[0] == "for-each-ref":
-            return subprocess.CompletedProcess(args, 0, "\n".join(self.refs), "")
-
-        def endpoint(value):
-            if value == B.MAIN_BRANCH:
-                value = f"refs/heads/{B.MAIN_BRANCH}"
-            if value.startswith("refs/heads/"):
-                if value not in self.refs:
-                    raise ShowUnavailable("main_unavailable")
-                return self.refs[value]
-            return value
-
-        pinned = ["..".join(endpoint(v) for v in arg.split("..")) for arg in args]
-        return self.run(repo, *pinned)
-
-    def read(self, repo, *args):
-        return self.run(repo, *args).stdout
-
-    def read_pinned(self, repo, *args):
-        return self.pinned(repo, *args).stdout
-
-
-def show_timing(task, location, observed):
-    def stamp(key):
-        value = task.get(key)
-        return value if type(value) in (int, float) and math.isfinite(value) else None
-
-    def span(start, end):
-        return end - start if start is not None and end is not None and end >= start else None
-
-    start, end, released = (stamp(k) for k in ("t0", "t1", "t2"))
-    return {"started_at": start, "ended_at": end, "released_at": released,
-            "elapsed_seconds": span(start, observed if location == "current" else end),
-            "release_wait_seconds": span(end, observed if location == "awaiting" else released)}
-
-
-def show_git(task, location, reader):
-    main = (reader.refs or {}).get(f"refs/heads/{B.MAIN_BRANCH}")
-    result = {"start_head": task.get("start") or None, "start_main": task.get("main") or None,
-              "end_head": task.get("end") or None, "observed_head": reader.head, "observed_main": main,
-              "range_commits": None, "main_commits_since_start": None, "main_tip_committed_at": None,
-              "unavailable_reasons": {}}
-    reasons = result["unavailable_reasons"]
-    for key in ("start_head", "start_main", "end_head", "observed_head", "observed_main"):
-        if result[key] is None:
-            reasons[key] = key + "_not_recorded" if not key.startswith("observed") else "git_query_failed"
-
-    def count(key, start, end, missing):
-        if not start or not end:
-            reasons[key] = missing
-            return
-        try:
-            result[key] = int(reader.read(reader.repo, "rev-list", "--count", f"{start}..{end}").strip())
-        except (ShowUnavailable, ValueError):
-            reasons[key] = "git_query_failed"
-
-    end = reader.head if location == "current" else result["end_head"]
-    count("range_commits", result["start_head"], end,
-          "start_head_not_recorded" if not result["start_head"] else
-          "observed_head_unavailable" if location == "current" else "end_head_not_recorded")
-    if location == "history":
-        reasons["main_commits_since_start"] = "completion_main_not_recorded"
-    else:
-        count("main_commits_since_start", result["start_main"], main,
-              "start_main_not_recorded" if not result["start_main"] else "main_unavailable")
-    try:
-        if not main:
-            raise ShowUnavailable("main_unavailable")
-        result["main_tip_committed_at"] = int(reader.read(reader.repo, "log", "-1", "--format=%ct", main).strip())
-    except (ShowUnavailable, ValueError):
-        reasons["main_tip_committed_at"] = "git_query_failed"
-    return result
-
-
-def show_completion(task, location, conf, reader):
-    if location == "pending":
-        return {"scope": "not_applicable", "rows": None, "unavailable_reason": "task_pending"}
-    if location == "history":
-        return {"scope": "recorded_history", "rows": None,
-                "unavailable_reason": "completion_snapshot_not_recorded"}
-    ids = ["completion_marker", "main_advanced", "branches_merged", "check_command"]
-
-    def row(index, ok, state, reason, why):
-        return {"id": ids[index], "ok": ok, "state": state, "reason": reason, "why": why}
-
-    base, mark, cmd = task.get("main", ""), conf.get("DONE_MARK", "收尾").strip(), conf.get("CHECK_CMD", "")
-    rows = []
-    try:
-        if not base:
-            raise ShowUnavailable("start_main_not_recorded")
-        reader.read(reader.repo, "cat-file", "-e", f"{base}^{{commit}}")
-        gates = B.criteria(reader.repo, base, cmd, do_check=False, git_reader=reader.read_pinned,
-                           git_runner=reader.pinned)
-        for r in gates[:2]:
-            failed = r.get("failed", False)
-            rows.append(row(r["n"], None if failed else r["ok"], "unavailable" if failed else
-                            "met" if r["ok"] else "unmet", "git_query_failed" if failed else
-                            "criterion_met" if r["ok"] else "criterion_unmet", r["why"]))
-        marker = B.find_done_mark(reader.repo, base, mark, git_reader=reader.read_pinned)
-        rows.insert(0, row(0, marker["ok"], "met" if marker["ok"] else "unmet",
-                           "marker_found" if marker["ok"] else "marker_not_found", marker["why"]))
-    except ShowUnavailable as exc:
-        rows = [row(i, None, "unavailable", str(exc), "Git 或任务起点不可用，无法重算") for i in range(3)]
-    if not mark:
-        rows[0] = row(0, None, "not_applicable", "marker_not_configured", "未配置收尾记号")
-    rows.append(row(3, None, "not_run" if cmd else "not_applicable",
-                    "check_not_run" if cmd else "check_not_configured", "本次只读查询不执行验收命令" if cmd else "未配置验收命令"))
-    return {"scope": "current_repository", "rows": rows, "unavailable_reason": None}
-
-
-def show_last_check(task, location, conf, reader, observed):
-    cmd = conf.get("CHECK_CMD", "")
-    result = {"status": "unavailable", "applicable": bool(cmd),
-              "scope": "retained_sample" if location == "history" else "current_identity",
-              "checked_at": None, "ok": None, "record": None, "stale_reasons": [],
-              "unavailable_reason": None}
-    if not cmd:
-        result["unavailable_reason"] = "check_not_configured"
-        return result
-    status, saved = B.read_check_result(f"{conf['HANDOFF_DIR']}/.check-result", observed)
-    result["status"] = status
-    if status != "valid":
-        result["unavailable_reason"] = {"missing": "cache_missing", "invalid": "cache_invalid",
-                                        "unavailable": "cache_unreadable"}[status]
-        return result
-    if saved["task"] != task["id"]:
-        result.update(status="stale", stale_reasons=["task_changed"], unavailable_reason="cache_for_other_task")
-        return result
-    result.update(record={k: saved[k] for k in ("task", "main", "cmd", "ok", "why", "t")}, checked_at=saved["t"])
-    main = (reader.refs or {}).get(f"refs/heads/{B.MAIN_BRANCH}")
-    if not main:
-        result.update(status="unavailable", unavailable_reason="main_unavailable")
-        return result
-    result["stale_reasons"] = [reason for old, new, reason in
-                               ((saved["main"], main, "main_changed"), (saved["cmd"], cmd, "command_changed"))
-                               if old != new]
-    if result["stale_reasons"]:
-        result["status"] = "stale"
-    else:
-        result["ok"] = saved["ok"]
-    return result
-
-
-def show_hold(task, location, events):
-    relevant = events
-    body_known = False
-    for index, event in enumerate(events):
-        if event.get("id") != task["id"]:
-            continue
-        if event.get("ev") == "start":
-            body_known = "body" in event
-        if location == "history" and event.get("ev") in ("done", "drop"):
-            relevant = events[:index + 1]
-    held = B.task_held(task, B.task_holds(relevant))
-    return {"enabled": held if held or body_known else None,
-            "scope": "task_end_events" if location == "history" else "current_events",
-            "unavailable_reason": None if held or body_known else "task_body_not_recorded"}
-
-
-def show_attention(location, conf, completion, with_status):
-    result = {"state": "unknown", "reason": "agent_status_not_queried", "unmet_rows": [],
-              "agent": None, "inference": True}
-    if location != "current":
-        result.update(state="awaiting_release" if location == "awaiting" else "not_applicable",
-                      reason="awaiting_release" if location == "awaiting" else "historical_task", inference=False)
-        return result
-    if not with_status:
-        return result
-    name = conf.get("MAIN_AGENT", "")
-    if not name:
-        result["reason"] = "main_agent_not_configured"
-        return result
-    code, agent = B.corral("status", name)
-    if code != 0 or not isinstance(agent, dict) or agent.get("ok") is not True:
-        result["reason"] = "agent_status_unavailable"
-        return result
-    state, idle, source = agent.get("state"), agent.get("idle_for"), agent.get("last_input_source")
-    state = state if state in ("starting", "idle", "working", "blocked", "exiting", "unknown") else None
-    idle = idle if type(idle) in (int, float) and math.isfinite(idle) and idle >= 0 else None
-    source = source if source in ("send", "human", "agent") else None
-    result["agent"] = {"name": name, "state": state, "idle_for": idle, "last_input_source": source}
-    if state in (None, "unknown"):
-        result["reason"] = "agent_state_unknown"
-    elif state != "idle":
-        result.update(state="none", reason="agent_not_idle")
-    elif source == "agent":
-        result.update(state="none", reason="agent_self_turn")
-    elif idle is None or source is None:
-        result["reason"] = "agent_observation_incomplete"
-    elif idle < B.IDLE_SETTLE:
-        result.update(state="none", reason="idle_below_threshold")
-    else:
-        unmet = [r["id"] for r in completion["rows"] if r["ok"] is False]
-        if unmet:
-            result.update(state="suggested", reason="idle_with_unmet_criteria", unmet_rows=unmet)
-        elif any(r["state"] == "unavailable" for r in completion["rows"]):
-            result["reason"] = "criteria_unavailable"
-        else:
-            result.update(state="none", reason="no_unmet_criteria")
-    return result
-
-
-class ManualCompletionError(Exception):
-    def __init__(self, code, why):
-        self.code, self.why = code, why
-
-
-def file_signature(path):
-    try:
-        stat = os.stat(path)
-        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-    except (OSError, ValueError):
-        return None
-
-
-@contextmanager
-def task_write_lock(directory):
-    """同一交接目录的 CLI 从读取决策到写入全程互斥；查询不碰锁。"""
-    try:
-        lock = open(f"{directory}/.tasks.lock", "a")
-    except OSError as exc:
-        raise ManualCompletionError("write_failed", "无法打开任务操作锁") from exc
-    with lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ManualCompletionError("state_busy", "另一个任务写操作正在进行，请刷新后重试") from exc
-        except OSError as exc:
-            raise ManualCompletionError("write_failed", "无法锁定任务状态") from exc
-        yield
-
-
-def manual_state_valid(events):
-    """人工覆盖不能使用宽容折叠从损坏事件里猜出的当前运行。旧历史不补字段。"""
-    doing, waiting, statuses = None, None, {}
-    for e in events:
-        if not isinstance(e, dict):
-            return False
-        ev, tid = e.get("ev"), e.get("id")
-        if ev not in ("start", "done", "go", "drop", "hold", "return"):
-            return False
-        if any(k in e and not isinstance(e[k], str) for k in
-               ("id", "title", "body", "key", "sha", "main", "reason")):
-            return False
-        if type(e.get("t")) not in (int, float) or not math.isfinite(e["t"]):
-            return False
-        if ev == "hold":
-            if not e.get("key") or type(e.get("on")) is not bool:
-                return False
-            continue
-        if not isinstance(tid, str) or not re.fullmatch(r"T\d+", tid):
-            return False
-        if ev == "start":
-            if doing or waiting or not e.get("sha"):
-                return False
-            doing, statuses[tid] = tid, "doing"
-        elif ev == "return":
-            record = e.get("return_record")
-            if (doing != tid or waiting or not isinstance(record, dict)
-                    or record.get("work_stopped") is not True
-                    or not isinstance(record.get("reason"), str) or not record["reason"].strip()
-                    or any(type(record.get(k)) not in (int, float) or not math.isfinite(record[k])
-                           for k in ("dispatched_at", "returned_at"))):
-                return False
-            doing, statuses[tid] = None, "pending"
-        elif ev == "done":
-            if doing != tid or type(e.get("gate")) is not bool:
-                return False
-            doing, waiting, statuses[tid] = None, tid if e["gate"] else None, "done"
-        elif ev == "go":
-            if doing or statuses.get(tid) != "done" or waiting not in (None, tid):
-                return False
-            waiting = None
-        else:
-            if statuses.get(tid) in ("done", "dropped"):
-                return False
-            statuses[tid] = "dropped"
-            if doing == tid:
-                doing = None
-    return True
-
-
-def manual_token(repo, conf_text, state_text, config_signature, state_signature):
-    # 状态全文含 start 的位置和内容；文件版本也入摘要，替换回同样文本不会复活旧令牌。
-    value = [os.path.realpath(repo), conf_text, state_text, config_signature, state_signature]
-    return "m1:" + hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
-
-
-def dispatch_snapshot(repo, config_only=False):
-    """严格读取展示／派发共用的身份快照；不创建文件，不调用 corral。"""
-    signatures = {}
-
-    def read(path, code, missing=False):
-        signatures[path] = file_signature(path)
-        try:
-            with open(path, encoding="utf-8", newline="") as source:
-                return source.read()
-        except FileNotFoundError as exc:
-            if missing:
-                return ""
-            raise ManualCompletionError("not_configured", "配置缺失") from exc
-        except (OSError, UnicodeError, ValueError) as exc:
-            raise ManualCompletionError(code, "无法读取派发快照") from exc
-
-    config_path = f"{repo}/.drover.conf"
-    config = read(config_path, "configuration_unreadable")
-    conf = B.parse_conf(config_path, text=config)
-    if not conf.get("HANDOFF_DIR"):
-        raise ManualCompletionError("not_configured", "未配置 HANDOFF_DIR")
-    if "\0" in conf["HANDOFF_DIR"]:
-        raise ManualCompletionError("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
-    directory = os.path.realpath(conf["HANDOFF_DIR"])
-    if config_only:                       # 取锁前只定位目录，决策所需状态全部在锁内重读
-        return {"directory": directory}
-    state = read(f"{directory}/tasks.state", "state_unreadable", missing=True)
-    queue = read(f"{directory}/queue.md", "snapshot_unavailable", missing=True)
-    try:
-        events = [json.loads(line) for line in state.splitlines() if line.strip()]
-        valid = manual_state_valid(events)
-    except (ValueError, RecursionError, OverflowError):
-        valid = False
-    if not valid:
-        raise ManualCompletionError("state_invalid", "任务事件损坏或运行身份不明确")
-    if any(file_signature(path) != sig for path, sig in signatures.items()):
-        raise ManualCompletionError("snapshot_unavailable", "读取期间配置／队列／状态已改变")
-    return {"repo": os.path.realpath(repo), "directory": directory, "conf": conf, "config": config,
-            "state": state, "queue": queue, "events": events, "signatures": signatures}
-
-
-def dispatch_token(snapshot, pos):
-    identity = [snapshot[k] for k in ("repo", "directory", "config", "state", "queue", "signatures")]
-    return "d1:" + hashlib.sha256(json.dumps([identity, pos], ensure_ascii=True).encode("ascii")).hexdigest()
-
-
-def dispatch_ambiguous(todo, target):
-    # start 按编号或 title key 排除待办；不能让选中一项顺带隐藏另一项。
-    return any(task is not target and
-               (task["id"] == target["id"] if task["id"] else task["title"] == target["title"])
-               for task in todo)
-
-
-def dispatch_response(code=None, why=None, *, task_id=None, delivery=None, record=None, manual_text=None):
-    delivery = delivery or {"status": "not_attempted", "attempted": False, "corral_exit_code": None,
-                            "confirmed": None, "merged_with_draft": None}
-    record = record or {"status": "not_attempted"}
-    result = {"schema_version": 1, "ok": code is None, "task_id": task_id,
-              "state": "current" if record["status"] == "recorded" else
-                       "unknown" if record["status"] == "unknown" else "pending" if task_id else None,
-              "delivery": delivery, "record": record, "manual_text": manual_text}
-    if code:
-        result["error"] = {"code": code, "why": why}
-    print(json.dumps(result))
-    return {None: 0, "target_changed": 3, "state_busy": 4, "paused": 8, "current_exists": 8,
-            "awaiting_release": 8, "send_rejected": 8, "delivery_unconfirmed": 8,
-            "delivery_unknown": 8}.get(code, 2)
-
-
-def issue_json(t, again, code, reply):
-    # 复用 issue 的发送和 start_task 的记账规则；机器字段不推测传输是否真的送到。
-    reply = reply if isinstance(reply, dict) else {}
-    confirmed = reply.get("confirmed") if type(reply.get("confirmed")) is bool else None
-    merged = reply.get("merged_with_draft") if type(reply.get("merged_with_draft")) is bool else None
-    if not MAIN_AGENT:
-        status, error = "not_sent", None
-    elif code == 0 or code == B.CORRAL_NOT_DELIVERED:
-        status = "confirmed" if code == 0 and reply.get("ok") is True and confirmed is True else "unconfirmed"
-        error = None if status == "confirmed" else "delivery_unconfirmed"
-    elif code in (B.CORRAL_NOT_FOUND, B.CORRAL_NOT_IDLE, B.CORRAL_HUMAN_ACTIVE, 6):
-        status, error = "rejected", "send_rejected"
-    else:
-        status, error = "unknown", "delivery_unknown"
-    delivery = {"status": status, "attempted": bool(MAIN_AGENT), "corral_exit_code": code,
-                "confirmed": confirmed, "merged_with_draft": merged}
-    record = {"status": "not_attempted"}
-    why = "派发未确认完成，请核对主控和本地状态；不要自动重试" if error else None
-    if not MAIN_AGENT or code in (0, B.CORRAL_NOT_DELIVERED):
-        try:
-            start_task(t, again, record=record)
-        except (OSError, UnicodeError) as exc:
-            error, why = "write_failed", f"本地记录或等待标记写入失败：{exc}；请核对，不要重试发送"
-    return dispatch_response(error, why, task_id=t["id"], delivery=delivery, record=record,
-                             manual_text=task_text(t, again) if not MAIN_AGENT else None)
-
-
-def cmd_dispatch_pending(args):
-    global REPO, D, Q, S, PAUSED, LOOP, GATE, MAIN_AGENT
-    options, rest, as_json = {}, list(args), False
-    while rest:
-        key = rest.pop(0)
-        if key == "--json" and not as_json:
-            as_json = True
-        elif key in ("--pos", "--target-token") and key not in options and rest:
-            options[key] = rest.pop(0)
-        else:
-            return dispatch_response("invalid_arguments", "用法：dispatch-pending --pos N --target-token TOKEN --json")
-    pos, token = options.get("--pos", ""), options.get("--target-token", "")
-    if not as_json or not re.fullmatch(r"[1-9][0-9]*", pos) or not re.fullmatch(r"d1:[0-9a-f]{64}", token):
-        return dispatch_response("invalid_arguments", "必须提供正整数位置、指定派发令牌和 --json")
-    try:
-        pos = int(pos)
-    except ValueError:
-        return dispatch_response("invalid_arguments", "位置数字过长")
-    try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
-                                text=True, timeout=30)
-        if result.returncode:
-            return dispatch_response("repository_unavailable", "请在目标 Git 项目内调用")
-        REPO = os.path.realpath(result.stdout.strip())
-        initial = dispatch_snapshot(REPO, config_only=True)
-        with task_write_lock(initial["directory"]):
-            snapshot = dispatch_snapshot(REPO)
-            if snapshot["directory"] != initial["directory"]:
-                return dispatch_response("target_changed", "项目、位置、配置／队列／状态已改变，请刷新后重新确认")
-            tasks, current, awaiting = B.task_fold(snapshot["events"])
-            blocks = B.task_blocks(snapshot["queue"])
-            todo = B.task_pending(blocks, tasks)
-            if pos > len(todo):
-                return dispatch_response("target_changed", "目标已不在 Pending 中")
-            task = todo[pos - 1]
-            if dispatch_ambiguous(todo, task):
-                return dispatch_response("target_ambiguous", "现有编号／标题规则会同时匹配其他待办，请先补不同编号")
-            if token != dispatch_token(snapshot, pos):
-                return dispatch_response("target_changed", "项目、位置、配置／队列／状态已改变，请刷新后重新确认")
-            D = snapshot["directory"]
-            Q, S, PAUSED, LOOP = f"{D}/queue.md", f"{D}/tasks.state", f"{D}/paused", f"{D}/loop"
-            GATE = snapshot["conf"].get("TASK_GATE", "1").strip() != "0"
-            MAIN_AGENT = snapshot["conf"].get("MAIN_AGENT", "")
-            if current:
-                return dispatch_response("current_exists", "已有进行中任务，不派发待办或重发 current")
-            if os.path.exists(PAUSED):
-                return dispatch_response("paused", "队列已暂停")
-            if awaiting:
-                return dispatch_response("awaiting_release", "已完成任务正在等待放行")
-            if any(file_signature(path) != sig for path, sig in snapshot["signatures"].items()):
-                return dispatch_response("target_changed", "发送前配置／队列／状态已改变，请刷新后重新确认")
-            return issue({"id": task["id"] or f"T{next_num(blocks, tasks)}", "title": task["title"],
-                          "body": task["body"]}, as_json=True)
-    except ManualCompletionError as exc:
-        return dispatch_response(exc.code, exc.why)
-    except (OSError, subprocess.SubprocessError, UnicodeError):
-        return dispatch_response("repository_unavailable", "无法查询当前 Git 仓库")
-
-
-def manual_snapshot_available(completion, last_check, reader):
-    return (reader.head is not None and reader.refs is not None
-            and all(r["state"] != "unavailable" for r in completion["rows"])
-            and last_check["unavailable_reason"] != "cache_unreadable")
-
-
-def read_return_queue(path):
-    try:
-        with open(path, encoding="utf-8", newline="") as source:
-            return source.read()
-    except FileNotFoundError:
-        return ""
-    except (OSError, UnicodeError) as exc:
-        raise ManualCompletionError("snapshot_unavailable", "无法读取队列") from exc
-
-
-def return_token(identity, queue_text, queue_sig):
-    value = [identity, queue_text, queue_sig]
-    return "r1:" + hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
-
-
-def return_body_known(events, current):
-    if not current:
-        return True
-    start = next(e for e in reversed(events) if e.get("ev") == "start" and e.get("id") == current["id"])
-    return "body" in start and "title" in start
-
-
-def publish_return(current, reason, directory, config_path, config_sig,
-                   state_text, state_sig, queue_text, queue_sig, error):
-    state_path, queue_path = f"{directory}/tasks.state", f"{directory}/queue.md"
-    record = {"dispatched_at": current["t0"], "returned_at": time.time(),
-              "reason": reason, "work_stopped": True}
-    event = {"ev": "return", "id": current["id"], "t": record["returned_at"], "return_record": record}
-    pre, blocks = split_blocks(queue_text)
-    kept = []
-    for block in blocks:
-        task = B.task_blocks(block)[0]
-        if (task["id"] == current["id"] or not task["id"]
-                and task["title"] == (current.get("key") or current["title"])):
-            continue
-        kept.append(block)
-    restored = f"## {current['id']} {current['title']}\n{current['body']}\n"
-    queue = join_blocks(pre, [restored, *kept])
-    state = state_text + ("\n" if state_text and not state_text.endswith("\n") else "")
-    state += json.dumps(event, ensure_ascii=True) + "\n"
-    staged = []
-    try:
-        for text, path in ((queue, queue_path), (state, state_path)):
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
-                                             prefix=".return-pending-", delete=False) as dest:
-                staged.append((dest.name, path))
-                dest.write(text)
-                dest.flush()
-                os.fsync(dest.fileno())
-        if (file_signature(config_path) != config_sig or file_signature(state_path) != state_sig
-                or file_signature(queue_path) != queue_sig):
-            return error("target_changed", "发布前状态／配置／队列已改变，请刷新后重新确认")
-        # 多文件写入按安全顺序：结束运行之前必须已经暂停并恢复正文。
-        # 失败可能留下暂停或队列排序变化，但不发布半条撤回事件。
-        with open(f"{directory}/paused", "a") as paused:
-            paused.flush()
-            os.fsync(paused.fileno())
-        for tmp, path in staged:
-            os.replace(tmp, path)
-    except (OSError, UnicodeError) as exc:
-        raise ManualCompletionError("write_failed", "撤回写入失败；队列可能已暂停，请刷新后核对") from exc
-    finally:
-        for tmp, _ in staged:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-    print(json.dumps({"schema_version": 1, "ok": True, "task_id": current["id"],
-                      "state": "pending", "paused": True, "return_record": record}))
-    return 0
-
-
-def cmd_complete_manually(args, returning=False):
-    def error(code, why):
-        print(json.dumps({"schema_version": 1, "ok": False, "error": {"code": code, "why": why}}))
-        return {"target_changed": 3, "state_busy": 4}.get(code, 2)
-
-    command = "return-to-pending" if returning else "complete-manually"
-    if len(args) != (7 if returning else 6) or not re.fullmatch(r"T\d+", args[0]):
-        return error("invalid_arguments", f"用法：{command} Tn --target-token TOKEN --reason 原因 --json")
-    rest, options, as_json, work_stopped = args[1:], {}, False, False
-    while rest:
-        key, rest = rest[0], rest[1:]
-        if key == "--json" and not as_json:
-            as_json = True
-            continue
-        if returning and key == "--work-stopped" and not work_stopped:
-            work_stopped = True
-            continue
-        if key not in ("--target-token", "--reason") or not rest or key in options:
-            return error("invalid_arguments", "必须提供唯一的目标令牌和原因")
-        options[key], rest = rest[0], rest[1:]
-    token, reason = options.get("--target-token", ""), options.get("--reason", "").strip()
-    if (not as_json or returning and not work_stopped
-            or not re.fullmatch(r"r1:[0-9a-f]{64}" if returning else r"m1:[0-9a-f]{64}", token) or not reason):
-        return error("invalid_arguments", "目标令牌格式错误或原因为空")
-    try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
-                                text=True, timeout=30)
-        if result.returncode:
-            return error("repository_unavailable", "请在目标 Git 项目内调用")
-        repo = os.path.realpath(result.stdout.strip())
-        config_path = f"{repo}/.drover.conf"
-
-        def read_config():
-            try:
-                with open(config_path, encoding="utf-8", newline="") as source:
-                    text = source.read()
-                conf = B.parse_conf(config_path, text=text)
-            except FileNotFoundError as exc:
-                raise ManualCompletionError("not_configured", "配置缺失") from exc
-            except (OSError, UnicodeError, ValueError) as exc:
-                raise ManualCompletionError("configuration_unreadable", "无法读取配置") from exc
-            if not conf.get("HANDOFF_DIR"):
-                raise ManualCompletionError("not_configured", "未配置 HANDOFF_DIR")
-            if "\0" in conf["HANDOFF_DIR"]:
-                raise ManualCompletionError("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
-            return text, conf
-
-        _, initial_conf = read_config()
-        directory = os.path.realpath(initial_conf["HANDOFF_DIR"])
-        with task_write_lock(directory):
-            config_sig = file_signature(config_path)
-            conf_text, conf = read_config()
-            if os.path.realpath(conf["HANDOFF_DIR"]) != directory:
-                return error("target_changed", "交接目录已改变")
-            state_path = f"{directory}/tasks.state"
-            state_sig = file_signature(state_path)
-            try:
-                with open(state_path, encoding="utf-8", newline="") as source:
-                    state_text = source.read()
-            except (OSError, UnicodeError) as exc:
-                raise ManualCompletionError("state_unreadable", "无法读取任务状态") from exc
-            try:
-                events = [json.loads(line) for line in state_text.splitlines() if line.strip()]
-                valid = manual_state_valid(events)
-            except (ValueError, RecursionError, OverflowError):
-                valid = False
-            if not valid:
-                return error("state_invalid", "任务事件损坏或运行身份不明确")
-            _, current, awaiting = B.task_fold(events)
-            if returning and not return_body_known(events, current):
-                return error("state_invalid", "本次派发未保存标题／正文，无法可靠恢复")
-            expected = manual_token(repo, conf_text, state_text, config_sig, state_sig)
-            if returning:
-                queue_path = f"{directory}/queue.md"
-                queue_sig = file_signature(queue_path)
-                queue_text = read_return_queue(queue_path)
-                expected = return_token(expected, queue_text, queue_sig)
-            if (not current or awaiting or current["id"] != args[0]
-                    or token != expected):
-                return error("target_changed", "项目、具体运行或状态／配置已改变，请刷新后重新确认")
-            if returning:
-                return publish_return(current, reason, directory, config_path, config_sig,
-                                      state_text, state_sig, queue_text, queue_sig, error)
-            cache_path = f"{directory}/.check-result"
-            cache_sig = file_signature(cache_path)
-            reader = ShowGit(repo)
-            observed = time.time()
-            completion = show_completion(current, "current", conf, reader)
-            last_check = show_last_check(current, "current", conf, reader, observed)
-            if not manual_snapshot_available(completion, last_check, reader):
-                return error("snapshot_unavailable", "无法可靠读取检查快照")
-            dirty = bool(reader.read(repo, "status", "--porcelain", "--untracked-files=no").strip())
-            if reader.read_refs() != reader.refs or reader.read(repo, "rev-parse", "--verify", "HEAD^{commit}").strip() != reader.head:
-                return error("snapshot_unavailable", "Git 在读取快照期间改变")
-            if file_signature(cache_path) != cache_sig:
-                return error("snapshot_unavailable", "验收缓存在读取期间改变")
-            if file_signature(config_path) != config_sig or file_signature(state_path) != state_sig:
-                return error("target_changed", "状态／配置在读取期间改变")
-            record = {"method": "manual", "reason": reason, "confirmed_at": time.time(),
-                      "completion": completion, "last_check": last_check,
-                      "workspace": {"state": "dirty" if dirty else "clean", "tracked_dirty": dirty}}
-            event = {"ev": "done", "id": current["id"], "t": record["confirmed_at"],
-                     "sha": reader.head, "gate": True, "completion_record": record}
-            # 保持事件日志前缀；一次原子替换提交 receipt，写失败不留下半条完成事件。
-            tmp = None
-            try:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
-                                                 prefix=".manual-complete-", delete=False) as dest:
-                    tmp = dest.name
-                    dest.write(state_text)
-                    if state_text and not state_text.endswith("\n"):
-                        dest.write("\n")
-                    dest.write(json.dumps(event, ensure_ascii=True) + "\n")
-                    dest.flush()
-                    os.fsync(dest.fileno())
-                if (file_signature(config_path) != config_sig or file_signature(state_path) != state_sig
-                        or os.path.realpath(conf["HANDOFF_DIR"]) != directory):
-                    return error("target_changed", "发布前状态／配置已改变")
-                if file_signature(cache_path) != cache_sig:
-                    return error("snapshot_unavailable", "发布前验收缓存已改变")
-                os.replace(tmp, state_path)
-            except (OSError, UnicodeError) as exc:
-                raise ManualCompletionError("write_failed", "未能写入人工完成记录") from exc
-            finally:
-                if tmp:
-                    try:
-                        os.unlink(tmp)
-                    except OSError:
-                        pass
-            print(json.dumps({"schema_version": 1, "ok": True, "task_id": current["id"],
-                              "state": "awaiting_release", "completion_record": record}))
-            return 0
-    except ManualCompletionError as exc:
-        return error(exc.code, exc.why)
-    except ShowUnavailable:
-        return error("snapshot_unavailable", "无法可靠读取 Git 快照")
-    except (OSError, subprocess.SubprocessError, UnicodeError):
-        return error("repository_unavailable", "无法查询当前 Git 仓库")
-
 
 def cmd_show(args):
-    observed = time.time()
-    watched = {}
-
-    def watch(path, label):
-        watched[path] = (label, file_signature(path))
-
-    def error(reason, why):
-        print(json.dumps({"schema_version": 1, "ok": False, "observed_at": observed,
-                          "error": {"code": reason, "why": why}}))
-        return 2
-
-    if (len(args) not in (2, 3) or not re.fullmatch(r"T\d+", args[0])
-            or sorted(args[1:]) not in (["--json"], ["--json", "--with-agent-status"])):
-        return error("invalid_arguments", "用法：drover show Tn --json [--with-agent-status]")
-    try:
-        repo = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError, UnicodeError):
-        return error("repository_unavailable", "无法查询当前 Git 仓库")
-    if repo.returncode:
-        return error("not_repository", "请在项目 Git 仓库内调用")
-    repo = repo.stdout.strip()
-    config_path = f"{repo}/.drover.conf"
-    watch(config_path, "configuration")
-    try:
-        with open(config_path, encoding="utf-8", newline="") as source:
-            conf_text = source.read()
-            conf = B.parse_conf(config_path, text=conf_text)
-    except FileNotFoundError:
-        return error("not_configured", "配置缺失")
-    except (OSError, UnicodeError):
-        return error("configuration_unreadable", "无法读取项目配置")
-    if not conf.get("HANDOFF_DIR"):
-        return error("not_configured", "配置缺失或未设置 HANDOFF_DIR")
-    if "\0" in conf["HANDOFF_DIR"]:
-        return error("configuration_unreadable", "HANDOFF_DIR 不是有效路径")
-    state_path = f"{conf['HANDOFF_DIR']}/tasks.state"
-    watch(state_path, "tasks.state")
-    watch(f"{conf['HANDOFF_DIR']}/.check-result", "check_cache")
-    try:
-        with open(state_path, encoding="utf-8", newline="") as source:
-            state_text = source.read()
-    except FileNotFoundError:
-        state_text = ""
-    except (OSError, UnicodeError):
-        return error("state_unreadable", "无法读取任务事件")
-    try:
-        events = B.task_events(state_text)
-    except (ValueError, RecursionError):
-        return error("state_invalid", "任务事件格式损坏")
-    # 损坏的事件不能让已完成任务悄悄退回 doing；旧命令的宽容解析保持原样。
-    if (len(events) != len([line for line in state_text.splitlines() if line.strip()])
-            or any(not isinstance(e, dict)
-                   or any(k in e and not isinstance(e[k], str) for k in
-                          ("ev", "id", "title", "body", "key", "sha", "main", "reason"))
-                   or (e.get("t") is not None and (type(e["t"]) not in (int, float) or not math.isfinite(e["t"])))
-                   for e in events)):
-        return error("state_invalid", "任务事件格式损坏")
-    if any(e.get("ev") == "return" for e in events) and not manual_state_valid(events):
-        return error("state_invalid", "撤回事件或运行身份损坏")
-    tasks, current, awaiting = B.task_fold(events)
-    task = tasks.get(args[0])
+    parser = Parser(prog='drover show')
+    parser.add_argument('task_id')
+    parser.add_argument('--json', required=True, action='store_true')
+    parser.add_argument('--with-agent-status', action='store_true')
+    opt = parser.parse_args(args)
+    setup()
+    snap = C.snapshot(REPO)
+    value = C.listing(snap)
+    candidates = [value['current'], value['awaiting'], *value['pending'], *value['history']]
+    task = next((t for t in candidates if t and t['id'] == opt.task_id), None)
     if not task:
-        return error("task_not_found", "没有该任务的开始或结束记录；不查询待办")
-    location = "pending" if task["status"] == "pending" else "current" if current and task["id"] == current["id"] else (
-        "awaiting" if task["id"] == awaiting else "history")
-    reader = ShowGit(repo)
-    completion = show_completion(task, location, conf, reader)
-    task_dir = conf.get("TASK_FILE_DIR", "")
-    if task_dir:
-        watch(os.path.join(repo, os.path.expanduser(task_dir)), "routing_directory")
-    explicit = B.TASK_FILE.search(task.get("body", ""))
-    if explicit:
-        watch(os.path.join(repo, os.path.expanduser(explicit.group(1))), "routing_file")
-    try:
-        route_paths = B.task_files(repo, task.get("body", ""), task.get("title", ""), task_dir)
-    except (OSError, ValueError):
-        route_paths = []
-    for path in route_paths:
-        watch(path, "routing_file")
-    route = B.task_route(repo, task.get("body", ""), task.get("title", ""), task_dir)
-    result = {"schema_version": 1, "ok": True, "observed_at": observed,
-              "task": {**task, "location": location},
-              "timing": show_timing(task, location, observed),
-              "git": show_git(task, location, reader),
-              "completion": completion,
-              "last_check": show_last_check(task, location, conf, reader, observed),
-              "routing": {"source": "task_file_now", **route} if route else None,
-              "hold": show_hold(task, location, events),
-              "attention": show_attention(location, conf, completion, "--with-agent-status" in args),
-              "warnings": []}
-    manual_reason = None
-    if location != "current":
-        manual_reason = "target_changed"
-    elif not manual_state_valid(events):
-        manual_reason = "state_invalid"
-    elif not manual_snapshot_available(completion, result["last_check"], reader):
-        manual_reason = "snapshot_unavailable"
-    else:
-        try:
-            reader.read(repo, "status", "--porcelain", "--untracked-files=no")
-        except ShowUnavailable:
-            manual_reason = "snapshot_unavailable"
-    changed = [label for path, (label, before) in watched.items() if file_signature(path) != before]
-    try:
-        if reader.read_refs() != reader.refs:
-            changed.append("git_refs")
-        if reader.read(repo, "rev-parse", "--verify", "HEAD^{commit}").strip() != reader.head:
-            changed.append("git_head")
-    except ShowUnavailable:
-        result["warnings"].append({"code": "snapshot_verification_unavailable", "sources": ["git"]})
-    if changed:
-        result["warnings"].append({"code": "snapshot_changed", "sources": sorted(set(changed))})
-    if result["warnings"]:
-        manual_reason = "snapshot_unavailable"
-    result["manual_completion"] = {"target_token": None if manual_reason else manual_token(
-        repo, conf_text, state_text, watched[config_path][1], watched[state_path][1]),
-        "unavailable_reason": manual_reason}
-    return_reason = None
-    queue_path = f"{conf['HANDOFF_DIR']}/queue.md"
-    queue_sig = file_signature(queue_path)
-    try:
-        queue_text = read_return_queue(queue_path)
-    except ManualCompletionError:
-        queue_text, return_reason = "", "snapshot_unavailable"
-    if location != "current":
-        return_reason = "target_changed"
-    elif not manual_state_valid(events) or not return_body_known(events, current):
-        return_reason = "state_invalid"
-    elif (file_signature(config_path) != watched[config_path][1]
-          or file_signature(state_path) != watched[state_path][1]
-          or file_signature(queue_path) != queue_sig):
-        return_reason = "snapshot_unavailable"
-    result["return_to_pending"] = {"target_token": None if return_reason else return_token(
-        manual_token(repo, conf_text, state_text, watched[config_path][1], watched[state_path][1]),
-        queue_text, queue_sig), "unavailable_reason": return_reason}
-    print(json.dumps(result))
-    return 0
-
+        raise C.FlowError('task_not_found', '没有该任务')
+    value = {'schema_version': 2, 'ok': True, 'project': snap['repo'], 'task': task,
+             'evidence': C.evidence(snap, task)}
+    if opt.with_agent_status:
+        agent = snap['conf'].get('MAIN_AGENT', '')
+        value['agent_status'] = B.corral_status(agent) if agent else None
+    C.ensure_fresh(snap)
+    return result(value)
 
 def cmd_init(short):
     """把当前仓库接上 drover。只写两处：仓库里的 .drover.conf（并加进 .gitignore），
@@ -1704,106 +481,51 @@ def cmd_init(short):
 
     os.makedirs(d, exist_ok=True)
     print("  ✓ 交接目录就绪")
-    mark = B.parse_conf(conf).get("DONE_MARK", "收尾").strip()
-    print(f"\n接好了。下一步：\n"
-          f"  1. 编辑 {conf}，填上 MAIN_AGENT（主控在 corral 里的名字）\n"
-          f"  2. 自己开主控：corral start <名字> …    —— drover 不开、不关、不接入\n"
-          f'  3. drover add "标题" …  然后  drover next')
-    if mark:
-        print(f"\n还有一件要你自己做：把下面这一行加进 {repo}/AGENTS.md 的「开发方式（主控分派）」那一节，\n"
-              f"挨着「合并：」那行。drover 靠它判断一件活完没完，不加就判不出来：\n\n"
-              f"  - 收尾记号：一件活合并完、worktree 和分支清干净之后，在 main 上补一条空提交\n"
-              f"    （git commit --allow-empty），首行写「{mark}: 」加一句话说明这件活是什么。\n"
-              f"    只记真正落地的活；说好不合并、停在审查的不记。\n\n"
-              f"（新项目按 corral 的 项目AGENTS模板.md 建的话本来就有这条，核对一下前缀是不是 {mark}。\n"
-              f" 这个项目不想用收尾记号，就把 .drover.conf 里的 DONE_MARK 留空。）")
+    print("接好了。填写 MAIN_AGENT、加入任务后，读取 list --json 的明确派发目标。")
     return 0
 
 
-CONF_TEMPLATE = """# drover 的项目配置。一行一个 `键=值`，# 开头是注释。这个文件不进 git。
-
-# 交接目录：queue.md（归人）和 tasks.state（归 drover）都在这里。
+CONF_TEMPLATE = """# Drover 项目配置；无自动推进或统一完成门槛。
 HANDOFF_DIR={dir}
-
-# 主控的 corral 名字，`corral ls` 里看得到的那个。drover 只对它 send / status，
-# 不开、不关、不接入。留空就是不自动送：drover next 会把任务正文打出来让你自己粘。
+# 留空：明确派发时只返回正文，让人粘贴。
 MAIN_AGENT=
-
-# 验收命令。完成判据第 3 条跑它，退出码 0 才算过。**留空 = 这个项目不跑验收**，
-# 第 3 条恒为「不适用」，不参与判断（依据仍然只有收尾记号，判据 1、2 照旧）。
-# 例：CHECK_CMD=uv run pytest -q
-# 只有这一个来源：queue.md 正文里写什么都不当命令跑（「验收：<命令>」那条覆盖语法
-# 2026-09-21 删了——帮助里说 queue.md「下面随意写约束和验收」，和它不能同时成立）。
-CHECK_CMD=
-
-# 收尾记号的前缀。主控一件活收尾时在 main 上打一条空提交，首行「<前缀>: 一句话」，
-# drover 认出它才算这件活完了。**同一个值要在项目自己的 AGENTS.md 里也写一遍**
-# （那份是给主控看的，drover 不去解析它），两处别写岔了。
-# 留空 = 这个项目不打收尾记号：drover 判不出完成，循环开着也不会自动记 done，停下等人 drover go。
-DONE_MARK=收尾
-
-# 任务文件目录，相对仓库根，例：TASK_FILE_DIR=docs/任务。看板拿它找这件活的任务文件
-# （文件名以队列条目标题开头的那个 .md），读开头那行「路由：…」显示出来——**只显示，
-# 绝不参与任何判断**，读不出来就是不显示这一项。队列条目正文里写了「任务文件：<相对路径>」
-# 的以它为准。留空 = 不找任务文件，路由那一项不显示。
+# 仅供看板展示任务文件与路由。
 TASK_FILE_DIR=
-
-# 放行模式：1（默认）每个任务做完等人 go；0 自动模式，做完直接发下一件。
-# 和 `drover loop on/off` 两个开关叠起来是三档，默认全关：
-#   loop off            什么都不自动（默认）
-#   loop on + GATE=1    自动核对判据、自动记 done，下一件等人放行
-#   loop on + GATE=0    全自动，无人值守
-# TASK_GATE=1
 """
 
-
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help", "help"):
-        print(__doc__.strip())
-        return 0 if argv else 2
-    if argv[0] == "show":
-        return cmd_show(argv[1:])
-    if argv[0] == "dispatch-pending":
-        return cmd_dispatch_pending(argv[1:])
-    if argv[0] in ("complete-manually", "return-to-pending"):
-        return cmd_complete_manually(argv[1:], returning=argv[0] == "return-to-pending")
-    if argv[0] == "notifications":
-        return cmd_notifications(argv[1:])
-    if argv[0] == "board":                  # drover board … → 转给看板，参数原样透传
-        board = os.path.join(os.path.dirname(os.path.realpath(__file__)), "drover-board")
-        os.execv(sys.executable, [sys.executable, board, *argv[1:]])
-    if argv[0] == "init":
-        return cmd_init(argv[1] if len(argv) > 1 else "")
-    if argv[0] == "loop" and argv[1:2] not in (["on"], ["off"]):
-        rest, once, list_path, interval = argv[1:], False, "", 5.0
-        while rest:
-            a = rest.pop(0)
-            if a == "--once":
-                once = True
-            elif a == "--projects" and rest:
-                list_path = rest.pop(0)
-            elif a == "--interval" and rest:
-                try:
-                    interval = float(rest.pop(0))
-                except ValueError:
-                    die(2, "ERROR: --interval 要跟一个秒数")
-            else:
-                die(2, f"ERROR: drover loop 不认识这个参数：{a}\n\n{__doc__.strip()}")
-        return cmd_loop_run(list_path, once, interval)
-    setup(read_only=True)
-    if argv[0] == "list":
-        return project_command(argv)
-    os.makedirs(D, exist_ok=True)
-    directory = os.path.realpath(D)
     try:
-        with task_write_lock(directory):
-            setup(read_only=True)
-            if os.path.realpath(D) != directory:
-                die(2, "ERROR: 配置在取得操作锁期间改变，请刷新后重试")
+        if not argv or argv[0] in ('-h', '--help', 'help'):
+            print(__doc__.strip())
+            return 0 if argv else 2
+        command, args = argv[0], argv[1:]
+        if command in ('next', 'loop', 'hold', 'complete-manually'):
+            raise C.FlowError('command_retired', '旧自动/覆盖路径已退役。读取 list/show --json；使用明确 dispatch-pending、done、go。通知用 notifications watch')
+        if command in (*C.TRANSITIONS, 'dispatch-pending'):
+            return task_command(command, args)
+        if command == 'notifications':
+            return watch(args[1:]) if args[:1] == ['watch'] else cmd_notifications(args)
+        if command == 'show':
+            return cmd_show(args)
+        if command == 'board':
+            path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'drover-board')
+            os.execv(sys.executable, [sys.executable, path, *args])
+        if command == 'init' and len(args) == 1:
+            return cmd_init(args[0])
+        setup()
+        if command == 'list' and args in ([], ['--json']):
+            return cmd_list(bool(args))
+        directory = D
+        with C.task_write_lock(directory):
+            setup()
+            if D != directory:
+                raise C.FlowError('target_changed', '配置在取锁期间改变')
+            C.snapshot(REPO)
             return project_command(argv)
-    except ManualCompletionError as exc:
-        die(4 if exc.code == "state_busy" else 2, f"ERROR: {exc.why}")
-
+    except C.FlowError as exc:
+        return result({'schema_version': 2, 'ok': False, 'error': {'code': exc.code, 'why': exc.why}})
+    except OSError as exc:
+        return result({'schema_version': 2, 'ok': False, 'error': {'code': 'write_failed', 'why': str(exc)}})
 
 def project_command(argv):
     cmd, rest = argv[0], argv[1:]
@@ -1813,18 +535,12 @@ def project_command(argv):
         if k + 1 >= len(rest):
             die(2, "ERROR: --expect 后面要跟 queue.md 的指纹")
         expect, rest = rest[k + 1], rest[:k] + rest[k + 2:]
-        if cmd not in ("move", "edit", "drop", "hold"):
-            die(2, "ERROR: --expect 只用于 move / edit / drop --pos / hold")
+        if cmd not in ("move", "edit", "drop"):
+            die(2, "ERROR: --expect 只用于 move / edit / drop --pos")
     if cmd == "add" and rest:
         return cmd_add(rest[0], rest[1:])
     if cmd == "list" and rest in ([], ["--json"]):
         return cmd_list(as_json=bool(rest))
-    if cmd == "next" and not rest:
-        return cmd_next()
-    if cmd == "done" and len(rest) == 1:
-        return cmd_done(rest[0].upper())
-    if cmd == "go" and not rest:
-        return cmd_go()
     if cmd == "drop" and len(rest) >= 2 and rest[0] == "--pos":
         return cmd_drop_pos(rest[1], " ".join(rest[2:]), expect)
     if cmd == "drop" and rest and not expect:
@@ -1833,14 +549,10 @@ def project_command(argv):
         return cmd_move(rest[0], rest[1], expect)
     if cmd == "edit" and len(rest) >= 2:
         return cmd_edit(rest[0], rest[1], rest[2:], expect)
-    if cmd == "hold" and len(rest) == 2 and rest[1] in ("on", "off"):
-        return cmd_hold(rest[0], rest[1] == "on", expect)
-    if cmd == "loop" and rest in (["on"], ["off"]):
-        return cmd_loop(rest[0] == "on")
     if cmd in ("pause", "resume") and not rest:
         return cmd_pause(cmd == "pause")
     die(2, f"ERROR: 用法不对：drover {' '.join(argv)}\n\n{__doc__.strip()}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

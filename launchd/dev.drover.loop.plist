@@ -7,7 +7,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.local/bin/drover</string>
-        <string>loop</string>
+        <string>notifications</string>
+        <string>watch</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

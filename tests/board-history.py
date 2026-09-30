@@ -33,6 +33,7 @@ class HistoryFixture:
         for i in range(1, count + 1):
             (self.files / f'history-{i:03d}.md').write_text('路由：常规 / 交叉审查不要\n')
         self.conf = {'HANDOFF_DIR': str(self.handoff), 'TASK_FILE_DIR': 'task-files'}
+        (self.repo / '.drover.conf').write_text(''.join(f'{k}={v}\n' for k,v in self.conf.items()))
         self.p = {'repo': str(self.repo), 'dir': str(self.handoff), 'head': self.shas[-1]}
 
     def git(self, *args, input=None):
@@ -96,7 +97,7 @@ class HistoryData(unittest.TestCase):
                 before = copy.deepcopy(tv)
                 q = B.queue_vm(f.p, tv)
                 self.assertEqual(q['counts'], dict(todo=1, doing=int(active == 'doing'),
-                                                  done=9+int(active == 'awaiting'), dropped=3))
+                                                  done=9, dropped=3))
                 self.assertEqual([x['id'] for x in q['finished']],
                                  ['T12', 'T11', 'T10', 'T9', 'T8', 'T7', 'T6', 'T5', 'T4', 'T3', 'T2', 'T1'])
                 self.assertEqual(tv, before)
@@ -149,7 +150,7 @@ class HistoryData(unittest.TestCase):
 
         def compare():
             f.write(mixed=False, ranges=ranges)
-            expected = {f'T{i}': len(B.task_commits(str(f.repo), a, b)) for i, (a, b) in enumerate(ranges, 1)}
+            expected = {f'T{i}': B.task_commit_count(str(f.repo), a, b) for i, (a, b) in enumerate(ranges, 1)}
             self.assertEqual({r['id']: r['commits'] for r in f.view()['finished']}, expected)
 
         compare()

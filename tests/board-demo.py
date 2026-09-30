@@ -38,20 +38,20 @@ def fixture(scene="working", multi=False):
     card = {"id": "T42", "title": "为结算页增加优惠券校验与失败提示", "body": [
         "结算页目前不校验优惠券是否过期或已用尽。请在提交订单前调用 coupon.validate，失败时在优惠券输入框下方显示原因，并保留用户已填写的其他字段。",
         "", "仅修改结算页和对应测试，保留原有接口。"],
-        "waiting": False, "held": False, "span": "1h12m", "commits": 3,
+        "waiting": False, "actions": {"done": {"target_token": "v2:" + "a" * 64}}, "span": "1h12m", "commits": 3,
         "on_main": 0, "route": route, "progress": "0 commits on main; no changes landed yet", "met": "0/3",
-        "criteria": [
-            {"name": "Completion marker", "ok": False, "why": "No empty commit starting with '收尾: ' in a1f3c2..main"},
+        "evidence": [
+            {"name": "Git reference", "ok": False, "why": "No empty commit starting with '收尾: ' in a1f3c2..main"},
             {"name": "main advanced", "ok": False, "why": "Still at a1f3c2; no new commit since dispatch"},
-            {"name": "Task branches merged", "ok": False, "why": "Not merged into main: feat/coupon-check"},
-            {"name": "Check command passed", "ok": None, "why": "Not run (no valid check record); press g / run drover go"}]}
-    todo = [{"id": f"T{i}", "title": title, "next": i == 43, "held": i == 45} for i, title in enumerate(
+            {"name": "Unmerged local branches", "ok": False, "why": "Not merged into main: feat/coupon-check"},
+            {"name": "Previous check", "ok": None, "why": "Unknown (no valid check record)"}]}
+    todo = [{"id": f"T{i}", "title": title, "next": i == 43, "actions": {"dispatch-pending": {"pos": i-42, "target_token": "v2:" + "a" * 64}}} for i, title in enumerate(
         ("订单列表支持按状态筛选", "导出 CSV 时包含退款记录", "清理旧的支付回调"), 43)]
     history = [{"id": f"T{i}", "title": title, "dropped": i == 39,
                 "reason": "供应商 API 需要企业账号，暂无法申请，改为手动录入。" if i == 39 else "",
                 "span": "48m", "range": "a1f3c2..b3c4d5", "commits": 2, "wait": "5m", "route": route}
                for i, title in ((41, "修复购物车数量为 0 时的崩溃"), (40, "统一金额格式化"), (39, "接入第三方地址补全"))]
-    q = {"mode": "Release mode", "loop": False, "paused": False, "gate": True, "awaiting": False,
+    q = {"mode": "Explicit", "loop": False, "paused": False, "gate": True, "awaiting": False,
          "counts": {"todo": 3, "doing": 1, "done": 2, "dropped": 1}, "card": card,
          "crew": [{"name": "demo/dev-1", "state": "working", "since": 0, "where": "wt/coupon"}],
          "todo": todo, "finished": history}
@@ -62,14 +62,14 @@ def fixture(scene="working", multi=False):
     if scene == "sent":
         msg = f'Sent to demo/main: {card["id"]} {card["title"]}'
     if scene == "failed":
-        card["criteria"][3].update(ok=False, failed=True, why="pytest tests/checkout: exit 1; coupon expiration message differs")
+        card["evidence"][3].update(ok=False, failed=True, why="pytest tests/checkout: exit 1; coupon expiration message differs")
         card["met"] = "0/4"
         msg = "Not released · - Check 3: exit 1; coupon expiration message differs · Output: expected expired, got invalid coupon"
     if scene == "waiting":
-        card.update(waiting=True, on_main=4, progress="4 commits on main; latest 6m ago", met="4/4")
-        for row, why in zip(card["criteria"], ("b3c4d5 收尾: 优惠券完成", "a1f3c2 → b3c4d5", "No unmerged branches", "pytest tests/checkout passed")):
+        card.update(actions={"go": {"target_token": "v2:" + "a" * 64}}, waiting=True, on_main=4, progress="4 commits on main; latest 6m ago", met="4/4")
+        for row, why in zip(card["evidence"], ("b3c4d5 收尾: 优惠券完成", "a1f3c2 → b3c4d5", "No unmerged branches", "pytest tests/checkout passed")):
             row.update(ok=True, why=why)
-        pv.update(state="Ready to release", waiting=True, needs_me=True, badge="me", waits=["T42 is complete; checks passed. Press g / run drover go to release it."])
+        pv.update(state="Ready to release", waiting=True, needs_me=True, badge="me", waits=["T42 submitted. Press g to accept. Dispatch is separate."])
         q.update(awaiting=True)
     if scene == "paused":
         q["paused"] = True
@@ -88,9 +88,9 @@ def fixture(scene="working", multi=False):
     if scene == "long":
         card["title"] += "，兼容中文、组合字符 e\u0301 与超长路径" * 5 + "【标题末尾】"
         card["body"] += [f"正文{i:02d}：" + "保持两个空格  与 Unicode 分支 feature/a\u00a0b\u2028c；" * 3 for i in range(16)] + ["【正文末尾】"]
-        card["criteria"][2]["why"] = "Not merged: " + "feature/a\u00a0b\u2028c/" * 20 + "【判据末尾】"
+        card["evidence"][2]["why"] = "Not merged: " + "feature/a\u00a0b\u2028c/" * 20 + "【判据末尾】"
         q["crew"][0]["where"] = "/synthetic/" + "中文目录/" * 15 + "【路径末尾】"
-        q["todo"] += [{"id": f"T{i}", "title": f"待办{i}完整条目", "next": False, "held": False} for i in range(46, 60)]
+        q["todo"] += [{"id": f"T{i}", "title": f"待办{i}完整条目", "next": False, "actions": {"done": {"target_token": "v2:" + "a" * 64}}} for i in range(46, 60)]
         q["finished"][-1]["reason"] += "保留完整失败理由。" * 40 + "【历史末尾】"
         q["counts"]["todo"] = len(q["todo"])
         msg = "Not released · - Unmet check: " + "long rejection details must remain readable; " * 20 + "【消息末尾】"

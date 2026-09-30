@@ -79,7 +79,7 @@ assert all('Keyboard help' in text(f) for f in screen.frames[3:-1]), '帮助页�
 assert after == before, '返回后项目选择和滚动位置不变'
 
 # 3. 内容：现有快捷键、用途、滚动说明全部可读；窄屏翻页也能读全；沙色、无反色
-EXPECT = ['g', 'Verify', 'release', 'n', 'next task', 'p', 'Pause', 'resume', 'a', 'queue.md', 'l', 'loop',
+EXPECT = ['d', 'Submit', 'g', 'Accept', 'n', 'Pending', 'p', 'Pause', 'resume', 'a', 'queue.md',
           'r', 'Refresh', 'q', 'Quit', '↑↓', 'jk', 'Select project', '?', 'Esc',
           'PgUp', 'PgDn', 'Mouse wheel', 'task body', 'history']
 for h, w in ((24, 20), (24, 32), (24, 40), (24, 52), (24, 80), (24, 99), (32, 120), (12, 52), (8, 30)):

@@ -46,7 +46,7 @@ class InstallTests(unittest.TestCase):
             self.assertTrue(os.access(target, os.X_OK), name)
         self.assertTrue((self.home / ".drover").is_dir())
         self.assertIn("PATH", result.stdout)
-        for hint in ("drover init <短名>", "queue.md", "drover loop"):
+        for hint in ("drover init <短名>", "queue.md", "drover notifications watch"):
             self.assertIn(hint, result.stdout)
 
     def snapshot(self):
@@ -82,10 +82,10 @@ class InstallTests(unittest.TestCase):
             self.assertFalse(config["Label"].startswith("dev.herdsman."))
             self.assertIs(config["RunAtLoad"], True)
             self.assertIs(config["KeepAlive"], True)
-            self.assertEqual(config["ProgramArguments"][1:], ["loop"])
+            self.assertEqual(config["ProgramArguments"][1:], ["notifications", "watch"])
         config = plistlib.loads(rendered.read_bytes())
         self.assertEqual(config["ProgramArguments"],
-                         [str(self.home / ".local/bin/drover"), "loop"])
+                         [str(self.home / ".local/bin/drover"), "notifications", "watch"])
         self.assertEqual(config["EnvironmentVariables"]["HOME"], str(self.home))
         self.assertEqual(config["EnvironmentVariables"]["PATH"],
                          f"{self.home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:"

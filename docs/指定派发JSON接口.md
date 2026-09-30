@@ -1,5 +1,8 @@
 # 指定 Pending 派发公开接口（schema_version 1）
 
+> 2026-09-30：以下是旧版记录。任务流转与观察器当前契约以[任务流转接口 v2](任务流转JSON接口.md)为准；旧 gate/loop/人工覆盖行为已退役。通知偏好 schema 1 保留，通知身份改用公开 notification_key。操作步骤见 [QUICKSTART](QUICKSTART.md)。
+
+
 2026-09-29。供 CLI 和后续上层界面派发刚展示的指定待办，复用 `issue` 的 corral 发送路径及 `start_task` 的状态记录。不重排队列、不重发 Current，不越过暂停、进行中任务或等待放行。此次没有实现 Saddle 按钮。
 
 ## 读取与提交目标

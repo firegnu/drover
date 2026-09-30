@@ -24,6 +24,8 @@ config["EnvironmentVariables"] = {
 config["StandardOutPath"] = str(state / "loop.stdout.log")
 config["StandardErrorPath"] = str(state / "loop.stderr.log")
 plist_bytes = plistlib.dumps(config, sort_keys=False)
+if not (root / "bin/drover_core.py").is_file():
+    sys.exit("ERROR: 缺少共享状态核心 bin/drover_core.py")
 # 先检查全部目标，再写入；断链也算已占用，不能用 exists() 漏掉它。
 for target, source in links:
     if not source.is_file() or not os.access(source, os.X_OK):
@@ -49,12 +51,13 @@ print(f"已生成（尚未启用）：{plist}")
 if str(bindir) not in os.environ.get("PATH", "").split(os.pathsep):
     print(f"提示：{bindir} 不在 PATH 中，请自行加入；安装脚本不修改 shell 配置。")
 agent = home / "Library/LaunchAgents" / plist.name
-print("可选：以下命令需人工执行；会登记登录时启动的引擎，并立即启动 drover loop，退出后自动重启。")
-print("请先确认 plist 中的固定 PATH 能找到 python3、git、corral；启用后不要再同时手动运行引擎。")
+print("可选：以下命令需人工执行；会登记登录时启动的通知观察器，并立即启动 drover notifications watch，退出后自动重启。")
+print("请先确认 plist 中的固定 PATH 能找到 python3、git、corral；启用后不要再同时手动运行观察器。")
 print("若目标 plist 已存在，先人工核对，不要覆盖或重复加载；本脚本不执行下列命令：")
 print(f"mkdir -p {shlex.quote(str(agent.parent))}")
 print(f"ln -s {shlex.quote(str(plist))} {shlex.quote(str(agent))}")
 print(f"launchctl bootstrap gui/{os.getuid()} {shlex.quote(str(agent))}")
 print("下一步：在目标仓库运行 drover init <短名>，向交接目录的 queue.md 加任务，")
-print("配置主控后运行 drover loop on；未启用 launchd 时运行 drover loop（默认每 5 秒一跳）。")
+print("任务只通过明确 dispatch-pending / done / go 推进；通知观察用 drover notifications watch（默认 60 秒）。")
+print("升级须先退出旧 KeepAlive 推进引擎，再与 Saddle 统一切换；见 docs/任务流转JSON接口.md。")
 PY

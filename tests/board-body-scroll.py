@@ -70,8 +70,8 @@ class BodyScroll(unittest.TestCase):
                     screen, state = Screen(h, w), {'sel': 0, 'body_mouse': True}
                     B.draw(screen, vm, state)
                     lines = screen.lines()
-                    self.assertTrue(any('Completion checks' in s for s in lines), '长正文把判据挤出了首屏')
-                    self.assertTrue(any('Completion marker' in s for s in lines))
+                    self.assertTrue(any('Repository reference' in s for s in lines), '长正文把判据挤出了首屏')
+                    self.assertTrue(any('Git reference' in s for s in lines))
                     self.assertEqual(sum('BODY-' in s for s in lines), cap)
                     self.assertTrue(any(f'1–{cap} / 38 lines' in s for s in lines))
                     self.assertEqual(vm, original)
@@ -273,7 +273,7 @@ class BodyScroll(unittest.TestCase):
                 self.assertEqual(self.wheel(vm, state), ('body_scroll', 3 if count > 6 else 0))
             # 短正文后只有原有的区间空行，不填六行空白。
             expected_y = 6 + min(count, 6) + int(count > 6)
-            self.assertIn('Completion checks · 0/3', screen.lines()[expected_y])
+            self.assertIn('Repository reference', screen.lines()[expected_y])
 
     def test_identity_refresh_shrink_and_resize(self):
         vm, screen = fixture(True), Screen()

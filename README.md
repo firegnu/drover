@@ -2,36 +2,20 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Feed a task queue to a coordinating agent, one task at a time, and keep work moving while you are away.
+Track one task at a time: explicitly dispatch it, submit its delivery for review, and record the user's acceptance.
 
-A drover guides livestock over long distances: it does not choose the destination; it keeps the herd moving.
+## Responsibilities
 
-## Three layers
+- Corral provides agent infrastructure; Drover only uses its public send/status/ls commands.
+- The coordinating agent handles development, review, merging and worktree cleanup.
+- Drover records Pending → Running → Awaiting release → Done and observes new submissions for notifications.
+- The user accepts deliveries. Git and test evidence are reference information, not universal state gates.
 
-| Layer | Role | What it knows about | Timescale |
-|---|---|---|---|
-| [corral](https://github.com/firegnu/corral) | Infrastructure | Starting agents, sending messages, and checking status. No workflow knowledge. | Process lifetime |
-| corral-dispatch (a skill in the corral repository) | **Inner loop** | corral commands; how to split work, assign it, and review it | Minutes to hours, with the coordinator present |
-| **drover** | **Outer loop** | corral commands; queues, gates, when to wake the coordinator, and task accounting | Days, unattended |
+`done` explicitly submits; `go` only accepts an Awaiting delivery. Neither dispatches the next task. Running and Awaiting tasks may return to Pending while retaining their work and previous submissions. Serial scheduling remains unchanged.
 
-**Dependencies only point downward.** drover depends so little on the inner loop that it also works for projects where a person drives that loop manually.
+The existing curses board uses the same core and observed action tokens: `d` submits, `g` accepts, `n` explicitly dispatches the first Pending task. `notifications watch` is an independent observer, with no automatic completion or dispatch behavior.
 
-## What it does
-
-1. Sends the task body to the coordinator.
-2. Performs read-only Git checks to determine whether the work is complete.
-
-Those are its only two actions. **It never starts, stops, or attaches to an agent**—people handle that. It uses only three corral commands: `send`, `status`, and `ls`.
-
-A dark terminal dashboard (curses TUI) shows the queue, the current task's progress and completion criteria, and when you need to act. Its view is read-only; keys invoke task operations: `g` verifies completion, records it, and releases the task; `n` sends the next task; `p` pauses the queue; and `a` opens an editor to add tasks. For a task already recorded as complete, `g` only releases it. The `g` key never sends the next task itself; when the loop is enabled, the engine handles that.
-
-## What it does not do
-
-- Define a review protocol, track findings or review rounds, or impose evidence requirements (those belonged to its predecessor, below).
-- Start, stop, or attach to agents, or automatically restart the coordinator.
-- Parse the coordinator's natural-language conclusions.
-- Read corral's internal files, or install, upgrade, or manage corral.
-- Change corral or corral-dispatch to meet its own needs.
+See [Quickstart](docs/QUICKSTART.md) and [task API v2 / coordinated release instructions](docs/任务流转JSON接口.md). Old next/loop/hold/complete-manually paths are retired. This branch awaits review and coordinated Saddle integration; do not deploy it separately. Worktree development/review/merge/cleanup remains unchanged.
 
 ## Origins
 
@@ -43,16 +27,7 @@ The old repository is frozen and no longer maintained. Its design history remain
 
 ## Status
 
-**Under development.** The review protocol has been removed. Configuration, completion criteria, corral transport, the dashboard, and the outer loop are implemented (D1 steps 0–4). The scripts are exposed through a single `drover` command. Completion detection has an explicit basis: a wrap-up commit marker. The loop engine runs independently as `drover loop`, separate from the dashboard.
-
-**D1 is complete.** The installation script and launchd template are ready; **actual installation and activation require human approval**. Next is D2 validation: layer 1 (synthetic tests) was completed alongside D1; self-hosting and sandbox validation remain.
-
-The following guides are in Chinese:
-
-- Installation and usage: [docs/QUICKSTART.md](docs/QUICKSTART.md)
-- Design rationale and troubleshooting: [docs/手册.md](docs/手册.md)
-- Design and implementation stages: [docs/ROADMAP.md](docs/ROADMAP.md)
-- Repository working rules: [AGENTS.md](AGENTS.md)
+The explicit lifecycle redesign is implemented on a review branch. Existing task events are decoded without rewriting historical facts. No real queue, CLI installation, or running service is changed by development.
 
 ## Requirements
 
@@ -68,10 +43,12 @@ Before writing anything, the installer checks every destination. Existing comman
 
 The installer fills in `__HOME__` and `__PATH__` in the launchd template and XML-escapes their values. Do not load the repository's template directly. The generated file records the expanded HOME and uses this fixed service PATH: `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`. It does not copy your terminal's PATH. Unrelated changes to the terminal PATH will not prevent reinstallation or add temporary Python directories to the service PATH. The installer itself still uses python3 from the terminal PATH. If an old plist differs from the generated content, the installer refuses to overwrite it; inspect and resolve the difference manually.
 
-Before enabling the service, confirm that these fixed directories provide `python3`, `git`, `corral`, its runtime, and any tools required by your acceptance command. Custom environments outside these directories are not supported automatically. Successful installation does not guarantee that the background service can run.
+Before enabling the service, confirm that these fixed directories provide `python3`, `git`, `corral`, its runtime, and any the notification sender. Custom environments outside these directories are not supported automatically. Successful installation does not guarantee that the background service can run.
 
-**The script does not run launchctl or write to `~/Library/LaunchAgents/`.** It only prints commands for manual activation: link the generated file into that directory and load the engine as `dev.drover.loop`. Activation starts `drover loop` immediately; it starts again on subsequent logins and restarts if it exits. A user LaunchAgent does not start before login. Standard output and errors go to `~/.drover/loop.stdout.log` and `~/.drover/loop.stderr.log`. If the destination already exists or the service is already loaded, inspect it first instead of overwriting or loading it again.
+**The script does not run launchctl or write to `~/Library/LaunchAgents/`.** It only prints commands for manual activation: link the generated file into that directory and load the observer as `dev.drover.loop`. Activation starts `drover notifications watch` immediately; it starts again on subsequent logins and restarts if it exits. A user LaunchAgent does not start before login. Standard output and errors go to `~/.drover/loop.stdout.log` and `~/.drover/loop.stderr.log`. If the destination already exists or the service is already loaded, inspect it first instead of overwriting or loading it again.
 
-In the target project, run `drover init <short-name>`, configure the coordinator in `.drover.conf`, write tasks to `queue.md` in the handoff directory, and run `drover loop on` to enable that project. Without launchd, run `drover loop` in another terminal (it checks every five seconds by default). Once launchd is enabled, do not start a second engine manually. Open the dashboard separately.
+In the target project, run `drover init <short-name>`, configure MAIN_AGENT, and add tasks to queue.md. Use the explicit token-based task API. To observe submissions, run `drover notifications watch` (60 seconds by default) or enable the generated LaunchAgent after approval. Do not run both.
+
+For an upgrade, stop the old KeepAlive progression engine **before** switching the CLI and Saddle together. The retained `dev.drover.loop` service label is only a deployment identity; the new template runs the notification observer. Existing different plists are deliberately not overwritten by the installer.
 
 Isolated validation: `sh tests/install.sh` (macOS, a temporary HOME and a write sandbox; it does not invoke the real launchctl).

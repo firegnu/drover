@@ -41,7 +41,7 @@ english_vm, _ = fixture('working')
 english_pv = english_vm['projects'][0]
 english_q = english_pv['queue']
 english_q['card'].update(title='Coupon validation', body=['Validate the coupon before checkout.'])
-for row in english_q['card']['criteria']:
+for row in english_q['card']['evidence']:
     row['why'] = 'Example result'
 for i, task in enumerate(english_q['todo']):
     task['title'] = f'Pending task {i + 1}'
@@ -146,7 +146,7 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
             assert not B.COLORS['account'] & curses.A_DIM, '固定灰不能再叠 DIM 变得过暗'
     vm, _ = fixture('working', True)
     q = vm['projects'][0]['queue']
-    q['card'].update(body=[], route=None, criteria=[
+    q['card'].update(body=[], route=None, evidence=[
         {'name': '名称：内含标点', 'ok': False, 'why': '✓ 理由：feature/a\u00a0b\u2028c Cafe\u0301'},
         {'name': '执行失败', 'ok': False, 'failed': True, 'why': '外部命令退出非零'},
         {'name': '通过', 'ok': True, 'why': '成功理由'},
@@ -160,7 +160,7 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
         assert any(x == 27 and t == reason and a == 0 for _, x, t, a in screen.rows)
     assert all(not a & curses.A_REVERSE for y, _, _, a in screen.rows if y in (0, 30))
     assert any(t == 'g' and a & curses.A_BOLD for y, _, t, a in screen.rows if y == 30)
-    assert any(t == ' Verify/Release' and a == B.COLORS['bar'] for y, _, t, a in screen.rows if y == 30)
+    assert any(t == ' Accept' and a == B.COLORS['bar'] for y, _, t, a in screen.rows if y == 30)
     if available == 256 and not limited:  # 项目栏选中：深灰底 + 蓝色 ▸，不再整块反色
         assert any(t == '▸' and a == B.COLORS['rail_mark'] and not a & curses.A_REVERSE for _, _, t, a in screen.rows)
     else:
@@ -211,7 +211,7 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     item, _ = fixture('idle')
     probe = Screen(50, 120)
     B.draw(probe, item, {})
-    for label, kind in (('✓', 'ok'), ('✕', 'dim'), ('1. ', 'dim'), ('▸ Next · ', 'accent'), ('Hold', 'wait')):
+    for label, kind in (('✓', 'ok'), ('✕', 'dim'), ('1. ', 'dim'), ('▸ Next · ', 'accent')):
         assert any(t == label and a == B.COLORS.get(kind, 0) for _, _, t, a in probe.rows), label
     item, _ = fixture('working')
     item['projects'][0]['queue']['paused'] = True
@@ -221,23 +221,18 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     assert any(t == '▶ In progress' and a == B.COLORS['heading_active'] for _, _, t, a in probe.rows)
 
     # 顶栏的模式、循环开关、连接健康各有独立状态；不从名字里的关键词取色。
-    for loop, paused, mode, mode_color in ((False, False, 'Manual', 'accent'),
-                                          (True, False, 'Looping', 'active'),
-                                          (True, False, 'Release mode', 'accent'),
-                                          (True, False, 'Auto mode', 'accent'),
-                                          (False, True, 'Paused', 'wait'),
-                                          (True, True, 'Paused', 'wait')):
+    for paused, mode, mode_color in ((False, 'Explicit', 'accent'), (True, 'Paused', 'wait')):
         for connected in (True, False):
             item, _ = fixture('idle')
             project = item['projects'][0]
             project['name'] = 'loop off Manual 中'
-            project['queue'].update(loop=loop, paused=paused, mode=mode)
+            project['queue'].update(paused=paused, mode=mode)
             health = 'corral connected' if connected else 'corral unavailable'
             item['health'] = {'ok': connected, 'text': health}
             before = copy.deepcopy(item)
             probe = Screen(32, 160)
             B.draw(probe, item, {})
-            expected = ((mode, mode_color), ('loop on' if loop else 'loop off', 'ok' if loop else 'inactive'),
+            expected = ((mode, mode_color),
                         (health, 'ok' if connected else 'bad'))
             for text, kind in expected:
                 assert any(y == 0 and t == text and a == B.COLORS.get(kind, 0)
@@ -253,8 +248,7 @@ for colors, available, limited in ((True, 256, False), (True, 8, False),
     waiting, _ = fixture('waiting')
     probe = Screen(32, 160)
     B.draw(probe, waiting, {})
-    assert any(t == 'Checks passed' and a == B.COLORS.get('ok', 0) for _, _, t, a in probe.rows)
-    assert any(t == '; press g to release' and a == B.COLORS.get('wait', 0) for _, _, t, a in probe.rows)
+    assert any(t == 'Submitted; press g to accept' and a == B.COLORS.get('wait', 0) for _, _, t, a in probe.rows)
 
 # Feedback is based on exit status, not success/failure words in user output.
 with patch.object(B.curses, 'start_color'), patch.object(B.curses, 'use_default_colors'), \
@@ -314,7 +308,7 @@ for scene in D['SCENES']:
                 if multi:
                     assert any(y == 0 and '1/3' in t for y, _, t, _ in screen.rows)  # m28：序号并进 header 第一行
                 keys = ''.join(t for y, _, t, _ in screen.rows if y == h - 2)
-                assert keys == 'g Verify/Release n Next p Pause a Add l Loop r Refresh q Quit ↑↓/jk PgUp/Dn'
+                assert ' '.join(keys.split()).startswith('d Submit g Accept n Dispatch p Pause a Add u Up next r Refresh q Quit')
             # 真正翻所有页，包含辅助栏溢出。标记不能只存在于未绘制的逻辑行。
             seen = [[], [], []]
             while True:
@@ -364,8 +358,9 @@ state['detail_offset'] = 10
 state['sel'] = B.key_action(ord('j'), vm['projects'][0], state)[1]
 B.draw(screen, vm, state)
 assert state['detail_offset'] == 0
-for key in ('h', '\t', '?', 'e'):
+for key in ('h', '\t', 'e'):
     assert B.key_action(ord(key), vm['projects'][0], state) is None
-runpy.run_path(str(Path(__file__).with_name('board-tab-pty.py')), run_name='__main__')
+assert B.key_action(ord('?'), vm['projects'][0], state) == ('help', True)
+# PTY tools remain opt-in; never record from the default regression suite.
 runpy.run_path(str(Path(__file__).with_name('board-header.py')), run_name='__main__')  # m28 窄面板 header
 print('PASS 字符网格：单/多项目、各类状态、列宽、双栏及正文全部末尾、缩放和输入不变')

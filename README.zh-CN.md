@@ -1,5 +1,8 @@
 # drover
 
+> 2026-09-30 当前流程：明确派发 → 主控 done 提交 → 用户 go 接受。Git/测试只作参考，无自动推进。以下旧版说明保留作背景；当前操作与统一发布顺序请读 [QUICKSTART](docs/QUICKSTART.md) 和 [任务流转接口 v2](docs/任务流转JSON接口.md)。
+
+
 [English](README.md) | 简体中文
 
 把一条任务队列，一件接一件地送进一个正在工作的 agent 主控，人不在场时也继续往前走。

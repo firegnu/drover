@@ -62,23 +62,20 @@ def main():
         state.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events), encoding="utf-8")
         (data / "loop").touch()
         (data / "paused").touch()
-        expected_text = (
-            "模式：循环 + 放行模式（自动核对判据，下一件等人放行）（已暂停）\n"
-            "\n进行中：\n  T12 正在做（开始于 ccccccc）\n"
-            "\n队列：\n  1. T30 排在前面  ← 下一个\n  2. （未编号） 手写待办\n  3. T20 排在后面\n"
-            "\n已完成 / 放弃：\n  T11 放弃的手写任务 · 放弃：不做了\n"
-        ) + "".join(f"  T{n} 已完成 · 2m · aaaaaaa..bbbbbbb\n" for n in range(10, 1, -1))
-        assert run() == expected_text, "plain list output changed"
+        text = run()
+        assert '已暂停' in text and 'T12 正在做' in text
+        assert '自动' not in text and '判据' not in text
         result = json.loads(run("--json"))
-        assert result["mode"] == {"loop": True, "gate": True}
+        assert result["schema_version"] == 2 and "mode" not in result
         assert result["paused"] is True and result["awaiting"] is None
         current = result["current"]
         assert (current["id"], current["status"], current["body"], current["start"]) == (
-            "T12", "doing", "已发出的正文", "ccccccc3")
+            "T12", "running", "已发出的正文", "ccccccc3")
         for pos, task in enumerate(result["pending"], 1):
-            dispatch = task.pop("dispatch_pending")
-            assert dispatch["pos"] == pos and dispatch["target_token"].startswith("d1:")
-            assert dispatch["unavailable_reason"] is None
+            dispatch = task.pop("actions")["dispatch-pending"]
+            task.pop("status")
+            assert dispatch["pos"] == pos and dispatch["target_token"] is None
+            assert dispatch["unavailable_reason"] == "current_exists"
         assert result["pending"] == [
             {"id": "T30", "title": "排在前面", "body": "说明甲"},
             {"id": None, "title": "手写待办", "body": "说明乙"},
@@ -93,12 +90,12 @@ def main():
             f.write(json.dumps({"ev": "done", "id": "T12", "sha": "ddddddd4", "t": 300, "gate": True}) + "\n")
         result = json.loads(run("--json"))
         assert result["current"] is None
-        assert result["awaiting"]["id"] == "T12" and result["awaiting"]["status"] == "done"
-        assert result["history"][0] == result["awaiting"]
+        assert result["awaiting"]["id"] == "T12" and result["awaiting"]["status"] == "awaiting_release"
+        assert all(t["id"] != "T12" for t in result["history"])
 
         configure(root / "missing-handoff", gate=0)
         assert json.loads(run("--json")) == {
-            "mode": {"loop": False, "gate": False}, "paused": False,
+            "schema_version": 2, "ok": True, "project": os.path.realpath(repo), "paused": False,
             "current": None, "awaiting": None, "pending": [], "history": [],
         }
     print("PASS list JSON: queue order, states, complete history, plain output and read-only access")
