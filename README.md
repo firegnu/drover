@@ -1,5 +1,7 @@
 # drover
 
+> **Retired — historical archive (2026-09-30).** Drover now lives entirely in the [Saddle Drover plugin](https://github.com/firegnu/saddle/tree/main/plugins/drover), including task management, storage, UI, state transitions and notifications. Follow the [plugin usage guide](https://github.com/firegnu/saddle/blob/main/plugins/drover/README.md). Its lifecycle follows Saddle; do not install this repository's standalone CLI or launchd/watch service. The instructions below describe historical versions. Keep existing local repositories, project registration and task data; archiving this repository does not remove them.
+
 English | [简体中文](README.zh-CN.md)
 
 Track one task at a time: explicitly dispatch it, submit its delivery for review, and record the user's acceptance.

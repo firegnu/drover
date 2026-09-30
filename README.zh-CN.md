@@ -1,5 +1,7 @@
 # drover
 
+> **已退役，作为历史版本归档（2026-09-30）。** Drover 已完整迁入 [Saddle 的 Drover 插件](https://github.com/firegnu/saddle/tree/main/plugins/drover)，包含任务管理、数据读写、界面、状态流转和通知。请使用[插件使用说明](https://github.com/firegnu/saddle/blob/main/plugins/drover/README.md)；生命周期跟随 Saddle，无需安装本仓库的旧独立 CLI 或 launchd/watch 服务。以下内容均为历史说明。保留已有本地仓库、项目登记和任务数据，仓库归档不删除它们。
+
 > 2026-09-30 当前流程：明确派发 → 主控 done 提交 → 用户 go 接受。Git/测试只作参考，无自动推进。以下旧版说明保留作背景；当前操作与统一发布顺序请读 [QUICKSTART](docs/QUICKSTART.md) 和 [任务流转接口 v2](docs/任务流转JSON接口.md)。
 
 

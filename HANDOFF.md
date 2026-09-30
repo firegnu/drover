@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-09-30 —— 独立 Drover 退役，迁入 Saddle 插件，归档旧仓库
+
+用户授权 drover/main 亲自完成最小迁移说明、提交推送后归档旧远端，不再委派。**本节覆盖下方旧 CLI、通知观察器和终端看板仍在使用的交接；那些内容仅为历史记录。**
+
+- 已只读核对 Saddle 的 HANDOFF 和 `plugins/drover/README.md`：Drover 现为单一 Saddle 插件，拥有任务管理、数据读写、界面、状态流转及通知，生命周期跟随 Saddle。后续使用与维护请到 [Saddle 插件及说明](https://github.com/firegnu/saddle/tree/main/plugins/drover)；不再调用或恢复本仓库的旧 CLI/watch。
+- 归档对象已按 origin 与 GitHub 公开接口核实为 `https://github.com/firegnu/drover`（默认分支 main，操作账号有 ADMIN 权限）；迁移链接也核对了 Saddle origin。中英文 README 顶部新增退役提示，其余代码和历史文档保留。本轮按先提交推送、再 `gh repo archive firegnu/drover --yes` 的顺序执行；远端归档结果以最后的 GitHub `isArchived` 回读及会话回执为准，文档声明不能代替平台归档。
+- 本轮核对旧 `dev.drover.loop` 未加载，`~/.local/bin/drover`、`drover-board`、LaunchAgents 链接及原 `~/.drover/dev.drover.loop.plist` 均已撤下；未恢复服务、CLI 或操作其他 agent。未修改 Saddle、Corral、技能或 dispatch-log。
+- **保留边界：** 本地 `/Users/firegnu/Developer/personal_projs/drover` 仍是已登记项目，目录、登记、配置和任务数据保留；不删分支/worktree，不运行旧任务命令推进状态。用户原有未跟踪 T27 文档保留且不提交。此次只提交 README.md、README.zh-CN.md、HANDOFF.md；检查文档差异及数据校验，不重跑功能测试。
+- 后续不在此仓库继续功能开发；如需操作任务或维护 Drover，先读 Saddle 的 `plugins/drover/README.md` 并遵守其公开插件接口。不要依据下方旧队列快照恢复任务，也不要因为远端只读归档而删除本地任务承载目录。
+
 ## 2026-09-30 —— 会话最终交接：已发布，通知观察器运行，看板仍保留
 
 本会话由 drover/main 亲自完成任务流转简化、旧记录兼容修复和 Drover 侧联合发布，没有委派。发布后的问答已核实当前产品边界；用户现授权更新交接并提交、推送。**本节优先于下方“待审查”“观察器等待启动”和旧队列快照。**
