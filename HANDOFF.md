@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-30 —— 会话最终交接：已发布，通知观察器运行，看板仍保留
+
+本会话由 drover/main 亲自完成任务流转简化、旧记录兼容修复和 Drover 侧联合发布，没有委派。发布后的问答已核实当前产品边界；用户现授权更新交接并提交、推送。**本节优先于下方“待审查”“观察器等待启动”和旧队列快照。**
+
+- **已完成及发布：** 已审修复 `cb67fe8`，合并 `b02f142`，收尾 `16ef806`，发布交接 `e0d81183b7c2c17166bb78aac9f238967d3009c0` 已推送并核对远端一致。任务 worktree/分支已清理，只有 main。安装与备份证据见下节；本轮仅更新 HANDOFF，不重跑功能套件、不重新安装或重启服务。
+- **当前运行状态：** 本轮只读查询 launchd 确认 `dev.drover.loop` running，PID 83246，加载命令为 `~/.local/bin/drover notifications watch`。服务标签沿用旧名，但运行的是通知观察器。上一发布阶段本主控未启动它；此处只确认当前事实，不推断是谁启动。PID 为本次快照，后续操作前重查。
+- **已确认的产品边界：** 自动判断完成、自动 done/next 的外层 loop 已取消。Drover 记录任务状态、校验目标与过期/重复操作，提供查询及通知；派发、提交验收和接受交付均显式执行，主控审查交付、用户验收。Git/测试为参考，worktree 开发、审查、合并与清理照旧。设计来源仍是 ROADMAP 最新章节。
+- **看板仍在：** 已核对 README 和代码，`drover board` / `drover-board` 的 curses 终端看板保留，使用共享状态核心；本轮没有删除界面，也没有授权继续拆分或插件化。不要把“简单内核”理解为现有程序只剩无界面的库。
+- **真实队列最新只读快照：** 三项目 list 均 schema 2。Drover 无 Running/Awaiting、Pending 5/历史 24；jb-finetune 无 Running/Awaiting、Pending 0/历史 1；Saddle 当前 T58 Running、无 Awaiting、Pending 8/历史 49，T55 为 dropped，另用 show 核对 T57 为 Done。下节 T57 Running/T55 Pending 仅为发布切换时快照。本轮没有执行任何真实任务写操作，不依据旧快照恢复或推进任务。
+- **未提交边界：** 用户原有 `docs/任务/T27-core-extraction 拆出核心逻辑与退掉Python看板界面.md` 仍未跟踪，未改、不会纳入本轮提交。此次仅提交 HANDOFF；本交接提交随后推送 origin/main，最终 SHA 以会话回执和远端核对为准。
+- **待办与下一步：** Drover 暂无已知待完成工作，等待用户新指示；不自动推进队列，不追加看板删除、插件化或核心拆分。Saddle 构建/运行细节由其主控维护，本会话不替它宣称验证结果。接手先读 `AGENTS.md`、`README.md`、`docs/ROADMAP.md`、`docs/任务流转JSON接口.md`；回归证据见 `docs/任务/任务流转简化-实施记录.md`，需要操作说明再读 `docs/QUICKSTART.md` / `docs/手册.md`。
+
 ## 2026-09-30 —— 任务流转简化联合发布，Drover 已安装，观察器等待统一启动
 
 用户已授权两端合并、安装、推送和正常清理；drover/main 本人完成 Drover 阶段，未委派。旧 Saddle 和旧推进服务由 saddle/main 先退出，本轮确认 `dev.drover.loop` 未加载、旧 PID 46666 已退出。**Drover CLI 已切换，通知服务尚未启动；由 saddle/main 完成 Saddle 构建后统一启动唯一观察器。**
