@@ -215,6 +215,43 @@ class Flow(unittest.TestCase):
         self.action('go','T2')
         self.assertTrue(self.state_bytes().startswith(before))
 
+    def test_legacy_gate_false_go_preserves_acceptance_and_unblocks_project(self):
+        self.save_events([self.old_start(), dict(ev='done', id='T1', t=2, gate=False),
+                          dict(ev='go', id='T1', t=3)])
+        before = self.state_bytes()
+        data = self.listing()
+        self.assertIsNone(data['current'])
+        self.assertIsNone(data['awaiting'])
+        historical = data['history'][0]
+        self.assertEqual((historical['id'], historical['status'], historical['t1'], historical['t2']),
+                         ('T1', 'done', 2, 3))
+        self.assertEqual(self.cli('show', 'T1', '--json')['task']['t2'], 3)
+        self.assertEqual(before, self.state_bytes())
+        self.assertEqual(data['pending'][0]['id'], 'T2')
+        self.start()
+        self.action('done', 'T2')
+        self.action('go', 'T2')
+        historical = {t['id']: t for t in self.listing()['history']}
+        self.assertEqual(historical['T1']['t2'], 3)
+        self.assertEqual(historical['T2']['status'], 'done')
+        self.assertTrue(self.state_bytes().startswith(before))
+
+    def test_acceptance_decoder_keeps_new_transitions_strict(self):
+        start = dict(self.old_start(), run_id='test-run')
+        done = dict(ev='done', id='T1', t=2, gate=False)
+        submitted = dict(ev='submitted', id='T1', t=2, run_id='test-run')
+        accepted = dict(ev='accepted', id='T1', t=3, run_id='test-run')
+        go = dict(ev='go', id='T1', t=3)
+        for tail in ([accepted], [done, accepted],
+                     [submitted, accepted, dict(accepted, t=4)],
+                     [submitted, accepted, dict(go, t=4)],
+                     [done, go, dict(go, t=4)]):
+            with self.subTest(events=tail):
+                self.save_events([start, *tail])
+                before = self.state_bytes()
+                self.assertEqual(self.cli('list', '--json', code=2)['error']['code'], 'state_invalid')
+                self.assertEqual(before, self.state_bytes())
+
     def test_old_awaiting_returns_without_fabricating_new_submission(self):
         events = [self.old_start(),dict(ev='done',id='T1',t=2,gate=True)]
         self.save_events(events)

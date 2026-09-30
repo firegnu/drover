@@ -107,6 +107,8 @@ drover return-to-pending T57 --target-token TOKEN --reason '需要修改' --work
 
 已有 Running 可以明确 done→Awaiting，再经用户 go。已有 Awaiting 继续等待接受或退回；已有 Pending 保持 Pending；历史 gate=false 的 done 保持旧完成事实，不改为新待验收、不伪造接受。缺失旧正文只阻止无法可靠恢复正文的退回，不阻止 done/go。
 
+旧版 Running go 可能留下 `done gate=false → go`，解码保留这个真实 go 的时间为 t2；只有 done 而无 go 时仍不补 t2。此兼容仅限旧 go 事件，新 accepted 仍必须从 Awaiting 转移，重复接受仍拒绝。
+
 T57/T55 按用户提供的现场：升级后 T57 可明确提交、再由用户接受，无需删除 T55 分支或補基线；T55 仍 Pending。此任务不执行这些真实操作。
 
 ```sh

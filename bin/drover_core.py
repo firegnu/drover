@@ -134,7 +134,11 @@ def task_fold(events):
                 if 'completion_record' in e:
                     task['completion_record'] = e['completion_record']
             elif ev in ('accepted', 'go'):
-                if task['status'] != 'awaiting_release':
+                # Old Running go wrote done(gate=false) followed by a real go.
+                submission = task.get('submission', {})
+                legacy_go = (ev == 'go' and task['status'] == 'done' and 't2' not in task
+                             and submission.get('ev') == 'done' and submission.get('gate') is False)
+                if task['status'] != 'awaiting_release' and not legacy_go:
                     raise ValueError('invalid acceptance')
                 task.update(status='done', t2=e['t'])
             else:

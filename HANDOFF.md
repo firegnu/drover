@@ -10,6 +10,7 @@
 
 - 新流程：done 明确提交，go 仅接受，Running/Awaiting 均可退回 Pending；停止自动提交/派发，Git/测试仅作参考。旧事件保留，新增运行身份与明确事件。worktree 开发/审查/合并/清理模式不变。
 - 接口及切换说明：`docs/任务流转JSON接口.md`；实施/RED→GREEN/精确验证记录：`docs/任务/任务流转简化-实施记录.md`。设计以 ROADMAP 最新章节为准。
+- 主控对 f7e1b5f 审查未通过的旧 `done gate=false → go` 解码阻断已修复，保留实际接受时间；新增回归先失败后通过，26 项流转、10 项通知和相关历史/list 回归通过，等待 saddle/main 复审。
 - 下一步：saddle/main 审查此任务分支，协调 Saddle schema 2 接入和隔离联合验证，再经用户授权统一发布。部署须先退出旧 KeepAlive 推进引擎，最后启用新通知观察器；本轮未停止真实服务。
 - 真实队列、T55/T57/T38、Corral/Saddle 源码、用户 agent 均未操作；main 和已安装 CLI 未变，main 原有未跟踪 T27 文件保持。没有新 agent 可清理，本 worktree/分支保留待审查。
 
