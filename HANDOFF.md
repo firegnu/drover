@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-30 —— 任务流转简化联合发布，Drover 已安装，观察器等待统一启动
+
+用户已授权两端合并、安装、推送和正常清理；drover/main 本人完成 Drover 阶段，未委派。旧 Saddle 和旧推进服务由 saddle/main 先退出，本轮确认 `dev.drover.loop` 未加载、旧 PID 46666 已退出。**Drover CLI 已切换，通知服务尚未启动；由 saddle/main 完成 Saddle 构建后统一启动唯一观察器。**
+
+- 已审交付 `cb67fe8881d6dce88a1ff4e33dbc8a87542da111` 合入 main，合并 `b02f142015a848716949f65bcab4dd0cc341b480`；任务 worktree/分支已清理，收尾 `16ef806835d6030f9b0d7fe8339f5f7a83a4dbab`。发布目标 `origin/main`，本交接随 main 推送，最终发布 SHA 以本轮会话回执及远端核对为准。
+- `sh install.sh` 已在主仓库执行；实际 `~/.local/bin/drover` 仍链接 main。旧 plist 移入发布备份，新 plist 的 ProgramArguments 为 `drover notifications watch`，原 LaunchAgents 链接保留。没有 bootstrap、kickstart 或手动启动观察器，也未运行旧推进命令。
+- 备份位于 `~/Library/Application Support/saddle-release-backups/20260930-135645`：沿用完整 `drover-data`，逐文件核实 18 个现有数据文件与切换基线一致；补充 `drover-phase1/<项目>/project.drover.conf` 和 `before.json/after.json/fact-comparison.json`、存储校验清单、服务核对及 `verification.json`。三个登记项目的数据均在 `~/.drover` 内，无额外外置数据目录；旧 plist 另存 `dev.drover.loop.old.plist`。
+- 实际已安装 CLI 对三个项目的 list 均返回 schema 2；旧 doing→running 名称变化按同一状态对照，Pending 新显示的旧运行信息逐项核对原 start 事件。任务正文、顺序、完成/接受时间及暂停事实一致：Drover Pending 5/历史 24，jb-finetune Pending 0/历史 1，Saddle Running T57/Pending 11/历史 45，均无 Awaiting；另用 show 确认 T57 Running、T55 Pending。
+- 32 个存储/配置/开关/通知/链接/T27 校验路径中，仅授权替换的 plist 改变，其余 31 个字节或缺失/链接状态相同，无新增任务存储文件。未执行真实 done/go/退回/派发，不处理 T55 分支，不修改 Corral、技能或 Saddle，不停止任何 agent。
+- 本轮只做发布与数据核验，不重跑已通过的功能/安装/联合测试；此前回归及审查证据见实施记录和 Saddle 主控审查。用户原有未跟踪 T27 文件保留，不纳入提交。下一步由 saddle/main 完成应用构建并统一启动观察器；Drover 不代替用户接受 T57。
+- 本轮收尾记录 ID：`e7ed2e2e9ff64571bbca4383bac25258`；不补造此前路由或派发记录。
+
 ## 2026-09-30 —— 任务流转简化，Drover 阶段待审查（仅任务分支）
 
 用户明确要求 drover/main 亲自实施，不再委派。已按 Saddle 最终任务书实现并自测；当前 worktree `../drover-worktrees/task-flow-simplification`，分支 `task-flow-simplification`，提交留在此分支。**尚未合 main、推送或联合发布，不把本节视为真实 CLI 已生效。**
