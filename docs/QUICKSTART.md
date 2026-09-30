@@ -1,198 +1,74 @@
 # QUICKSTART
 
-从零到「队列自己往前走」。**纯步骤**，为什么这么做看 [手册](手册.md)。
+Drover 记录任务流转和通知；主控审查交付质量，用户验收。Git、测试、分支不再统一阻挡状态。完整字段、退出码和切换步骤见[任务流转接口 v2](任务流转JSON接口.md)。
 
-每条命令的参数和退出码看 `drover --help` / `drover board --help`，这里不重复。
+## 安装与接入
 
----
+需要 Python 3 标准库、Git；要发送给主控时需要 Corral。Drover 不开、不关、不接入 agent。
 
-## 0. 前提
+获授权后在长期保留的 Drover checkout 执行 `sh install.sh`。它只创建命令软链并生成通知观察模板，不运行 launchctl、不改 PATH；已有不同 plist 会拒绝覆盖。**从旧版升级必须先退出旧 KeepAlive 推进引擎，再与 Saddle 联合切换，不能单独安装本任务分支。**
 
-- `python3`、`git`（只用标准库，不装任何第三方包）
-- [corral](https://github.com/firegnu/corral) 装好了，`corral ls` 能跑
-- 目标项目的主控**已经由你开着**（`corral start <项目>/main --cwd <仓库> -- claude`）。drover 不开、不关、不接入任何 agent
-
-## 1. 装
+在目标项目内执行：
 
 ```sh
-cd <drover 仓库>
-sh install.sh
+drover init <短名>
 ```
 
-它做的：把 `bin/drover` 和 `bin/drover-board` **软链**到 `~/.local/bin`，把 launchd 模板生成到 `~/.drover/dev.drover.loop.plist`。
+编辑 `.drover.conf` 中的 `MAIN_AGENT=<项目>/main`；留空表示明确派发时只返回正文供人粘贴。HANDOFF_DIR 指向保存 queue.md 和 tasks.state 的目录。TASK_FILE_DIR 可选，仅供看板显示任务文件/路由。
 
-它**不**做的：不动 `launchctl`，不改任何 shell 配置，不覆盖任何它不认识的文件（撞上就非零退出、一个字节都不写）。
+不再要求为了 Drover 添加收尾记号、验收命令或分支基线；项目自己已有的开发、审查、合并与清理规矩照常执行。
 
-> 服务 PATH 固定为 `<HOME>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，HOME 会展开，不复制终端 PATH 或其中的临时 Python 目录。启用前确认依赖在这些目录中可用；其它自定义环境不自动支持。旧 plist 内容不一致时，重装仍拒绝覆盖，请人工核对。
-
-`~/.local/bin` 不在 PATH 就自己加。后面所有命令都假设 `drover` 能直接敲。
-
-## 2. 接一个项目
+## 明确派发、提交、接受
 
 ```sh
-cd <目标项目>
-drover init <短名>          # 短名只能是小写字母、数字、连字符
+drover add '标题' '任务正文'
+drover list --json
 ```
 
-写出 `<项目>/.drover.conf`（已自动加进 `.gitignore`）、建交接目录 `~/.drover/<短名>/`、把仓库登记进 `~/.drover/projects`。
+也可直接编辑交接目录中的 `queue.md`：`## T1 标题` 或 `## 标题` 开始一件待办。正文只作为任务内容，绝不执行其中的命令。
 
-编辑 `.drover.conf`，**至少填 `MAIN_AGENT`**：
+从所选 Pending 的 `actions["dispatch-pending"]` 取 pos 和 target_token：
 
 ```sh
-MAIN_AGENT=<项目>/main      # 主控在 corral ls 里的名字。留空 = 不自动送，只把任务正文打出来让你自己粘
-CHECK_CMD=uv run pytest -q  # 项目默认验收命令；留空 = 不运行验收命令，第 3 条不适用
-DONE_MARK=收尾              # 收尾记号的前缀，见下一步
-TASK_GATE=1                 # 1（默认）每件做完等人放行；0 做完直接发下一件
+drover dispatch-pending --pos N --target-token TOKEN --json
 ```
 
-> 分支无需配置：drover 枚举本地分支，排除 `main`，只核对包含任务起点 `base_sha` 的分支是否已合入；收尾后分支全删了也通过。
-
-## 3. 往项目的 AGENTS.md 加一行
-
-`drover init` 会把这一行打印出来。贴进目标项目 `AGENTS.md` 的「开发方式（主控分派）」那一节，挨着「合并：」那行：
-
-```markdown
-- 收尾记号：一件活合并完、worktree 和分支清干净之后，在 main 上补一条空提交（`git commit --allow-empty`），首行写「收尾: 」加一句话说明这件活是什么。只记真正落地的活；说好不合并、停在审查的不记。
-```
-
-**这一行是 drover 判断「这件活完了」的唯一依据。** 不加的话 drover 判不出完成，循环开着也不会自动记 done，只会停下等你按一下。前缀要和 `.drover.conf` 里的 `DONE_MARK` 一致。
-
-（新项目按 corral 的 `项目AGENTS模板.md` 建的话本来就有这条，核对一下前缀就行。）
-
-## 4. 加任务
+运行中主控完成交付并审查后，重新读取当前目标：
 
 ```sh
-drover add "重构导出模块" "接口保持不变；检查导出列名和字段顺序"
+drover show T1 --json
+drover done T1 --target-token TOKEN --json
 ```
 
-或者直接编 `~/.drover/<短名>/queue.md`——它只归你，drover 不写它：
-
-```markdown
-## 重构导出模块
-
-接口保持不变。
-检查导出列名和字段顺序。
-
-## 补上导出的集成测试
-```
-
-`## 标题` 开一块，编号可省（发出时自动补 `T1`、`T2`…），文件里的先后就是执行顺序。正文可自由描述任务要求、约束和「做完停」说明；验收命令仅来自项目配置里的 `CHECK_CMD`，任务正文不执行命令。
-
-## 5. 手动走一遍（先别开循环）
+done 仅提交到 Awaiting release，不运行测试，也不接受交付。用户验收并接受后，从新响应的 `task.actions.go` 取令牌：
 
 ```sh
-drover next        # 把队首那件送进主控
-drover list        # 看现在什么状态
+drover go T1 --target-token TOKEN --json
 ```
 
-送出去的就是任务正文本身，和你手动粘一段进去一模一样。主控开始干活。
+go 只结束 T1，不派发下一项。下一项重新读取 list，再明确 dispatch-pending。令牌过期后重新读取、由用户重新确认，不能自动换令牌重试；发送未确认或写入失败也不能盲目重发。
 
-等它干完、合并、清 worktree、打上收尾记号之后：
+## 退回与暂停
+
+Running 或 Awaiting 都能退回。确认工作已停，读取该任务的 return-to-pending 动作令牌：
 
 ```sh
-drover go          # 核对一次；过了就记完成并放行，失败则报告原因
-drover next
+drover return-to-pending T1 --target-token TOKEN --reason '需要修改' --work-stopped --json
 ```
 
-**整个过程 drover 对目标仓库只读，一个字节都不写。**
+恢复原派发正文到 Pending，保留交付记录、分支与 worktree，不隐式暂停、不自动重开。`drover pause` 阻止明确派发；`drover resume` 解除暂停但不会派发。原有暂停保持。
 
-已经记完成、正在等放行时，`drover go` 只放行，不重复核对；它本身不发送下一件。没看到收尾记号但三条门和工作区检查通过时，会明确警告「这次算你自己判断的」，仍接受这次手动确认；自动循环仍必须看到记号。`drover done <编号>` 保留给单独核对并记完成、兼容脚本和引擎使用，日常无需先敲它。
+旧 next、loop、hold、complete-manually 已退役；无参 go 和不带令牌的 done 不再执行旧行为。
 
-如果已验收成果并接受未满足的检查条件，可先用 `drover show Tn --json` 读取 `manual_completion.target_token`，再运行 `drover complete-manually Tn --target-token '<令牌>' --reason '确认原因' --json`。这会保留当时检查结果和人工原因，不执行验收命令，始终等普通 `drover go` 放行，即使 `TASK_GATE=0`。目标或配置已变化时须刷新并重新确认。字段与错误码见[人工完成公开接口](人工完成JSON接口.md)。
+## 看板与通知
 
-运行中的任务要留待以后做：先自行停止实际工作，再从 `drover show Tn --json` 读取 `return_to_pending.target_token`，运行 `drover return-to-pending Tn --target-token '<令牌>' --reason '撤回原因' --work-stopped --json`。同编号及派发正文回到队首，队列暂停，不计完成或放弃。继续时由你 `resume` 并 `next`。详情保留历次派发/撤回时间与原因；字段和失败处理见[撤回公开接口](撤回JSON接口.md)。
-
-需要直接派发列表中的某个待办时，先运行 `drover list --json`，保存选中项 `dispatch_pending` 的 `pos` 和 `target_token`，再运行 `drover dispatch-pending --pos N --target-token '<令牌>' --json`。队列不重排；暂停、进行中或等待放行都会拒绝。若目标变化导致旧令牌失效，应重新读取 `drover list --json`，由用户重新确认后再提交；不要自动替换令牌重试。发送结果和本地记录分别报告，失败后不要自动重试；完整字段和歧义条目边界见[指定派发公开接口](指定派发JSON接口.md)。
-
-## 6. 打开看板
+`drover board` 打开现有 curses 看板：`d` 提交、`g` 接受、`n` 明确派发第一件 Pending，`p` 暂停/恢复，`a` 编辑队列，`u` 看待办，`?` 看帮助。按键使用屏幕上那次观察的目标；过期后显示失败，不自动刷新令牌再执行。退回用上述 CLI 或接入后的 Saddle。
 
 ```sh
-drover board
+drover notifications status --json
+drover notifications on --json
+drover notifications off --json
+drover notifications watch
 ```
 
-一个 curses TUI，建议**单开一个终端标签**常驻。按键：
-
-```
-↑↓ / j k  选项目      g  核对并放行  n  发下一件
-p  暂停 / 恢复         a  加任务（开 $EDITOR 编 queue.md）
-l  循环开 / 关         r  刷新        q  退出
-PgUp / PgDn  翻整页详情
-```
-
-长任务正文有独立的限高区域：将鼠标移到正文行上，使用滚轮或触控板上下滚动，无需先点击；位置提示按当前列宽换行后的行数计算。24 行终端最多显示 6 行正文，32 行终端最多 8 行。判据、待办等其它内容仍用 PgUp/PgDn 查看。
-
-本机已验证可用的现有运行时为 Anaconda Python。需要正文局部滚轮时，从仓库运行：
-
-```sh
-/opt/anaconda3/bin/python3 ./bin/drover board
-```
-
-这不需要安装或修改 PATH。若常用终端的 `python3` 已指向同一支持运行时，可沿用原命令。
-
-若 Python/curses 检测不到双向滚轮能力，看板会提示「滚轮不可用」，正文恢复完整的 PgUp/PgDn 翻页方式。终端还须实际转发鼠标事件；若滚轮没有反应，请检查终端的鼠标报告设置和所用 Python 的 curses 支持。
-
-日常推进按键就行，不用敲命令。
-
-### 状态颜色速查
-
-| 看板文字 / 符号 | 颜色 | 含义 |
-|---|---|---|
-| `Idle` | 沙色 | 任务标题：没有当前任务；不表示任务已完成 |
-| `Manual` | 沙色 | 手动推进模式 |
-| agent `idle` | 沙色 | 本轮结束/空闲；任务可能仍进行中，不代表完成 |
-| `In progress`、agent `working` | 青色 | 当前任务或 agent 正在工作 |
-| agent `starting` | 青色 | agent 启动中，可能尚未完成启动或正在等待信任框 |
-| `Looping` | 青色 | loop 模式已选；不表示任务此刻正在运行 |
-| `loop on` | 绿色 | loop 开关已开；与队列暂停、当前任务是否运行是独立状态 |
-| `loop off` | 加粗灰色 | loop 开关已关，按键手动推进 |
-| `Paused` | 琥珀色 | 队列暂停发新任务；不表示正在执行的任务或 agent 被暂停 |
-| `corral connected` | 绿色 | corral 连接正常 |
-| `corral unavailable: ...` | 红色 | corral 连接异常，agent 状态和派发不可用 |
-| `Needs you`、`Ready to release` | 琥珀色 | 需要人处理，或任务已满足判据、等待放行 |
-| `Checks passed`、历史 `✓` | 绿色 | 判据通过，或任务已完成 |
-| 判据 `✗`（有明确失败证据） | 红色 | 明确失败；普通的未满足判据仍为灰色，不等于失败 |
-
-沙色为 `#D7AF87`，也用于节标题、快捷键和项目箭头；少色终端使用默认前景色。少色或无色终端仍可根据文字、`▶`/`■`/`○`、`✓`/`✗` 和粗体层次识别状态。
-
-## 7. 让它自己走
-
-两个开关叠起来是三档，**默认全关**：
-
-| loop | `TASK_GATE` | 行为 |
-|---|---|---|
-| off | — | 什么都不自动（默认） |
-| on | 1 | 自动核对判据、自动记 done，**下一件等你按 `g`** |
-| on | 0 | 全自动，无人值守 |
-
-```sh
-drover loop on     # 告诉引擎「这个项目要转」（在项目目录里跑，或看板里按 l）
-drover loop        # 引擎本身：常驻，默认每 5 秒一跳
-```
-
-> **开关不是引擎。** `drover loop on` 只是标记这个项目要转；**真正推动它的是常驻的 `drover loop` 进程**。引擎没跑，开关开着也不会动。
-
-第一次用**先走中间档**（`TASK_GATE=1`）：让 drover 只证明它认得出完成，别让它自己往下发。
-
-## 8. 让引擎开机自启（可选，要你自己跑）
-
-`install.sh` 只生成 plist，**不动 launchd**。真要挂上去，自己跑它打印出来的那三条：
-
-```sh
-mkdir -p ~/Library/LaunchAgents
-ln -s ~/.drover/dev.drover.loop.plist ~/Library/LaunchAgents/dev.drover.loop.plist
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/dev.drover.loop.plist
-```
-
-挂上之后**别再手动跑 `drover loop`**，两个引擎会互相打架。
-
----
-
-## 拆掉
-
-```sh
-drover loop off                      # 每个项目一次
-launchctl bootout gui/$UID/dev.drover.loop   # 挂过才需要
-rm ~/.local/bin/drover ~/.local/bin/drover-board
-```
-
-`.drover.conf` 和 `~/.drover/` 删不删随你。**拆掉之后目标项目照常工作**——你手动往主控喂任务，一切如常。那行收尾记号留着也没坏处，`git log --grep '^收尾:'` 一敲就是做完了哪些活。
+watch 默认 60 秒观察一次新 Awaiting；启动和偏好变化先建立基线，不补弹历史、不推进任务。launchd 模板现在也仅运行此观察器；启用后不要再同时运行第二份。是否启用、何时切换真实服务须由用户决定。

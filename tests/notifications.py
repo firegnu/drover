@@ -102,7 +102,7 @@ class Notifications(unittest.TestCase):
         before = self.state.read_bytes()
         self.observe()
         self.assertEqual(len(self.sent()), 1, 'new run with same task ID must notify')
-        self.assertIn('做完了', self.sent()[0])
+        self.assertIn('已提交', self.sent()[0])
         self.assertIn(r'\"引号\"', self.sent()[0])
         self.assertEqual(self.state.read_bytes(), before, 'notifications must not release tasks')
         self.task(stamp=101, title='edited wording')
@@ -148,13 +148,13 @@ class Notifications(unittest.TestCase):
         self.observe()
         self.assertEqual(len(self.sent()), 2)
 
-    def test_notification_throttle_does_not_throttle_progress(self):
+    def test_observer_tick_deduplicates_without_advancing(self):
         self.engine_fixture()
         self.observe()
         self.task()
         with patch('time.time', return_value=self.clock + 59):
             self.engine.tick(str(self.projects))
-        self.assertEqual(self.sent(), [], 'notification checks are throttled for at least 60 seconds')
+        self.assertEqual(len(self.sent()), 1, 'watch controls interval; tick observes once')
         self.observe()
         self.assertEqual(len(self.sent()), 1)
 
@@ -187,7 +187,7 @@ class Notifications(unittest.TestCase):
         self.engine_fixture()
         self.observe()
         for field, value in (('t', None), ('t', True), ('t', float('nan')),
-                             ('sha', ''), ('main', ''), ('id', '')):
+                             ('id', '')):
             with self.subTest(field=field, value=value):
                 self.task(**{field: value})
                 self.observe()
@@ -213,6 +213,35 @@ class Notifications(unittest.TestCase):
         self.observe()
         self.assertEqual(len(self.sent()), 1, 'repository aliases share identity')
 
+    def test_new_submission_identity_survives_return_and_new_run(self):
+        self.engine_fixture()
+        self.observe()
+        events = []
+        for run in ('first-run', 'second-run'):
+            events.append(dict(ev='start', id='T1', title='docs', body='delivery', run_id=run, t=100))
+            self.state.write_text(''.join(json.dumps(e)+'\n' for e in events))
+            self.observe()
+            events.append(dict(ev='submitted', id='T1', run_id=run, t=200))
+            self.state.write_text(''.join(json.dumps(e)+'\n' for e in events))
+            before = self.state.read_bytes()
+            self.observe()
+            self.observe()
+            self.assertEqual(self.state.read_bytes(), before)
+            task = self.engine.notification_snapshot(str(self.projects))[str(self.repo.resolve())]
+            self.assertIn(run, self.engine.notification_identity(str(self.repo), task))
+            events.append(dict(ev='returned', id='T1', run_id=run, t=300,
+                               return_record=dict(reason='revise', work_stopped=True)))
+        self.assertEqual(len(self.sent()), 2)
+
+    def test_git_metadata_is_not_required_for_notification(self):
+        self.engine_fixture()
+        self.observe()
+        self.task(sha='', main='')
+        self.observe()
+        self.assertEqual(len(self.sent()), 1)
+        self.observe()
+        self.assertEqual(len(self.sent()), 1)
+
     def test_record_upgrade_and_observation_failure_during_switch(self):
         self.engine_fixture()
         records = self.home / '.drover/board-notified.json'
@@ -235,7 +264,7 @@ class Notifications(unittest.TestCase):
         self.observe()
         self.assertEqual(len(self.sent()), 2)
 
-    def test_preference_and_record_failures_do_not_block_real_loop_progress(self):
+    def test_preference_and_record_failures_never_progress_tasks(self):
         self.engine_fixture()
         def git(*args):
             return subprocess.run(['git', '-C', str(self.repo), *args], env=self.env,
@@ -266,14 +295,13 @@ class Notifications(unittest.TestCase):
                 with redirect_stderr(io.StringIO()), patch('time.time', return_value=self.clock):
                     self.engine.tick(str(self.projects))
                 events = [json.loads(line) for line in self.state.read_text().splitlines()]
-                self.assertEqual([e['ev'] for e in events], ['start'], 'loop must still send next task')
+                self.assertEqual(events, [], 'observer must never dispatch')
                 git('commit', '--allow-empty', '-qm', '收尾: synthetic completion')
                 self.clock += 301
                 with redirect_stderr(io.StringIO()):
                     self.observe()
                 events = [json.loads(line) for line in self.state.read_text().splitlines()]
-                self.assertEqual([e['ev'] for e in events], ['start', 'done'])
-                self.assertTrue(events[-1]['gate'], 'notifications must not release the completed task')
+                self.assertEqual(events, [], 'observer must never submit, even with old loop flags and a marker')
         self.assertEqual(self.sent(), [])
 
 

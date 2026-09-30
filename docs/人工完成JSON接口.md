@@ -1,5 +1,8 @@
 # 人工完成公开接口（T36，schema_version 1）
 
+> 2026-09-30：以下是旧版记录。任务流转与观察器当前契约以[任务流转接口 v2](任务流转JSON接口.md)为准；旧 gate/loop/人工覆盖行为已退役。通知偏好 schema 1 保留，通知身份改用公开 notification_key。操作步骤见 [QUICKSTART](QUICKSTART.md)。
+
+
 2026-09-28，drover/main 在 saddle DESIGN §49 和 T36 实施委托批准语义内固定。本文是 saddle 消费方契约。已审固定实现按用户直接收尾决定合入 main；本次没有执行隔离联调，不记作联调通过。
 
 ## 查询目标

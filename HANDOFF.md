@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-09-30 —— 任务流转简化，Drover 阶段待审查（仅任务分支）
+
+用户明确要求 drover/main 亲自实施，不再委派。已按 Saddle 最终任务书实现并自测；当前 worktree `../drover-worktrees/task-flow-simplification`，分支 `task-flow-simplification`，提交留在此分支。**尚未合 main、推送或联合发布，不把本节视为真实 CLI 已生效。**
+
+- 新流程：done 明确提交，go 仅接受，Running/Awaiting 均可退回 Pending；停止自动提交/派发，Git/测试仅作参考。旧事件保留，新增运行身份与明确事件。worktree 开发/审查/合并/清理模式不变。
+- 接口及切换说明：`docs/任务流转JSON接口.md`；实施/RED→GREEN/精确验证记录：`docs/任务/任务流转简化-实施记录.md`。设计以 ROADMAP 最新章节为准。
+- 主控对 f7e1b5f 审查未通过的旧 `done gate=false → go` 解码阻断已修复，保留实际接受时间；新增回归先失败后通过，26 项流转、10 项通知和相关历史/list 回归通过，等待 saddle/main 复审。
+- 下一步：saddle/main 审查此任务分支，协调 Saddle schema 2 接入和隔离联合验证，再经用户授权统一发布。部署须先退出旧 KeepAlive 推进引擎，最后启用新通知观察器；本轮未停止真实服务。
+- 真实队列、T55/T57/T38、Corral/Saddle 源码、用户 agent 均未操作；main 和已安装 CLI 未变，main 原有未跟踪 T27 文件保持。没有新 agent 可清理，本 worktree/分支保留待审查。
+
+
 ## 2026-09-29 —— T29 文档任务及 dispatch-log 接入已发布
 
 本会话完成项目主控的可选 dispatch-log 接入，并在用户触发 T29 后补充指定派发旧令牌的操作说明。用户随后授权推送，`85fec52f161f71ede9d0531b383b0647471cd16f` 已发布且核对本地／远端一致；本轮另获授权更新本交接、提交并推送。

@@ -1,5 +1,8 @@
 # Running 撤回 Pending 公开接口（schema_version 1）
 
+> 2026-09-30：以下是旧版记录。任务流转与观察器当前契约以[任务流转接口 v2](任务流转JSON接口.md)为准；旧 gate/loop/人工覆盖行为已退役。通知偏好 schema 1 保留，通知身份改用公开 notification_key。操作步骤见 [QUICKSTART](QUICKSTART.md)。
+
+
 2026-09-29，用户授权 drover 与 saddle 主控直接实施。只结束这次运行，不记 Done/Dropped，不停止或注入 agent，不更改 dispatch-log。用户必须确认实际工作已经停止；agent 的 idle 不能替代此确认。
 
 ## 查询与确认

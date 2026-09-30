@@ -1,5 +1,8 @@
 # 任务详情 JSON 接口（schema_version = 1）
 
+> 2026-09-30：以下是旧版记录。任务流转与观察器当前契约以[任务流转接口 v2](任务流转JSON接口.md)为准；旧 gate/loop/人工覆盖行为已退役。通知偏好 schema 1 保留，通知身份改用公开 notification_key。操作步骤见 [QUICKSTART](QUICKSTART.md)。
+
+
 在目标项目仓库或其子目录运行：
 
 ```sh

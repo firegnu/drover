@@ -80,7 +80,7 @@ def variants():
                           'waits': [], 'projects': []}, ''
 
 
-PRIORITY = ('!', 'corral', 'Paused', 'loop ')
+PRIORITY = ('!', 'corral', 'Paused')
 colors(256)
 for scene, multi, vm, msg in variants():
     original = copy.deepcopy(vm)
@@ -109,7 +109,7 @@ for scene, multi, vm, msg in variants():
         if w >= 52:
             assert all(v for v, p in zip(visible, present) if p), (where, heads[0])
             if q and not q['paused'] and scene != 'unicode':  # 长项目名时同义的模式词先让出
-                assert ('Manual' if not q['loop'] else q['mode']) in heads[0], (where, heads[0])
+                assert q['mode'] in heads[0], (where, heads[0])
         # 完整原文：header 里没放全的，详情里逐字可达
         full = [vm['health']['text']]
         if pv:
@@ -121,8 +121,7 @@ for scene, multi, vm, msg in variants():
         elif vm['waits']:  # 全属当前项目：详情原有的「Needs you · N」就是完整副本
             assert f'Needs you · {len(vm["waits"])}' in details, where
         if q:
-            full += ['Paused' if q['paused'] else 'Manual' if not q['loop'] else q['mode'],
-                     'loop on' if q['loop'] else 'loop off']
+            full += ['Paused' if q['paused'] else q['mode']]
         if c:
             full += [B.task_heading(pv).replace('\t', '    '), B.task_metrics(pv)]
         elif pv:
@@ -161,7 +160,7 @@ for w, n, tier in [(52, n, '常规') for n in (25, 26, 27)] + [(w, 25, 'Y' * 10 
 # 52 列空闲：示意的三行
 screen = Screen(24, 52)
 B.draw(screen, fixture('empty', True)[0], {'sel': 0})
-assert row(screen, 0).startswith(' drover ▸ demo-shop 1/3 ') and row(screen, 0).endswith('Manual · loop off')
+assert row(screen, 0).startswith(' drover ▸ demo-shop 1/3 ') and row(screen, 0).endswith('Explicit')
 assert row(screen, 1) == ' ○ Queue empty'
 assert row(screen, 2) == ' HEAD a1f3c2 · corral connected (synthetic)'
 single = Screen(24, 52)
@@ -182,7 +181,7 @@ for n in (256, 8, 0):
         assert ('▸', B.COLORS.get('rail_mark' if chip else 'accent', 0)) in head
         assert any(t.lstrip().startswith('demo-shop') and a == B.COLORS.get('chip' if chip else '', 0) for t, a in head)
         for text, kind in (('! Needs you 3' if multi else '! Needs you 1', 'wait'), ('corral unavailable', 'bad'),
-                           ('Paused', 'wait'), ('loop on', 'ok'), (' · ', 'line')):
+                           ('Paused', 'wait'), (' · ', 'line')):
             assert (text, B.COLORS.get(kind, 0)) in head, (n, text)
         assert all(not a & curses.A_REVERSE for y, _, _, a in screen.rows if y < 3)
         assert all(a != B.COLORS['sel'] for y, _, _, a in screen.rows if y < 3)
@@ -190,8 +189,7 @@ for n in (256, 8, 0):
     vm, _ = fixture('working')
     screen = Screen(24, 80)
     B.draw(screen, vm, {})
-    assert ('Manual', B.COLORS.get('accent', 0)) in [(t, a) for y, _, t, a in screen.rows if y == 0]
-    assert ('loop off', B.COLORS.get('dim', 0)) in [(t, a) for y, _, t, a in screen.rows if y == 0]
+    assert ('Explicit', B.COLORS.get('accent', 0)) in [(t, a) for y, _, t, a in screen.rows if y == 0]
     assert ('▶ In progress', B.COLORS['heading_active']) in [(t, a) for y, _, t, a in screen.rows if y == 1]
     assert any(t.startswith('  T42') and a == B.COLORS['h1'] for y, _, t, a in screen.rows if y == 1)
     assert ('Elapsed 1h12m', B.COLORS.get('dim', 0)) in [(t, a) for y, _, t, a in screen.rows if y == 2]

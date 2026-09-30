@@ -6,8 +6,8 @@ Usage:
   drover board --projects F    Use a project list at F (one repository per line)
 
 Keys:
-  ↑ ↓ / j k  Select project    g  Verify and release    n  Send next task
-  p  Pause / resume            a  Edit queue.md          l  Toggle loop
+  ↑ ↓ / j k  Select project    d Submit · g Accept        n Dispatch pending
+  p  Pause / resume            a  Edit queue.md
   r  Refresh                   q  Quit                   PgUp/PgDn  Scroll details
 
 The board reads registered repositories from ~/.drover/projects. Task text and
@@ -16,7 +16,6 @@ external command output are shown as written; board labels and feedback are in E
 import curses
 import hashlib
 import json
-import math
 import os
 import re
 import subprocess
@@ -24,6 +23,10 @@ import sys
 import time
 import unicodedata
 from datetime import datetime
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import drover_core as C
+from drover_core import parse_conf, task_blocks, task_events, task_fold, task_pending, TASK_HDR
 
 PROJ_LIST = os.path.expanduser("~/.drover/projects")
 NOW = time.time()
@@ -137,8 +140,6 @@ def agents_of(repo, main_agent=""):
     if st is None:
         return {}
     return {"writer": {"status": st.get("state") or "unknown", "name": st.get("name", ""),
-                       # 后两个只给「等人」的识别用，见 wants_human；title / kind / instance / activity
-                       # 随主控状态块一起删了——那些是 corral board 的活
                        "idle_for": st.get("idle_for") or 0, "src": st.get("last_input_source", "")}}
 
 
@@ -160,23 +161,9 @@ def ago(ts):
 
 
 # ============================================================ 解析交接文件
-def parse_conf(path, text=None):
-    """.drover.conf → {键: 值}。`#` 开头的行不匹配，天然当注释跳过。
-    HANDOFF_DIR 是人可能手写的路径，`~` 在这里统一展开，下面各处就不用再管。"""
-    conf = {}
-    for line in ((read(path) or "") if text is None else text).splitlines():
-        m = re.match(r'\s*([A-Z_]+)=(.*)', line)
-        if m:
-            conf[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    if conf.get("HANDOFF_DIR"):
-        conf["HANDOFF_DIR"] = os.path.expanduser(conf["HANDOFF_DIR"])
-    return conf
-
 
 
 # ============================================================ 项目状态
-
-IDLE_SETTLE = 120       # idle 多久才算「停下了」。每一轮结束都会短暂 idle，得留一次观察间隔
 
 
 def attach_hint(name):
@@ -185,75 +172,16 @@ def attach_hint(name):
     return f"去看看：corral attach {name}" if name else "去主控那边看看"
 
 
-def wants_human(p, english=False):
-    """「它在等人」：主控 idle 了，但这件活的判据还没满足——它停在某处等人拍板
-    （审查复核没过、和审查者有分歧、要推送、要花钱、发现设计对不上）。→ 没满足的那几条，或 []。
-
-    三种情况不算，都会误报：
-      - corral 契约：`idle` **只表示这一轮结束，不代表 agent 不会再动**，它可能自己开新一轮
-        （后台命令跑完自注入），契约提示看 `last_input_source`。是 `agent` 就不是在等人。
-      - 每一轮结束都会短暂 idle，所以要 idle 够久（IDLE_SETTLE）才下结论。
-      - `state` 是 `unknown`（不认识的 agent，没有钩子）时状态无从得知：**不猜**，
-        让它照常显示，人自己去看。
-    判据第 3 条不在这里跑（可能是整套测试，页面 30 秒一刷），只看纯 git 的前两条。"""
-    a = (p.get("agents") or {}).get("writer")
-    tv = p.get("tasks")
-    if not a or not tv or not tv.get("card") or tv.get("awaiting"):
-        return []
-    if a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
-        return []
-    rows = [find_done_mark(p["repo"], tv["card"].get("main", ""), p.get("done_mark", ""), english=english)] + \
-        criteria(p["repo"], tv["card"].get("main", ""),
-                 p.get("check_cmd", ""), do_check=False, english=english)
-    return [r for r in rows if r["ok"] is False]
-
-
 def add_waits(p):
-    """把「等你」补全：主控停下等人、以及队列做完等放行。
-
-    「主控卡在审批对话框」那条删了：corral 的 board 本来就把 blocked 显在最显眼处，drover 跟着报
-    一遍只是重复造轮子。留下的这两条都是只有 drover 算得出来的。"""
-    new = []
-    unmet = wants_human(p)
-    if unmet:
-        card = p["tasks"]["card"]
-        why = "；".join(f'{r["name"]}：{r["why"]}' for r in unmet)
-        new.append(("stop", "", "idle", "", f'{card["id"]} {card["title"]}：主控空闲着，但这件活的判据还没满足（{why}）。'
-                                            f'{attach_hint((p.get("agents") or {}).get("writer", {}).get("name", ""))}'))
-    tv = p.get("tasks")
-    if tv and tv["awaiting"] and tv["card"]:
-        confirmation = "已人工确认完成。" if tv["card"].get("completion_record") else "做完了，核对已通过。"
-        new.append(("release", "", "", "", f"{tv['awaiting']} {tv['card']['title']} {confirmation}"
-                    "运行 drover go 放行，下一件会自动送进主控"))
-        p["state"] = "等你放行"
-    if new:
-        p["human"].extend(new)
-        p["needs_me"] = True
-        if not p["waiting"]:
-            p["waiting"] = "等你"
-
+    tv = p.get('tasks')
+    if tv and tv['awaiting'] and tv['card']:
+        p['human'].append(('release', '', '', '', f"{tv['awaiting']} 已提交，等待用户验收。接受不会派发下一项。"))
+        p.update(state='等你放行', needs_me=True, waiting='等你')
 
 
 # ============================================================ 任务队列（drover 与看板共用这份解析）
-TASK_HDR = re.compile(r'^##\s+(?:(T\d+)\s+)?(.+?)\s*$')
 
 
-def task_blocks(text):
-    """queue.md → [{id 或 None, title, body}]，按文件顺序。「## T7 标题」或「## 标题」开一块，第一块之前的行忽略。"""
-    blocks, cur = [], None
-    for line in (text or "").splitlines():
-        m = TASK_HDR.match(line)
-        if m:
-            cur = {"id": m.group(1), "title": m.group(2), "body": []}
-            blocks.append(cur)
-        elif cur is not None:
-            cur["body"].append(line)
-    for b in blocks:
-        b["body"] = "\n".join(b["body"]).strip("\n")
-    return blocks
-
-
-TASK_HOLD_LINE = re.compile(r'^\s*做完\s*[:：]\s*等我放行\s*$', re.M)
 # 正文里那行「任务文件：<相对路径>」：人自己在 queue.md 里写的。
 TASK_FILE = re.compile(r'^\s*任务文件\s*[:：]\s*(\S.*?)\s*$', re.M)
 # 任务文件开头那行「路由：<档> / 交叉审查<要|不要>（路由：…；推翻：…）」。这是主控**本来就会写**
@@ -314,7 +242,7 @@ def task_route(repo, body, title, task_dir):
     一份都挑不出来就 None（页面上这一项不显示）。
 
     **只进显示，绝不参与任何判断**（ROADMAP 待定 4）：不进完成判据、不进 wants_human、不进
-    loop_tick 的任何分支。它依赖内循环的一个书写格式，算擦边，但不要求主控多做事；漏读只是
+    任务流转。它依赖内循环的一个书写格式，算擦边，但不要求主控多做事；漏读只是
     少显示一项，不影响判完成——所以不需要收尾记号那条例外的三条支撑。
 
     降级是硬要求：没配 TASK_FILE_DIR、目录不在、文件找不到、没有那一行、格式对不上、编码坏了
@@ -325,253 +253,15 @@ def task_route(repo, body, title, task_dir):
         return None
 
 
-def task_holds(evs):
-    """tasks.state 里的 hold 事件 → 打着「做完停」的任务 key 集合（有编号按编号，没编号按标题；后来的事件覆盖前面的）。"""
-    on = {}
-    for e in evs:
-        if e.get("ev") == "hold" and e.get("key"):
-            on[e["key"]] = bool(e.get("on"))
-    return {k for k, v in on.items() if v}
-
-
-def task_held(t, holds):
-    """这个任务做完要不要停下等放行：看板上点了「做完停」，或正文里写了「做完：等我放行」。t 可以是队列块或 tasks.state 里的任务。"""
-    keys = {t.get("id"), t.get("key") or t.get("title")} - {None, ""}
-    return bool(keys & holds) or bool(TASK_HOLD_LINE.search(t.get("body") or ""))
-
-
 def queue_version(text):
     """queue.md 内容的短指纹：页面记下它，改顺序 / 改任务时带回来，对不上说明这期间队列被别人改过。"""
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
 
 
-def task_events(text):
-    out = []
-    for line in (text or "").splitlines():
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            continue
-    return out
 
 
-def task_fold(evs):
-    """tasks.state 的事件 → ({id: task}（按开始顺序）, 进行中的那个, 在等放行的 id)。"""
-    tasks, awaiting = {}, None
-    for e in evs:
-        tid, ev = e.get("id"), e.get("ev")
-        if ev == "start":
-            returns = tasks.get(tid, {}).get("return_history")
-            tasks[tid] = {"id": tid, "title": e.get("title", ""), "body": e.get("body", ""), "key": e.get("key", ""),
-                          "start": e.get("sha", ""), "main": e.get("main", ""), "t0": e.get("t"), "status": "doing"}
-            if returns:
-                tasks[tid]["return_history"] = returns
-            awaiting = None
-        elif ev == "return" and tid in tasks:
-            tasks[tid].update(status="pending", t1=e.get("t"))
-            tasks[tid].setdefault("return_history", []).append(e["return_record"])
-        elif ev == "done" and tid in tasks:
-            tasks[tid].update(status="done", end=e.get("sha", ""), t1=e.get("t"))
-            if "completion_record" in e:
-                tasks[tid]["completion_record"] = e["completion_record"]
-            awaiting = tid if e.get("gate") else None
-        elif ev == "drop":
-            t = tasks.setdefault(tid, {"id": tid, "title": e.get("title", ""), "body": "", "key": e.get("key", ""), "start": ""})
-            t.update(status="dropped", reason=e.get("reason", ""), t1=e.get("t"))
-        elif ev == "go":
-            if tid in tasks:
-                tasks[tid]["t2"] = e.get("t")     # 放行的时刻。「等放行时长」= t2 - t1，只有放行模式才有
-            awaiting = None
-    current = next((t for t in tasks.values() if t["status"] == "doing"), None)
-    return tasks, current, awaiting
-
-
-def task_pending(blocks, tasks):
-    """队列里还没开始的块，按文件顺序。有编号按编号认，没编号按标题认（所以开始过的任务别改标题）。"""
-    active = {tid: t for tid, t in tasks.items() if t["status"] != "pending"}
-    keys = {t["key"] for t in active.values() if t.get("key")}
-    pending = [b for b in blocks if not (b["id"] in active if b["id"] else b["title"] in keys)]
-    for b in pending:
-        if tasks.get(b["id"], {}).get("return_history"):
-            b["return_history"] = tasks[b["id"]]["return_history"]
-    return pending
-
-
-def task_commits(repo, a, b):
-    return git(repo, "rev-list", f"{a}..{b}").split() if a and b and a != b else []
-
-
-# ============================================================ 完成判据（只读核对 git）
+# ============================================================ 仓库参考（不参与流转）
 MAIN_BRANCH = "main"
-CHECK_TIMEOUT = 1800        # 验收命令的上限；跑过头当作不过，不能把 drover 卡住
-
-
-def task_branches(repo, base_sha, english=False, git_runner=None):
-    """所有本地分支 → (包含 base_sha 的本次分支, 排除的遗留分支, 查询错误)。main 自己永远不算。"""
-    try:
-        result = git_runner(repo, "for-each-ref", "--format=%(refname)", "refs/heads/") if git_runner else subprocess.run(
-            ["git", "-C", repo, "for-each-ref", "--format=%(refname)", "refs/heads/"],
-            capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"})
-    except (OSError, subprocess.SubprocessError) as exc:
-        detail = getattr(exc, "stderr", None) or ""
-        if isinstance(detail, bytes):
-            detail = detail.decode(errors="replace")
-        return [], [], [(f"Failed to list local branches: {exc}" if english else f"枚举本地分支失败：{exc}")
-                        + (f"\n{detail}" if detail else "")]
-    if result.returncode or "warning: ignoring broken ref" in result.stderr:
-        return [], [], [(f"Failed to list local branches (git exit {result.returncode}): {result.stderr.strip()}"
-                         if english else f"枚举本地分支失败（git 退出码 {result.returncode}）：{result.stderr.strip()}")]
-    out = result.stdout.split("\n")
-    current, excluded, errors = [], [], []
-    for b in out:
-        if not b or b == f"refs/heads/{MAIN_BRANCH}":
-            continue
-        result = git_runner(repo, "merge-base", "--is-ancestor", base_sha, b) if git_runner else subprocess.run(
-            ["git", "-C", repo, "merge-base", "--is-ancestor", base_sha, b],
-            capture_output=True, text=True)
-        b = b[len("refs/heads/"):]
-        if result.returncode == 0:
-            current.append(b)
-        elif result.returncode == 1:
-            excluded.append(b)
-        else:
-            errors.append((f"{b}: query failed (git exit {result.returncode}): {result.stderr.strip()}"
-                           if english else f"{b} 查询失败（git 退出码 {result.returncode}）：{result.stderr.strip()}"))
-    return current, excluded, errors
-
-
-def run_check(repo, cmd, english=False):
-    """跑验收命令 → (退出码, 输出尾巴)。过 shell（CHECK_CMD 里会有 && 和管道），在仓库根跑。
-    命令跑不起来（127）和测试没通过（非 0）都是不过，但退出码会照原样报出来，好分辨是哪一种。"""
-    try:
-        r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, timeout=CHECK_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None, (f"Timed out after {CHECK_TIMEOUT}s" if english else f"超过 {CHECK_TIMEOUT} 秒还没跑完")
-    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-8:])
-    return r.returncode, tail
-
-
-def criteria(repo, base_sha, check_cmd, do_check=True, english=False, git_reader=None, git_runner=None):
-    """三条完成判据的只读核对 → [{n, name, ok, why, failed?}]。
-    failed 仅供显示明确失败；未提供时不能把 ok=False 推断为执行错误。
-    ok 为 True / False / None，None 表示这条不适用（既不算过，也不算不过）。
-    全程只读：只跑 rev-parse / for-each-ref / merge-base，外加人自己配的验收命令。
-
-    `do_check=False` 时第 3 条不跑命令、直接标「没查」。**渲染页面时必须用这个**：第 3 条
-    可能是整套测试，页面 30 秒刷一次、每个项目都渲染，等于每半分钟把所有项目的测试跑一遍。
-    前两条是纯 git，便宜，渲染时照算——「等人」的识别靠的就是它们（见 wants_human）。"""
-    # show 注入固定端点、检查退出码的读取器；旧调用仍走原有 Git 读取路径。
-    rows = []
-    name1 = f"{MAIN_BRANCH} advanced" if english else f"{MAIN_BRANCH} 前进了"
-    name2 = "Task branches merged" if english else "这次建的分支都合进去了"
-    name3 = "Check command passed" if english else "验收命令过了"
-
-    head = (git_reader or git)(repo, "rev-parse", MAIN_BRANCH).strip()
-    if not head:
-        rows.append({"n": 1, "name": name1, "ok": False,
-                     "why": (f"No {MAIN_BRANCH} branch in this repository" if english else
-                             f"仓库里没有 {MAIN_BRANCH} 分支，判据无从谈起")})
-    else:
-        moved = bool(base_sha) and head != base_sha
-        rows.append({"n": 1, "name": name1, "ok": moved,
-                     "why": (f"{base_sha[:7]} → {head[:7]}" if moved else
-                             (f"Still at {head[:7]}; no new commit since dispatch" if english else
-                              f"还停在 {head[:7]}，送任务之后没有前进") if base_sha else
-                             ("Dispatch baseline SHA was not recorded" if english else
-                              "没有记下送任务之前的 sha，没法比"))})
-
-    if not base_sha:
-        rows.append({"n": 2, "name": name2, "ok": None,
-                     "why": ("No baseline SHA; cannot identify branches from this task" if english else
-                             "没有 base_sha：没记下送任务之前的 sha，无法判断哪些分支是这次的")})
-    else:
-        brs, excluded, errors = (task_branches(repo, base_sha, english=english, git_runner=git_runner)
-                                 if git_runner else task_branches(repo, base_sha, english=english))
-        if errors:
-            rows.append({"n": 2, "name": name2, "ok": False, "failed": True, "why": "\n".join(errors)})
-        elif not brs:
-            # 合并后删掉分支是正常收尾；遗留分支仍逐个列出，便于核对排除是否合理。
-            rows.append({"n": 2, "name": name2, "ok": True,
-                         "why": ((f"Excluded {len(excluded)} legacy branch{'es' if len(excluded) != 1 else ''} without the baseline SHA: "
-                                  + ", ".join(excluded)) if english else
-                                 (f"{len(excluded)} 个分支全部被排除（不包含 base_sha，按遗留分支处理）："
-                                  + "、".join(excluded))) if excluded else
-                                ("No unmerged branches" if english else "没有未合并的分支")})
-        else:
-            codes = [(b, (git_runner(repo, "merge-base", "--is-ancestor", f"refs/heads/{b}", f"refs/heads/{MAIN_BRANCH}")
-                          if git_runner else subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor",
-                                        f"refs/heads/{b}", f"refs/heads/{MAIN_BRANCH}"],
-                                       capture_output=True)).returncode) for b in brs]
-            left = [b for b, code in codes if code != 0]
-            rows.append({"n": 2, "name": name2, "ok": not left,
-                         "failed": any(code not in (0, 1) for _, code in codes),
-                         "why": ((f"{len(brs)} task branch{'es' if len(brs) != 1 else ''} merged into {MAIN_BRANCH}: " + ", ".join(brs))
-                                 if english else (f"{len(brs)} 个都已经是 {MAIN_BRANCH} 的祖先：" + "、".join(brs))) if not left
-                                else ((f"Not merged into {MAIN_BRANCH}: " + ", ".join(left)) if english else
-                                      (f"还没合进 {MAIN_BRANCH}：" + "、".join(left)))})
-        if excluded and (brs or errors):
-            rows[-1]["why"] += (("; excluded legacy branches without the baseline SHA: " + ", ".join(excluded))
-                                if english else ("；已排除不包含 base_sha 的遗留分支：" + "、".join(excluded)))
-
-    if not check_cmd:
-        rows.append({"n": 3, "name": name3, "ok": None,
-                     "why": ("No check command: CHECK_CMD and the queue entry are empty" if english else
-                             "没有验收命令：CHECK_CMD 空着，队列条目也没写")})
-    elif not do_check:
-        rows.append({"n": 3, "name": name3, "ok": None,
-                     "why": (f"`{check_cmd}` is not run on refresh; press g / drover go to check and release"
-                             if english else f"`{check_cmd}` 没在刷新时跑（可能是整套测试）；按 g / drover go 核对并放行")})
-    else:
-        code, tail = run_check(repo, check_cmd, english=english)
-        rows.append({"n": 3, "name": name3, "ok": code == 0, "failed": code != 0,
-                     "why": f"`{check_cmd}` " + (("passed" if english else "过了") if code == 0 else
-                                                 tail if code is None else
-                                                 (f"exit {code}" if english else f"退出码 {code}")
-                                                 + (f"\n{tail}" if tail else ""))})
-    return rows
-
-
-def find_done_mark(repo, base_sha, mark, english=False, git_reader=None):
-    """收尾记号 → {n, name, ok, why}，形状和 criteria 的每一条一样。
-
-    这是判「这件活完了」的**唯一依据**，上面三条是门（见 ROADMAP 完成判据那一节）。
-    主控收尾时在 main 上打一条空提交，首行「<前缀>: 一句话」；约定写在项目自己的
-    AGENTS.md 里（来源是 corral 的 项目AGENTS模板.md），drover 只认 git，不去读那份文字。
-
-    四道闸：
-
-      1. 区间  只在 base_sha..MAIN_BRANCH 里找。上一件活的记号进不来。
-      2. 单亲  父提交恰好一个。**这道不是锦上添花**：不给 -m / -c 时 git 对合并提交默认
-               不出 diff，所以合并提交在 diff-tree 眼里输出也是 0 行（验过）。主控哪天
-               在合并摘要里恰好写了前缀开头，光靠「空 + 前缀」就会误判。
-      3. 空    一个文件都没改。
-      4. 前缀  首行 `^<前缀>` 加冒号，全角半角都收（人手敲中文容易出全角）。
-
-    mark 留空 = 这个项目不打收尾记号 → ok=None（不适用）。这时判不出完成，循环开着也
-    不自动记 done，退回等人放行。"""
-    name = "Completion marker" if english else "收尾记号"
-    if not mark:
-        return {"n": 0, "name": name, "ok": None,
-                "why": ("DONE_MARK is unset; completion cannot be detected" if english else
-                        "没配 DONE_MARK：这个项目不打收尾记号，判不出这件活完没完")}
-    if not base_sha:
-        return {"n": 0, "name": name, "ok": False,
-                "why": ("Dispatch baseline SHA was not recorded" if english else "没有记下送任务之前的 sha，划不出区间")}
-
-    read_git = git_reader or git
-    pat = re.compile(r"^" + re.escape(mark) + r"\s*[:：]")
-    for line in read_git(repo, "log", "--format=%H%x09%s", f"{base_sha}..{MAIN_BRANCH}").splitlines():
-        sha, _, subject = line.partition("\t")
-        if not pat.match(subject):
-            continue
-        if len(read_git(repo, "rev-list", "--parents", "-n1", sha).split()) != 2:   # 自己 + 恰好一个父
-            continue
-        if read_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).strip():
-            continue
-        return {"n": 0, "name": name, "ok": True, "why": f"{sha[:7]} {subject}"}
-    return {"n": 0, "name": name, "ok": False,
-            "why": (f"No empty commit starting with '{mark}: ' in {base_sha[:7]}..{MAIN_BRANCH}"
-                    if english else f"{base_sha[:7]}..{MAIN_BRANCH} 里没有「{mark}: 」开头的空提交")}
 
 
 def task_span(a, b):
@@ -579,10 +269,17 @@ def task_span(a, b):
     return dur(b - a) if a and b else ""
 
 
+def task_commit_count(repo, a, b):
+    if not a or not b:
+        return None
+    value = C.git_value(repo, 'rev-list', '--count', f'{a}..{b}', '--')
+    return int(value) if value is not None and value.isdigit() else None
+
+
 def history_commit_counts(repo, history):
     """当次历史记账：传播起止可达标记，统计 b 可达而 a 不可达的提交。"""
     ranges = [(f["id"], f.get("start"), f.get("end")) for f in history if f["status"] != "dropped"]
-    counts = {tid: 0 for tid, _, _ in ranges}
+    counts = {tid: 0 if a and b else None for tid, a, b in ranges}
     active = [(tid, a, b) for tid, a, b in ranges if a and b and a != b]
     if not active:
         return counts
@@ -598,7 +295,7 @@ def history_commit_counts(repo, history):
         except (OSError, subprocess.SubprocessError):
             pass                                    # 批量失败（含部分输出）退回原逐条结果
     if not endpoints <= {row[0] for row in rows}:
-        return {tid: len(task_commits(repo, a, b)) for tid, a, b in ranges}
+        return {tid: task_commit_count(repo, a, b) for tid, a, b in ranges}
     marks = {}
     for i, (_, a, b) in enumerate(active):
         marks.setdefault(a, [0, 0])[0] |= 1 << i
@@ -625,28 +322,29 @@ def task_view(repo, conf, p):
     if qtext is None:
         return None
     task_dir = conf.get("TASK_FILE_DIR", "")       # 找任务文件读「路由：」行用的，纯显示
-    tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
+    snap = C.snapshot(repo)
+    public = C.listing(snap)
+    tasks, current, awaiting = snap['tasks'], snap['current'], snap['awaiting']
     t = current or tasks.get(awaiting)
     card = None
     if t:
-        commits = task_commits(repo, t["start"], t.get("end") or p["head"])
+        n = task_commit_count(repo, t["start"], t.get("end") or p["head"])
         now = "收尾" if t["id"] == awaiting else "实施"
-        confirmation = "人工确认" if t.get("completion_record") else "核对通过"
-        n = len(commits)
+        confirmation = "已提交"
         steps = [
             ("实施", "now" if now == "实施" else "ok", f"{n} 个提交" if n else "—"),
-            ("收尾", "now release" if now == "收尾" else "", f"{confirmation} · 等你放行" if now == "收尾" else "按 g 核对并放行"),
+            ("收尾", "now release" if now == "收尾" else "", f"{confirmation} · 等你放行" if now == "收尾" else "按 d 提交验收"),
         ]
         # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
-        # 纯 git，便宜；判据第 1 条看的也是这个 sha，两处说的是同一件事。
+        # 仅为仓库区间参考，不代表本任务的工作归属。
         base = t.get("main", "")
-        on_main = task_commits(repo, base, MAIN_BRANCH) if base else []
+        on_main = task_commit_count(repo, base, MAIN_BRANCH)
         last_at = int(git(repo, "log", "-1", "--format=%ct", MAIN_BRANCH).strip() or 0) if on_main else 0
         card = {"id": t["id"], "title": t["title"], "start": t["start"], "main": base,
                 "completion_record": t.get("completion_record"),
-                "on_main": len(on_main), "last_at": last_at,
+                "on_main": on_main, "last_at": last_at,
                 "commits": n, "steps": steps, "body": t.get("body", ""),
-                "held": task_held(t, task_holds(task_events(read(f"{d}/tasks.state")))),
+                "actions": C.task_actions(snap, t),
                 "waiting": now == "收尾", "span": task_span(t.get("t0"), t.get("t1") or NOW),
                 # 任务文件开头那行「路由：…」，只显示，不参与任何判断；读不出来就是 None
                 "route": task_route(repo, t.get("body", ""), t.get("title", ""), task_dir)}
@@ -667,16 +365,10 @@ def task_view(repo, conf, p):
                          "route": task_route(repo, f.get("body", ""), f.get("title", ""), task_dir),
                          "body": f.get("body", ""),
                          "range": f"{f['start'][:7]}..{f['end'][:7]}" if f.get("end") and f["end"] != f["start"] else ""})
-    try:
-        loop_wait = json.loads(read(f"{d}/.loop-wait") or "null")
-    except ValueError:
-        loop_wait = None
-    return {"dir": d, "todo": task_pending(task_blocks(qtext), tasks), "card": card, "finished": finished, "qv": queue_version(qtext),
-            "loop": os.path.exists(f"{d}/loop"), "loop_wait": loop_wait if isinstance(loop_wait, dict) else None,
-            "holds": task_holds(task_events(read(f"{d}/tasks.state"))),
-            "awaiting": awaiting, "gate": conf.get("TASK_GATE", "1").strip() != "0", "paused": os.path.exists(f"{d}/paused"),
-            "done": sum(x["status"] == "done" for x in tasks.values()),
-            "dropped": sum(x["status"] == "dropped" for x in tasks.values())}
+    return {"dir": d, "todo": public['pending'], "card": card, "finished": finished, "qv": queue_version(qtext),
+            "awaiting": awaiting, "paused": snap['paused'],
+            "done": sum(x['status'] == 'done' for x in tasks.values()),
+            "dropped": sum(x['status'] == 'dropped' for x in tasks.values())}
 
 
 def project_state(repo, conf):
@@ -686,8 +378,6 @@ def project_state(repo, conf):
          "state": "空闲", "since": None, "waiting": "", "needs_me": False, "human": []}
     p["last_activity"] = max([mtime(f"{d}/{f}") or 0 for f in os.listdir(d)] or [0]) if os.path.isdir(d) else 0
     p["main_agent"] = conf.get("MAIN_AGENT", "")
-    p["done_mark"] = conf.get("DONE_MARK", "收尾").strip()
-    p["check_cmd"] = conf.get("CHECK_CMD", "")
     p["agents"] = agents_of(repo, p["main_agent"])
     p["crew"] = crew_of(repo, p["main_agent"])   # 住在本仓库 worktree 里的 agent，只显示
     p["tasks"] = task_view(repo, conf, p)
@@ -722,7 +412,13 @@ def collect(list_path):
         conf = parse_conf(f"{repo}/.drover.conf")
         if "HANDOFF_DIR" not in conf:
             continue
-        projects.append(project_state(repo, conf))
+        try:
+            projects.append(project_state(repo, conf))
+        except C.FlowError as exc:
+            projects.append({'name': os.path.basename(repo), 'repo': repo, 'dir': conf['HANDOFF_DIR'],
+                             'head': '', 'state': 'Unavailable', 'since': None, 'waiting': '',
+                             'needs_me': True, 'human': [('error', '', '', '', exc.why)],
+                             'last_activity': 0, 'tasks': None})
     # 同名仓库（不同目录下的同名 checkout）用上一级目录区分，name 是页面里的唯一键
     names = [p["name"] for p in projects]
     for p in projects:
@@ -769,115 +465,29 @@ def health():
 
 
 def wait_items(p, english=False):
-    """「等你」的条目 → [(去重用的 key, 给人看的一句话)]。看板和系统通知共用，两边说的是同一件事。"""
-    out = []
-    for kind, fid, verb, sev, reason in p["human"]:
-        text = f"STOP · {reason}" if kind == "stop" else reason
-        if english and kind == "stop":
-            card = p["tasks"]["card"]
-            unmet = wants_human(p, english=True)
-            why = "; ".join(f'{r["name"]}: {r["why"]}' for r in unmet)
-            name = (p.get("agents") or {}).get("writer", {}).get("name", "")
-            text = f'STOP · {card["id"]} {card["title"]}: the main agent is idle, but checks are unmet ({why}). '
-            text += f'Inspect: corral attach {name}' if name else 'Inspect the main agent.'
-        elif english and kind == "release":
-            card = p["tasks"]["card"]
-            confirmation = "Manually confirmed" if card.get("completion_record") else "is complete; checks passed"
-            text = f'{card["id"]} {card["title"]} {confirmation}. Press g / run drover go to release it.'
-        out.append((f"{p['name']}|{kind}|{fid}|{verb}|{sev}|{reason}", text))
-    return out
-
-
-CHECK_RESULT_BYTES = 64 * 1024
-CHECK_WHY_CHARS = 4096
-
-
-def read_check_result(path, now):
-    """有界读取和格式校验；身份校验由调用者按其观察端点完成。"""
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(CHECK_RESULT_BYTES + 1)
-        if len(raw) > CHECK_RESULT_BYTES:
-            return "invalid", None
-        saved = json.loads(raw.decode("utf-8") or "null")
-        if (not isinstance(saved, dict)
-                or not all(isinstance(saved.get(k), str) and "\0" not in saved[k]
-                           for k in ("task", "main", "cmd", "why"))
-                or "ok" not in saved or (saved["ok"] is not None and type(saved["ok"]) is not bool)
-                or len(saved["why"]) > CHECK_WHY_CHARS
-                or type(saved.get("t")) not in (int, float) or not math.isfinite(saved["t"])
-                or saved["t"] > now + 5):
-            return "invalid", None
-        for k in ("task", "main", "cmd", "why"):
-            saved[k].encode("utf-8")  # JSON 转义可能解出孤立代理码，不能送进 addstr。
-    except FileNotFoundError:
-        return "missing", None
-    except OSError:
-        return "unavailable", None
-    except (ValueError, OverflowError, RecursionError):
-        return "invalid", None
-    return "valid", saved
-
-
-def check_result_vm(p, c, row):
-    """第 3 条上次核对的结果，只供 card_vm 显示；判断路径绝不读它。"""
-    missing = {**row, "ok": None, "failed": False, "why": "Not run (no valid check record); " + row["why"]}
-    now = time.time()  # collect 的 NOW 可能已过去一段时间；按显示时钟容许 5 秒偏差。
-    status, saved = read_check_result(f"{p['dir']}/.check-result", now)
-    if status != "valid":
-        return missing
-    current = {"task": c["id"], "main": git(p["repo"], "rev-parse", MAIN_BRANCH).strip(),
-               "cmd": p.get("check_cmd", "")}
-    reasons = {"task": "task ID changed", "main": "main SHA changed", "cmd": "check command changed"}
-    stale = [reasons[k] for k in current if saved[k] != current[k]]
-    if stale:
-        return {**row, "ok": None, "failed": False, "why": "Previous check is stale: " + ", ".join(stale) + "; " + row["why"]}
-    why = saved["why"]
-    if why == "没有验收命令：CHECK_CMD 空着，队列条目也没写":
-        why = "No check command: CHECK_CMD and the queue entry are empty"
-    prefix = f'`{current["cmd"]}` '
-    if why.startswith(prefix):
-        result = why[len(prefix):]
-        if result == "过了":
-            why = prefix + "passed"
-        elif result.startswith("退出码 "):
-            why = prefix + "exit " + result[len("退出码 "):]
-        elif result.startswith("超过 ") and result.endswith(" 秒还没跑完"):
-            why = prefix + "Timed out after " + result[len("超过 "):-len(" 秒还没跑完")] + "s"
-    return {**row, "ok": saved["ok"], "failed": saved["ok"] is False,
-            "name": row["name"] + f" (run {dur(now - saved['t'])} ago)",
-            "why": ("Not applicable: " if saved["ok"] is None else "") + why}
+    return [(f"{p['name']}|{kind}|{reason}",
+             f"{p['tasks']['awaiting']} submitted; press g to accept. Dispatch is separate."
+             if english and kind == 'release' else reason)
+            for kind, fid, verb, sev, reason in p['human']]
 
 
 def card_vm(p, tv):
-    """「当前这件活」：分支进展 + 判据过了几条。**依据（收尾记号）排最前**，三条门跟在后面。
-
-    第 3 条不在这里跑（`do_check=False`）：它可能是整套测试，而看板每刷新一次就要算一遍。
-    前两条是纯 git，便宜，照算。"""
-    c = tv["card"]
+    c = tv['card']
     if not c:
         return None
-    rows = [find_done_mark(p["repo"], c["main"], p.get("done_mark", ""), english=True)] + \
-        criteria(p["repo"], c["main"],
-                 p.get("check_cmd", ""), do_check=False, english=True)
-    check = next(r for r in rows if r["n"] == 3)
-    check.update(check_result_vm(p, c, check))
-    last = ago(c["last_at"])
-    # 正文只进显示。判据、收尾记号、loop_tick 一概不碰它——和「路由：」行同一条边界。
-    body = [ln.rstrip() for ln in (c.get("body") or "").splitlines()]
-    while body and not body[-1]:
-        body.pop()
-    return {"id": c["id"], "title": c["title"], "body": body,
-            "completion_record": c.get("completion_record"),
-            "waiting": c["waiting"], "held": c["held"],
-            "span": c["span"], "commits": c["commits"], "on_main": c["on_main"], "route": c["route"],
-            # 分支进展：从发任务那一刻的 main 算起，main 上多了几个提交、最后一次多久前。
-            # 判据第 1 条看的是同一个 sha，两处说的是同一件事。
-            "progress": (f'{commit_count(c["on_main"])} on {MAIN_BRANCH}' + (f'; latest {last} ago' if last else ""))
-                        if c["on_main"] else f'0 commits on {MAIN_BRANCH}; no changes landed yet',
-            "criteria": [{"name": r["name"], "ok": r["ok"], "why": r["why"],
-                          "failed": r.get("failed", False)} for r in rows],
-            "met": f'{sum(1 for r in rows if r["ok"] is True)}/{sum(1 for r in rows if r["ok"] is not None)}'}
+    snap = C.snapshot(p['repo'])
+    facts = C.evidence(snap, snap['tasks'][c['id']])
+    g, check = facts['git'], facts['last_check']
+    why = check['state']
+    if check['record']:
+        why += ': ' + check['record']['why']
+    return {**c, 'body': text_lines(c.get('body', '')),
+            'progress': 'Repository reference only; no task attribution or acceptance verdict',
+            'evidence': [
+                {'name': 'Git', 'ok': None, 'why': g['state']},
+                {'name': 'Tracked changes', 'ok': None, 'why': str(len(g['tracked_changes'])) if g['state'] == 'available' else 'unknown'},
+                {'name': 'Unmerged local branches', 'ok': None, 'why': ', '.join(g['unmerged_local_branches']) or ('none' if g['state'] == 'available' else 'unknown')},
+                {'name': 'Previous check', 'ok': None, 'failed': bool(check['record'] and check['record']['ok'] is False), 'why': why}]}
 
 
 def text_lines(text):
@@ -904,14 +514,14 @@ def pending_task_file(repo, body):
 
 def queue_vm(p, tv):
     c = tv["card"]
-    return {"mode": "Paused" if tv["paused"] else "Looping" if tv["loop"] else "Release mode" if tv["gate"] else "Auto mode",
-            "loop": tv["loop"], "paused": tv["paused"], "gate": tv["gate"], "awaiting": tv["awaiting"],
+    return {"mode": "Paused" if tv["paused"] else "Explicit",
+            "paused": tv["paused"], "awaiting": tv["awaiting"],
             "counts": {"todo": len(tv["todo"]), "doing": 1 if c and not c["waiting"] else 0,
                        "done": tv["done"], "dropped": tv["dropped"]},
             "card": card_vm(p, tv),
             "crew": p.get("crew") or [],
             "todo": [{"id": b["id"] or "", "title": b["title"], "next": i == 0,
-                      "held": task_held(b, tv["holds"]), "body": text_lines(b["body"]),
+                      "actions": b["actions"], "body": text_lines(b["body"]),
                       "task_file": pending_task_file(p["repo"], b["body"])} for i, b in enumerate(tv["todo"])],
             "finished": [{"id": f["id"], "title": f["title"], "dropped": f["dropped"],
                           "reason": f.get("reason", ""), "span": f.get("span", ""), "range": f.get("range", ""),
@@ -1070,6 +680,8 @@ def task_heading(pv):
 
 
 def commit_count(n):
+    if n is None:
+        return 'commits unknown'
     return f'{n} commit{"" if n == 1 else "s"}'
 
 
@@ -1080,9 +692,10 @@ def task_metrics(pv):
         state = {"空闲": "Idle", "等你放行": "Ready to release"}.get(pv["state"], pv["state"])
         return f'{pv["name"]} · {state} · HEAD {pv["head"]}'
     rt = c["route"]
-    return (f'Elapsed {c["span"]} · {commit_count(c["commits"])} · main +{c["on_main"]}'
+    main_count = c["on_main"] if c["on_main"] is not None else "?"
+    return (f'Elapsed {c["span"]} · {commit_count(c["commits"])} · main +{main_count}'
             + (f' · {route_tier(rt)} · Cross-review {"yes" if rt["cross"] else "no"}' if rt else "")
-            + (" · Hold on completion" if c["held"] else ""))
+            )
 
 
 def history_lines(f, presentation=False):
@@ -1118,19 +731,15 @@ def detail_sections(pv, body=None, presentation=False, history=None):
         main += body if body is not None else [("", 2, ln) if ln else ("", 0, "")
                                               for ln in c.get("body") or []]
         main.append(("", 0, ""))
-        main.append(section("h2", f'Completion checks · {c["met"]}', presentation))
+        main.append(section("h2", 'Repository reference', presentation))
         main.append(("dim", 2, c["progress"]))
-        if c["waiting"]:
-            if c.get("completion_record"):
-                main.append(("wait", 2, "Manually confirmed; press g to release"))
-            else:
-                main.append((("wait", (0, len("Checks passed"), "ok")) if presentation else "wait",
-                             2, "Checks passed; press g to release"))
+        if c['waiting']:
+            main.append(('wait', 2, 'Submitted; press g to accept'))
         if c["route"]:
             rt = c["route"]
             main.append(("dim", 2, f'Routing {route_tier(rt)} · Cross-review {"yes" if rt["cross"] else "no"}'
                                   + (" · Main agent overrode routing" if rt["overridden"] else "")))
-        for r in c["criteria"]:
+        for r in c["evidence"]:
             mark = "✓" if r["ok"] else ("–" if r["ok"] is None else "✗")
             # 只压平 ASCII 控制空白，合法 Unicode 名称原样保留。
             why = re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", r["why"])
@@ -1155,12 +764,10 @@ def detail_sections(pv, body=None, presentation=False, history=None):
     side.append(section("h2", f'Up next · {q["counts"]["todo"]}', presentation))
     for i, t in enumerate(q["todo"]):
         prefix = f'{i + 1}. ' + ("▸ Next · " if t["next"] else "")
-        text = prefix + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"] + (" · Hold" if t["held"] else "")
+        text = prefix + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"]
         spans = [(0, len(f'{i + 1}. '), "dim")]
         if t["next"]:
             spans.append((spans[0][1], len(prefix), "accent"))
-        if t["held"]:
-            spans.append((len(text) - 4, len(text), "wait"))
         side.append((("", *spans) if presentation else "", 2, text))
     if not q["todo"]:
         side.append(("dim", 2, "No pending tasks"))
@@ -1229,11 +836,9 @@ def footer_only_message(msg, card, cols):
                                             "Warning", "Rejected", "Not released"))):
         return False
     if msg in ("已暂停：不再发新任务，正在做的会做完。运行 drover resume 恢复。",
-               "已恢复：写手下次运行 drover next 会拿到新任务。",
-               "循环已关：回到原来的样子，做完按 TASK_GATE 等放行或继续，写手停下后要人叫。",
+               "已恢复：可以重新明确派发待办；不会自动派发。",
                "Paused: no new tasks will be sent.",
-               "Resumed: the next drover next call can send a task.",
-               "Loop disabled; manual task progression is in effect."):
+               "Resumed: explicit dispatch is enabled."):
         return True
     return bool(card and (re.fullmatch(r"已送给 [^\s：:]+[：:] ?" + re.escape(
         f'{card["id"]} {card["title"]}'), msg) or
@@ -1270,17 +875,15 @@ def narrow_header(vm, ps, sel, cols):
     if not health["ok"]:
         items.append((1, health["text"].split(":")[0], "corral ✗", "bad"))
     if q:
-        word = "Paused" if q["paused"] else "Manual" if not q["loop"] else q["mode"]
-        loop = "loop on" if q["loop"] else "loop off"
-        mode = [(2 if q["paused"] else 4, word, word, "wait" if q["paused"] else "active" if word == "Looping" else "accent"),
-                (3, loop, loop, "ok" if q["loop"] else "dim")]
+        word = "Paused" if q["paused"] else "Explicit"
+        mode = [(2 if q["paused"] else 4, word, word, "wait" if q["paused"] else "accent")]
         items += mode
     name = pv["name"].replace("\t", "    ") if pv else ""
     index = f"{sel + 1}/{len(ps)}" if len(ps) > 1 else ""
     base = "drover ▸ " if pv else "drover"
     ideal = width(base + name + (" " + index if index else "")) if pv else width(base)
     # 先试全称、短标签能否和完整项目标识并排。不行就只给左侧留产品名和项目名开头：
-    # 常规模式词和 loop 开关同义，先让出；再缩写、从低优先级丢。超窄（内容不足 32 列）时只有告警能挤掉项目名
+    # 常规模式词先让出；再缩写、从低优先级丢。超窄（内容不足 32 列）时只有告警能挤掉项目名
     least = width(base) + min(width(name), 5) if pv else width(base)
     core = [i for i in items if i[0] < 4]
     alerts = [i for i in core if i[0] <= 2]
@@ -1333,8 +936,6 @@ def narrow_header(vm, ps, sel, cols):
     # 第三行：次级信息。正常连接放不下就让到详情末尾；任务指标照旧由 draw 补完整副本
     if c:
         parts = [(m, "dim") for m in task_metrics(pv).replace("\t", "    ").split(" · ")]
-        if c["held"]:
-            parts[-1] = (parts[-1][0], "wait")
     else:
         parts = [(f'HEAD {pv["head"]}', "dim")] if pv else []
     connected = [(health["text"], "ok")] if health["ok"] else []
@@ -1396,7 +997,7 @@ def draw(stdscr, vm, state):
         # 固定摘要放不下的标题/指标仍在正文开头完整可达。
         heading, metrics = task_heading(pv), task_metrics(pv)
         heading_style = ("h1", (0, len(heading_status), heading_kind))
-        metrics_style = ("dim", (len(metrics) - len("Hold on completion"), len(metrics), "wait")) if c and c["held"] else "dim"
+        metrics_style = "dim"
         if not c:
             start = len(pv["name"] + " · ")
             end = len(metrics) - len(f' · HEAD {pv["head"]}')
@@ -1490,9 +1091,8 @@ def draw(stdscr, vm, state):
     head = "drover · " + (pv["name"] if pv else "0 projects")
     parts = []
     if q:
-        mode = "Paused" if q["paused"] else "Manual" if not q["loop"] else q["mode"]
-        parts.append((mode, "wait" if q["paused"] else "active" if mode == "Looping" else "accent"))
-        parts.append(("loop on" if q["loop"] else "loop off", "ok" if q["loop"] else "inactive"))
+        mode = "Paused" if q["paused"] else "Explicit"
+        parts.append((mode, "wait" if q["paused"] else "accent"))
     parts.append((vm["health"]["text"], "ok" if vm["health"]["ok"] else "bad"))
     if vm["waits"]:
         parts.append((f'! Needs you {len(vm["waits"])}', "wait"))
@@ -1552,7 +1152,7 @@ def draw(stdscr, vm, state):
         hint = f"PgUp↑{offset} PgDn↓{max(0, total - offset - page)}"
         put(stdscr, bot, max(x, x + cols - width(hint)), hint, h, w - 1, "dim")  # 靠右，像滚动指示
     if not compact:
-        keys = (("g", "Verify/Release"), ("n", "Next"), ("p", "Pause"), ("a", "Add"), ("l", "Loop"),
+        keys = (("d", "Submit"), ("g", "Accept"), ("n", "Dispatch"), ("p", "Pause"), ("a", "Add"),
                 ("u", "Up next"), ("r", "Refresh"), ("q", "Quit"), ("↑↓/jk", ""), ("PgUp/Dn", ""))
         # 放得下时项与项之间空两格（同 corral board 底栏）；放不下退回一格，不会更早截掉按键
         full = 1 + sum(width(k) + (1 + width(v) if v else 0) for k, v in keys) + 2 * (len(keys) - 1)
@@ -1571,11 +1171,11 @@ def draw(stdscr, vm, state):
 
 
 HELP_KEYS = (("Keys", (("↑↓ / jk", "Select project"),
-                       ("g", "Verify and release the current task"),
-                       ("n", "Send the next task (resends the one in progress)"),
+                       ("d", "Submit current task for acceptance"),
+                       ("g", "Accept submitted task; no dispatch"),
+                       ("n", "Explicitly dispatch first Pending task"),
                        ("p", "Pause or resume sending new tasks"),
                        ("a", "Add tasks: edit queue.md in $EDITOR"),
-                       ("l", "Turn the loop on or off"),
                        ("u", "View pending tasks and their task files"),
                        ("r", "Refresh"),
                        ("?", "Show this help"),
@@ -1650,7 +1250,7 @@ def draw_pending(stdscr, pv, state, h, w):
     if todo:
         t = todo[i]
         title = f'Up next {i + 1}/{len(todo)}' + (" · ▸ Next" if t["next"] else "") + " · " \
-            + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"] + (" · Hold" if t["held"] else "")
+            + (f'{t["id"]} ' if t["id"] else "Unnumbered ") + t["title"]
         lines = wrap_lines(pending_lines(t), cols)
     else:
         title, lines = "Up next 0/0", [("dim", 0, "No pending tasks")]
@@ -1673,7 +1273,7 @@ def draw_pending(stdscr, pv, state, h, w):
 
 # ============================================================ 按键
 REFRESH_MS = 30000       # 没按键时多久自己刷一次。刷新等于重跑，看板不存自己的状态
-HELP = "↑↓/jk select project · PgUp/PgDn scroll · g verify/release · n next · p pause · a add · l loop · r refresh · q quit"
+HELP = "↑↓/jk select project · PgUp/PgDn scroll · d submit · g accept · n dispatch · p pause · a add · r refresh · q quit"
 
 
 def init_mouse():
@@ -1697,12 +1297,22 @@ def run_drover(repo, *args, feedback=None):
     → 给人看的一行；go 把放行状态、警告和拒绝原因前置，避免消息区只剩「核对通过」。"""
     try:
         r = subprocess.run([sys.executable, task_bin_path(), *args], cwd=repo,
-                           capture_output=True, text=True, timeout=CHECK_TIMEOUT + 60 if args == ("go",) else 120,
+                           capture_output=True, text=True, timeout=120,
                            env={**os.environ, "DROVER_BOARD_ENGLISH": "1"})
     except Exception as e:
         if feedback is not None:
             feedback["msg_kind"] = "bad"
         return f"drover {' '.join(args)} failed to start ({e})"
+    if '--json' in args:
+        try:
+            value = json.loads(r.stdout)
+            if feedback is not None:
+                feedback['msg_kind'] = 'ok' if value.get('ok') else 'bad'
+            if value.get('ok'):
+                return f"{value['task_id']} → {value['state']}"
+            return value['error']['why']
+        except (ValueError, KeyError):
+            return 'Invalid command response; refresh and inspect'
     out = [re.sub(r"[\t\n\v\f\r\x1c-\x1f]+", " ", l).strip(" ")
            for l in (r.stdout + r.stderr).split("\n")]
     out = [l for l in out if l]
@@ -1804,11 +1414,18 @@ def key_action(k, pv, state, mouse=None):
         return ("scroll", offset)
     if k == ord("a"):
         return ("edit",)
-    q = pv["queue"] or {}                                     # 没接队列的项目：当成没暂停、循环没开
-    return {ord("g"): ("run", ["go"]),
-            ord("n"): ("run", ["next"]),
-            ord("p"): ("run", ["resume" if q.get("paused") else "pause"]),
-            ord("l"): ("run", ["loop", "off" if q.get("loop") else "on"])}.get(k)
+    q = pv['queue'] or {}
+    if k == ord('p'):
+        return ('run', ['resume' if q.get('paused') else 'pause'])
+    action = {ord('d'): 'done', ord('g'): 'go', ord('n'): 'dispatch-pending'}.get(k)
+    if not action:
+        return None
+    t = ((q.get('todo') or [None])[0] if action == 'dispatch-pending' else q.get('card'))
+    target = (t or {}).get('actions', {}).get(action)
+    if not target or not target.get('target_token'):
+        return ('note', 'Action unavailable; refresh and inspect the task state')
+    args = ([action, '--pos', str(target['pos'])] if action == 'dispatch-pending' else [action, t['id']])
+    return ('run', [*args, '--target-token', target['target_token'], '--json'])
 
 
 def tui(stdscr, list_path):
@@ -1886,94 +1503,6 @@ def task_bin_path():
 
 
 CHECK_EVERY = 300       # 两次完整核对之间至少隔这么久。第 3 条可能是整套测试，不能每跳都跑
-
-
-def close_if_done(repo, conf, d, current):
-    """这件活干完没有：主控空闲下来、且 main 上出现了收尾记号时，核对一次三条门，过了就记 done
-    （自动模式下 done 会顺手发下一件；放行模式下停下来等人 drover go）。
-    判定交给 `drover done` —— 它本来就是这套判据的唯一实现，这里只决定「什么时候问」：
-
-      - 只在主控 idle 时问。它还在干活时这件活当然没完，而第 3 条可能是整套测试，白跑。
-      - idle 还要够久、且这一轮不是主控自己开的（契约：idle 不代表它不会再动），同 wants_human。
-      - state 是 unknown 就不问：状态无从得知时不猜，让人去看。
-      - 两次之间至少隔 CHECK_EVERY，记在交接目录里的一个空文件上（看它的修改时间）。
-
-    done 退出码 9 = 判据没满足，是常态不是故障：记下时间，下一轮再问。看板那边同时会把
-    「主控空闲着但判据没满足」挂进「等你」，两边说的是同一件事。"""
-    a = agents_of(repo, conf.get("MAIN_AGENT", "")).get("writer")
-    if not a or a["status"] != "idle" or a.get("src") == "agent" or (a.get("idle_for") or 0) < IDLE_SETTLE:
-        return
-    # 依据先于门：没看到收尾记号就不自动记 done。项目没配 DONE_MARK（ok=None）也一样——
-    # 那时判不出完成，退回等人 drover go，绝不让最弱的默认配置把「main 前进了」当成做完了。
-    if find_done_mark(repo, current.get("main", ""), conf.get("DONE_MARK", "收尾").strip())["ok"] is not True:
-        return
-    stamp = f"{d}/.criteria-checked"
-    if NOW - (mtime(stamp) or 0) < CHECK_EVERY:
-        return
-    open(stamp, "w").close()
-    r = subprocess.run([task_bin_path(), "done", current["id"]], cwd=repo,
-                       capture_output=True, text=True, timeout=CHECK_TIMEOUT + 60)
-    with open(f"{d}/.loop.log", "a", encoding="utf-8") as f:
-        head = (r.stdout or r.stderr or "").strip().splitlines()[:1]
-        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} done {current['id']} exit {r.returncode} {head[0] if head else ''}\n")
-
-
-def loop_tick(list_path):
-    """外层循环的一跳。循环开着的项目，看它处在哪一头：
-
-      有进行中的任务 → 主控空闲下来时核对三条判据，过了就记 done（见 close_if_done）。
-      没有进行中的   → 上一次停在队列那一步留了 .loop-wait，条件重新满足（有待办、没暂停、
-                       不等放行）就跑一次 `drover next`，由它把任务正文送进主控。
-
-    `.loop-wait` 只管后一头——它的意思就是「停在队列那一步」。有任务在做时本来就没有这个标记，
-    所以核对判据那一头不能被它挡住（踩过一次）。
-
-    和老 herdsman 的区别：老的往写手的 pane 里注入固定那句「运行 review-task next」，让写手去跑外层
-    循环的命令——那是内依赖外。现在 drover 自己跑 next，送出去的是任务正文本身，和人手动粘一段
-    任务进去一模一样。pane 身份核对那一整套也没了：目标是 MAIN_AGENT 这个名字。
-
-    **每跳先把 NOW 和 corral 的 agent 清单重取一遍**，和 collect() 开头做的事一样。以前这个函数是
-    `drover board serve` 里的一个线程，靠页面渲染顺带刷新；拆成独立进程之后没有渲染这回事了，
-    停在启动那刻的 NOW 会让 close_if_done 的节流 `NOW - mtime(stamp) < CHECK_EVERY` 一路算出负数
-    ——永远在节流窗口里，查一次之后再也不查。agent 清单同理：主控重开换了 instance 就认不出来。"""
-    global NOW, _AGENTS
-    NOW, _AGENTS = time.time(), None
-    for repo in discover(list_path):
-        conf = parse_conf(f"{repo}/.drover.conf")
-        d = conf.get("HANDOFF_DIR")
-        if not d or not os.path.exists(f"{d}/loop"):
-            continue
-        tasks, current, awaiting = task_fold(task_events(read(f"{d}/tasks.state")))
-        if current:
-            close_if_done(repo, conf, d, current)
-            continue
-        mf = f"{d}/.loop-wait"
-        try:
-            m = json.loads(read(mf) or "null")
-        except ValueError:
-            m = None
-        if not isinstance(m, dict) or m.get("failed"):
-            continue
-        if awaiting or os.path.exists(f"{d}/paused") or not task_pending(task_blocks(read(f"{d}/queue.md")), tasks):
-            continue
-        before = read(mf)                    # 跑 next 期间可能又停下、写了新标记：删之前核对还是这一份
-        r = subprocess.run([task_bin_path(), "next"], cwd=repo, capture_output=True, text=True, timeout=120)
-        ok = r.returncode == 0
-        with open(f"{d}/.loop.log", "a", encoding="utf-8") as f:
-            head = (r.stdout or r.stderr or "").strip().splitlines()[:1]
-            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} next exit {r.returncode} {head[0] if head else ''}\n")
-        if ok:
-            if read(mf) == before and os.path.exists(mf):
-                os.remove(mf)                # next 自己也会删它；这里兜一次，免得标记留着反复触发
-        else:
-            m["attempts"] = m.get("attempts", 0) + 1
-            m["error"] = (r.stdout or r.stderr or "next 没送出去").strip()[:200]
-            if m["attempts"] >= 3:
-                m["failed"] = True
-            tmp = f"{mf}.{os.getpid()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(m, f, ensure_ascii=False)
-            os.replace(tmp, mf)
 
 
 # ============================================================ 入口
